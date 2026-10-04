@@ -39,7 +39,14 @@ permissions:
 # If there's a prerelease-style suffix to the version, then the release(s)
 # will be marked as a prerelease.
 on:
+  # Only PRs that touch jurl itself build it; landing-only PRs skip this.
   pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "dist-workspace.toml"
+      - ".github/workflows/release.yml"
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'

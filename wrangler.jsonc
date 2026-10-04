@@ -1,6 +1,7 @@
 // jurl.dev: the landing in site/, served as static assets by a Worker (no code).
 {
   "name": "jurl-dev",
+  "account_id": "b4af55c55f4614594c159afe32488641",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./site"
