@@ -291,7 +291,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
 | `src/setup.rs` · `src/config.rs` | First-run key prompt, `jurl init`, key storage |
 
-Releases are built by [cargo-dist](https://opensource.axo.dev/cargo-dist/) when a `v*` tag is pushed. Once a release is out, the playground on jurl.dev switches to it by itself. The site and the playground live in `site/` and `worker/`: see [worker/README.md](worker/README.md).
+Releases are built by [cargo-dist](https://opensource.axo.dev/cargo-dist/) when a `v*` tag is pushed.
 
 </details>
 
