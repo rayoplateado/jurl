@@ -35,7 +35,7 @@
   --shadow: 5px 5px 0 var(--navy);
 }
 * { box-sizing: border-box; margin: 0; }
-html { scroll-behavior: smooth; }
+
 body { background: var(--paper); color: var(--ink); font-family: var(--serif); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
 a { color: inherit; }
 code, pre { font-family: var(--mono); }
@@ -183,6 +183,60 @@ table.big th:not(:first-child), table.big td:not(:first-child) { text-align: rig
 .verbatim { margin-top: 64px; text-align: center; font-size: clamp(30px, 3.6vw, 44px); line-height: 1.12; max-width: 860px; margin-left: auto; margin-right: auto; }
 .verbatim em { color: var(--ember); }
 
+/* playground */
+.try[hidden] { display: none; }
+.try { max-width: 920px; margin: 64px auto 0; padding: 0 24px; }
+.try-card { background: var(--card); border: 1px solid var(--ink); border-radius: 2px; box-shadow: 6px 6px 0 var(--navy); padding: 22px 24px 20px; }
+.try-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.try-head h2 { font-size: 34px; margin: 0; }
+.try-head h2 em { color: var(--ember); }
+.picks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+.picks button { font: 13px var(--mono); background: none; color: var(--ink); border: 1px solid var(--rule); border-radius: 2px; padding: 6px 10px; cursor: pointer; transition: background .15s, color .15s, border-color .15s, transform .08s; }
+.picks button:hover { border-color: var(--ink); }
+.picks button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+.picks button:active { transform: scale(.97); }
+.cmdline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 16px; padding: 12px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); font: 15px var(--mono); }
+.cmdline .pre { color: var(--ink-2); white-space: nowrap; }
+.cmdline .pre b { color: var(--ember); font-weight: 400; }
+.cmdline input { font: 15px var(--mono); color: var(--ink); background: var(--paper); border: 1px solid transparent; border-radius: 2px; padding: 8px 10px; min-width: 0; }
+.cmdline input:focus { outline: none; border-color: var(--ember); background: #fff; }
+.cmdline input[name=q] { flex: 1 1 200px; }
+.cmdline input[name=url] { flex: 2 1 260px; }
+.cmdline input[name=q][hidden] { display: none; }
+.run { font: 14px var(--mono); background: var(--navy); color: #fff; border: 0; border-radius: 2px; padding: 9px 16px; cursor: pointer; transition: transform .08s, background .15s; }
+.run:hover { background: var(--ink); }
+.run:active { transform: scale(.97); }
+.run:disabled { opacity: .6; cursor: progress; }
+.examples { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; font: 12.5px var(--mono); color: var(--ink-2); }
+.examples button { all: unset; cursor: pointer; color: var(--ink); border-bottom: 1px dashed var(--rule); }
+.examples button:hover { color: var(--ember-ink); border-color: var(--ember); }
+.examples button:focus-visible { outline: 2px solid var(--ember); outline-offset: 2px; }
+.out { margin-top: 18px; font: 13.5px/1.6 var(--mono); }
+.out[hidden] { display: none; }
+.out .echo { font-weight: 700; overflow-wrap: anywhere; }
+.out .echo::before { content: "$ "; color: var(--ember); }
+.out .meta { color: var(--ink-2); margin-top: 8px; overflow-wrap: anywhere; }
+.out .wait { color: var(--ink-2); margin-top: 10px; }
+.out .wait::after { content: ""; display: inline-block; width: 8px; height: 14px; margin-left: 4px; vertical-align: -2px; background: var(--ember); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.out .err { margin-top: 10px; color: var(--ember-ink); overflow-wrap: anywhere; }
+.out .note { margin-top: 10px; overflow-wrap: anywhere; }
+.res { list-style: none; padding: 0; margin-top: 12px; }
+.res li { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; padding: 8px 0; border-top: 1px dashed var(--rule); }
+.res li:first-child { border-top: 0; }
+.res .p { color: var(--ember-ink); font-size: 12px; white-space: nowrap; }
+.res .h { font-weight: 700; }
+.res .t { white-space: pre-wrap; overflow-wrap: anywhere; }
+.res pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--paper); padding: 6px 10px; }
+.res a { color: var(--ink); overflow-wrap: anywhere; }
+.res .sub { grid-column: 1; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+.res .img { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: start; }
+.res .img img { width: 96px; height: 72px; object-fit: cover; background: var(--muted); border: 1px solid var(--rule); }
+.timing { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+.timing .c { color: var(--ember-ink); }
+.disclose { margin-top: 14px; font: 12px/1.6 var(--mono); color: var(--ink-2); text-align: center; }
+#ts { position: absolute; }
+
 /* footer: jurl answering who made it */
 footer { margin-top: 160px; padding-bottom: 48px; }
 .maker { max-width: 760px; margin: 0 auto; background: var(--card); border: 1px solid var(--ink); border-radius: 2px; box-shadow: 6px 6px 0 var(--navy); padding: 22px 24px 20px; font: 14px/1.65 var(--mono); transform: rotate(-.6deg); }
@@ -214,6 +268,10 @@ footer { margin-top: 160px; padding-bottom: 48px; }
   .slip { position: relative; left: auto; top: auto; width: auto; margin: -36px 4px 0; transform: rotate(-1.5deg); }
   @media (prefers-reduced-motion: no-preference) { .slip { animation-name: rise; } }
   .lede { font-size: 26px; padding-top: 56px; }
+  .try { padding: 0 16px; margin-top: 48px; }
+  .try-card { padding: 18px 16px; }
+  .cmdline input[name=q], .cmdline input[name=url] { flex-basis: 100%; }
+  .run { width: 100%; }
   .sec { padding-top: 96px; }
   .why, .board, .install, .keys, .recipes { grid-template-columns: 1fr; gap: 32px; }
   .list button { font-size: 25px; }
@@ -232,7 +290,7 @@ footer { margin-top: 160px; padding-bottom: 48px; }
   .books li { flex-direction: column; gap: 0; }
   .books span { align-self: flex-start; }
 }
-@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
@@ -257,6 +315,37 @@ footer { margin-top: 160px; padding-bottom: 48px; }
   </div>
 </header>
 <p class="lede">It hands you the part you came for, <em>and nothing it prints was made up.</em></p>
+
+<section class="try" id="try" aria-labelledby="try-h" hidden>
+  <div class="try-card">
+    <div class="try-head"><h2 id="try-h">Point it at a page. <em>See what it keeps.</em></h2></div>
+    <form class="tryform" novalidate>
+      <div class="picks" role="group" aria-label="What jurl should pick out">
+        <button type="button" data-mode="gist" aria-pressed="true">the gist</button>
+        <button type="button" data-mode="ask" aria-pressed="false">an answer</button>
+        <button type="button" data-mode="code" aria-pressed="false">the code</button>
+        <button type="button" data-mode="links" aria-pressed="false">links</button>
+        <button type="button" data-mode="images" aria-pressed="false">images</button>
+        <button type="button" data-mode="find" aria-pressed="false">a photo</button>
+      </div>
+      <div class="cmdline">
+        <span class="pre"><b>$</b> jurl <span class="flag"></span></span>
+        <input name="q" type="text" maxlength="200" autocomplete="off" aria-label="Question or description" hidden>
+        <input name="url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="en.wikipedia.org/wiki/Cologne" aria-label="URL">
+        <button class="run" type="submit">Run</button>
+      </div>
+    </form>
+    <div class="examples"><span>or try:</span>
+      <button type="button" data-ex='{"mode":"find","url":"en.wikipedia.org/wiki/Cologne","q":"a cathedral"}'>a cathedral in Cologne</button>
+      <button type="button" data-ex='{"mode":"ask","url":"github.com/BurntSushi/ripgrep","q":"how do I install it on macOS?"}'>installing ripgrep on a Mac</button>
+      <button type="button" data-ex='{"mode":"links","url":"news.ycombinator.com"}'>Hacker News, minus the chrome</button>
+      <button type="button" data-ex='{"mode":"gist","url":"blog.cloudflare.com/markdown-for-agents/"}'>the gist of a blog post</button>
+    </div>
+    <div class="out" aria-live="polite" hidden></div>
+  </div>
+  <p class="disclose">Runs the real jurl, minus JavaScript rendering (that's in the CLI). The URL and the page's text go to TypeSafe, and images to Cloudflare for photos. Tries are logged to stop abuse and limited per day.</p>
+  <div id="ts"></div>
+</section>
 
 <main>
 <section class="sec wrap" id="why">
@@ -500,6 +589,120 @@ document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click'
   toast.classList.add('on');
   clearTimeout(hide); hide = setTimeout(() => toast.classList.remove('on'), 1800);
 }));
+
+// Playground: runs the real jurl through /api/try. Everything from the page
+// being read is third-party text, so it only ever goes in via textContent.
+(() => {
+  const section = document.getElementById('try');
+  fetch('/api/status').then(r => r.json()).then(s => { if (s.enabled) section.hidden = false; }).catch(() => {});
+  const form = document.querySelector('.tryform'), out = document.querySelector('.out');
+  const qIn = form.q, urlIn = form.url, runBtn = form.querySelector('.run'), flag = form.querySelector('.flag');
+  const picks = [...form.querySelectorAll('[data-mode]')];
+  const FLAGS = { gist: ['', ''], ask: ['-q', 'what do you want to know?'], code: ['--code', ''], links: ['--links', ''], images: ['--image', ''], find: ['--find', 'describe the photo'] };
+  const SITEKEY = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? '1x00000000000000000000AA' : '0x4AAAAAAFNhFKQo2lPZCS0T';
+  let mode = 'gist', widget = null, waiter = null, busy = false;
+
+  function setMode(m) {
+    mode = m;
+    picks.forEach(b => b.setAttribute('aria-pressed', b.dataset.mode === m));
+    const [f, ph] = FLAGS[m];
+    flag.textContent = f;
+    qIn.hidden = !ph; qIn.placeholder = ph;
+  }
+  picks.forEach(b => b.addEventListener('click', () => { setMode(b.dataset.mode); (qIn.hidden ? urlIn : qIn).focus(); }));
+  setMode('gist');
+
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const pct = p => (p == null ? '' : 'p ' + Number(p).toFixed(2));
+  const quote = s => '"' + s.replace(/"/g, '\\"') + '"';
+  const echo = (m, q, u) => ['jurl', FLAGS[m][0], q && FLAGS[m][1] ? quote(q) : '', u.replace(/^https?:\/\//, '')].filter(Boolean).join(' ');
+
+  function token() {
+    return new Promise((resolve, reject) => {
+      if (!window.turnstile) return reject(new Error('turnstile'));
+      waiter = { resolve, reject };
+      if (widget === null) {
+        widget = turnstile.render('#ts', {
+          sitekey: SITEKEY, execution: 'execute', appearance: 'interaction-only',
+          callback: t => waiter && waiter.resolve(t), 'error-callback': () => waiter && waiter.reject(new Error('turnstile')),
+        });
+      } else turnstile.reset(widget);
+      turnstile.execute(widget);
+    });
+  }
+
+  function render(data) {
+    out.replaceChildren(el('div', 'echo', echo(data.mode, data.q, data.url)));
+    const r = data.result;
+    if (r && r.title) out.append(el('div', 'meta', r.title + (r.kind ? ` · ${r.kind.choice} (${r.kind.confidence.toFixed(2)})` : '')));
+    const list = el('ul', 'res');
+    if (r && r.blocks) for (const b of r.blocks) {
+      const li = el('li');
+      if (b.kind === 'heading') li.append(el('span', 'h', '#'.repeat(b.level || 2) + ' ' + b.text));
+      else if (b.kind === 'code') { const pre = el('pre'); pre.textContent = b.text.replace(/\n$/, ''); li.append(pre); }
+      else li.append(el('span', 't', b.text));
+      li.append(el('span', 'p', pct(b.p)));
+      list.append(li);
+    }
+    if (r && r.links) for (const l of r.links) {
+      const li = el('li'), a = el('a', null, l.url);
+      a.href = l.url; a.rel = 'noopener noreferrer nofollow'; a.target = '_blank';
+      const box = el('div'); box.append(a);
+      if (l.text) box.append(el('div', 'sub', l.text));
+      li.append(box, el('span', 'p', pct(l.p)));
+      list.append(li);
+    }
+    if (r && r.images) for (const i of r.images) {
+      const li = el('li'), box = el('div', 'img'), img = new Image(), txt = el('div'), a = el('a', null, i.url);
+      if (/^https:/.test(i.url)) { img.src = i.url; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; img.alt = i.alt || i.caption || ''; }
+      a.href = i.url; a.rel = 'noopener noreferrer nofollow'; a.target = '_blank';
+      txt.append(a);
+      if (i.caption || i.alt) txt.append(el('div', 'sub', i.caption || i.alt));
+      box.append(img, txt);
+      li.append(box, el('span', 'p', pct(i.p)));
+      list.append(li);
+    }
+    if (list.children.length) out.append(list);
+    else if (r) out.append(el('div', 'note', 'Nothing on that page cleared the bar. jurl would rather print nothing than something it made up.'));
+    if (data.message) out.append(el('div', 'note', 'jurl: ' + data.message));
+    const t = el('div', 'timing', data.timing ? '⏱ ' + data.timing : '');
+    if (data.cached) t.append(el('span', 'c', (data.timing ? ' · ' : '') + 'cached from an earlier try'));
+    if (t.textContent) out.append(t);
+  }
+
+  async function run() {
+    if (busy) return;
+    const url = urlIn.value.trim(), q = qIn.hidden ? '' : qIn.value.trim();
+    out.hidden = false;
+    if (!url) { out.replaceChildren(el('div', 'err', 'Paste a URL first.')); urlIn.focus(); return; }
+    if (!qIn.hidden && !q) { out.replaceChildren(el('div', 'err', mode === 'find' ? 'Describe the photo you want.' : 'Ask a question.')); qIn.focus(); return; }
+    busy = true; runBtn.disabled = true;
+    const wait = el('div', 'wait', 'reading the page');
+    out.replaceChildren(el('div', 'echo', echo(mode, q, url)), wait);
+    const slow = setTimeout(() => { wait.textContent = 'waking jurl up — the first try after a quiet spell takes a few seconds'; }, 4000);
+    try {
+      let t;
+      try { t = await token(); }
+      catch { out.replaceChildren(el('div', 'echo', echo(mode, q, url)), el('div', 'err', "Couldn't check you're human: something is blocking Cloudflare Turnstile. Allow challenges.cloudflare.com and try again.")); return; }
+      const res = await fetch('/api/try', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode, url, q, token: t }) });
+      const data = await res.json().catch(() => ({ error: 'Something went wrong. Try again.' }));
+      if (data.error) out.replaceChildren(el('div', 'echo', echo(mode, q, url)), el('div', 'err', data.error));
+      else render(data);
+    } catch {
+      out.replaceChildren(el('div', 'echo', echo(mode, q, url)), el('div', 'err', "Couldn't reach jurl. Check your connection and try again."));
+    } finally {
+      clearTimeout(slow); busy = false; runBtn.disabled = false;
+    }
+  }
+
+  form.addEventListener('submit', e => { e.preventDefault(); run(); });
+  document.querySelectorAll('[data-ex]').forEach(b => b.addEventListener('click', () => {
+    const ex = JSON.parse(b.dataset.ex);
+    setMode(ex.mode); urlIn.value = ex.url; qIn.value = ex.q || '';
+    run();
+  }));
+})();
 </script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </body>
 </html>

@@ -1,0 +1,48 @@
+// jurl.dev: the landing (../site) as static assets, plus the playground API
+// at /api/try, which runs the real jurl binary in a container.
+{
+  "name": "jurl-dev",
+  "account_id": "b4af55c55f4614594c159afe32488641",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "../site",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "routes": [
+    { "pattern": "jurl.dev", "custom_domain": true }
+  ],
+  "observability": { "enabled": true },
+
+  // The jurl binary behind a tiny HTTP server (container/server.py).
+  "containers": [
+    { "class_name": "Jurl", "image": "./container/Dockerfile", "instance_type": "basic", "max_instances": 3 }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "JURL", "class_name": "Jurl" },
+      { "name": "BUDGET", "class_name": "Budget" }
+    ]
+  },
+  "exports": {
+    "Jurl": { "type": "durable-object", "storage": "sqlite" },
+    "Budget": { "type": "durable-object", "storage": "sqlite" }
+  },
+
+  // Results are cached for an hour, so the examples everyone clicks are paid once.
+  "kv_namespaces": [{ "binding": "CACHE", "id": "45b2eb9027b840328afee451e0c65206" }],
+
+  // 10 tries per minute per IP. Daily limits live in the Budget object.
+  "ratelimits": [
+    { "name": "PER_MINUTE", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }
+  ],
+
+  "vars": {
+    "DAILY_BUDGET_USD": "2",
+    "PER_IP_DAILY": "50",
+    "PER_IP_DAILY_FIND": "10"
+  }
+  // Secrets (wrangler secret put): TYPESAFE_API_KEY, CLOUDFLARE_AI_ACCOUNT_ID,
+  // CLOUDFLARE_AI_TOKEN, TURNSTILE_SECRET.
+}

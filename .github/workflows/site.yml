@@ -1,12 +1,12 @@
-# Deploys the landing (site/) to jurl.dev. Runs only when the site changes;
-# it never builds jurl.
+# Deploys jurl.dev: the landing (site/) and the playground Worker and
+# container (worker/). Runs only when those change; it never builds jurl.
 name: Site
 on:
   push:
     branches: [main]
     paths:
       - "site/**"
-      - "wrangler.jsonc"
+      - "worker/**"
       - ".github/workflows/site.yml"
   workflow_dispatch:
 
@@ -17,9 +17,21 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: worker
+          wranglerVersion: "4.147.0"
           command: deploy
