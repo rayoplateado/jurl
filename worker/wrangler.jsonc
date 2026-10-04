@@ -31,7 +31,7 @@
   },
 
   // Results are cached for an hour, so the examples everyone clicks are paid once.
-  "kv_namespaces": [{ "binding": "CACHE" }],
+  "kv_namespaces": [{ "binding": "CACHE", "id": "45b2eb9027b840328afee451e0c65206" }],
 
   // 10 tries per minute per IP. Daily limits live in the Budget object.
   "ratelimits": [
