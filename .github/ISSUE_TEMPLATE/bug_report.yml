@@ -1,0 +1,41 @@
+name: Bug report
+description: jurl printed the wrong thing, missed something, crashed or was slow.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: jurl version
+      description: Output of `jurl --version`.
+      placeholder: jurl 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact command, including the URL.
+      render: console
+      placeholder: jurl -q "how do I install it?" github.com/BurntSushi/ripgrep
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What jurl printed
+      description: Trim it if it's long. The `-t` line and `--json` output help a lot.
+      render: console
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Which paragraph, link or image should have come back (or shouldn't have).
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15 (arm64), Ubuntu 24.04, Windows 11…

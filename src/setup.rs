@@ -31,7 +31,9 @@ pub async fn typesafe_key(cfg: &mut Config, client: &Client) -> Result<String> {
 /// `jurl init`: set or replace both keys.
 pub async fn init(cfg: &mut Config, client: &Client) -> Result<()> {
     if !interactive() {
-        bail!("`jurl init` needs a terminal; otherwise set TYPESAFE_API_KEY (and CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_TOKEN) in the environment");
+        bail!(
+            "`jurl init` needs a terminal; otherwise set TYPESAFE_API_KEY (and CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_TOKEN) in the environment"
+        );
     }
     eprintln!("1/2 · TypeSafe (Jev), required. Get a key at {TYPESAFE_URL}");
     if cfg.get("TYPESAFE_API_KEY").is_some() && !confirm("    A key is already set. Replace it?")? {
