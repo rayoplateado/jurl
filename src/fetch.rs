@@ -33,18 +33,18 @@ pub async fn fetch(client: &Client, url: &str) -> Result<Page> {
 }
 
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.
-/// Waits for the network to settle and for real visible text to appear, capped at 5s:
+/// Waits for the network to settle and for real visible text to appear, capped at 8s:
 /// SPAs keep background traffic going and often paint content after the network calms down.
 pub async fn render(bin: &Path, url: &Url) -> Result<Page> {
     let run = Command::new(bin)
-        .args(["fetch", "--dump", "html", "--wait-until", "networkalmostidle", "--wait-ms", "5000"])
+        .args(["fetch", "--dump", "html", "--wait-until", "networkalmostidle", "--wait-ms", "8000"])
         .args(["--wait-script", "document.body && (document.body.innerText || '').trim().length > 1500"])
         .arg(url.as_str())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .output();
-    let out = tokio::time::timeout(Duration::from_secs(10), run)
+    let out = tokio::time::timeout(Duration::from_secs(12), run)
         .await
         .context("lightpanda timed out")?
         .with_context(|| format!("running {}", bin.display()))?;
