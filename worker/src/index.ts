@@ -26,6 +26,7 @@ const MODES = ["gist", "ask", "code", "links", "images", "find"] as const;
 type Mode = (typeof MODES)[number];
 const NEEDS_Q: Mode[] = ["ask", "find"];
 const MAX_Q = 200;
+const MAX_URL = 2000;
 const CACHE_TTL = 3600;
 
 // Charged up front so parallel tries can't overshoot the cap, then settled
@@ -110,20 +111,24 @@ async function tryIt(request: Request, env: Env): Promise<Response> {
     return json({ error: "bad request" }, 400);
   }
 
+  // Free checks first, then the ones that cost something.
   const mode = body.mode as Mode;
   if (!MODES.includes(mode)) return json({ error: "Pick what you want jurl to find." }, 400);
   const q = (body.q ?? "").trim();
   if (q.length > MAX_Q) return json({ error: `Keep the question under ${MAX_Q} characters.` }, 400);
   if (NEEDS_Q.includes(mode) && !q) return json({ error: mode === "find" ? "Describe the photo you want." : "Ask a question." }, 400);
-  const target = await checkUrl(body.url ?? "");
+  const target = parseUrl(body.url ?? "");
   if (typeof target === "string") return json({ error: target }, 400);
 
-  if (!(await turnstileOk(body.token ?? "", ip, env))) return json({ error: "Couldn't verify you're human. Reload and try again." }, 403);
   if (!(await env.PER_MINUTE.limit({ key: ip })).success) return json({ error: "Easy there. Try again in a minute." }, 429);
+  if (!(await turnstileOk(body.token ?? "", ip, env))) return json({ error: "Couldn't verify you're human. Reload and try again." }, 403);
 
   const key = await cacheKey(mode, target.href, q);
   const hit = await env.CACHE.get(key, "json");
   if (hit) return json({ ...(hit as object), cached: true });
+
+  const where = await checkHost(target.hostname);
+  if (where) return json({ error: where }, 400);
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
   const verdict = await budget.reserve(ip, mode);
@@ -183,12 +188,14 @@ function shape(mode: Mode, run: { code: number; stdout: string; stderr: string }
 
 // ---------- guards ----------
 
-// Public http(s) pages only: no IP literals, no local names, nothing that
-// resolves to a private, loopback or link-local address.
-async function checkUrl(raw: string): Promise<URL | string> {
+// Public http(s) pages only: no IP literals, no local names, and (checkHost)
+// nothing that resolves to a private, loopback or link-local address.
+function parseUrl(raw: string): URL | string {
+  const t = raw.trim();
+  if (t.length > MAX_URL) return "That URL is too long.";
   let u: URL;
   try {
-    u = new URL(/^https?:\/\//i.test(raw.trim()) ? raw.trim() : `https://${raw.trim()}`);
+    u = new URL(/^https?:\/\//i.test(t) ? t : `https://${t}`);
   } catch {
     return "That doesn't look like a URL.";
   }
@@ -197,11 +204,15 @@ async function checkUrl(raw: string): Promise<URL | string> {
   const host = u.hostname.toLowerCase();
   if (/^[\d.]+$/.test(host) || host.includes(":") || host.startsWith("[")) return "Use a domain name, not an IP address.";
   if (!host.includes(".") || /(^|\.)(localhost|local|internal|lan|home|arpa)$/.test(host)) return "Only public http(s) pages.";
+  u.hash = "";
+  return u;
+}
+
+async function checkHost(host: string): Promise<string | null> {
   const addrs = [...(await resolve(host, "A")), ...(await resolve(host, "AAAA"))];
   if (addrs.length === 0) return `Couldn't find ${host}.`;
   if (addrs.some(isPrivate)) return "Only public http(s) pages.";
-  u.hash = "";
-  return u;
+  return null;
 }
 
 async function resolve(host: string, type: "A" | "AAAA"): Promise<string[]> {

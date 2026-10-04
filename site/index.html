@@ -317,7 +317,7 @@ footer { margin-top: 160px; padding-bottom: 48px; }
 
 <section class="try" id="try" aria-labelledby="try-h">
   <div class="try-card">
-    <div class="try-head"><h2 id="try-h">Point it at a page. <em>Any page.</em></h2></div>
+    <div class="try-head"><h2 id="try-h">Point it at a page. <em>See what it keeps.</em></h2></div>
     <form class="tryform" novalidate>
       <div class="picks" role="group" aria-label="What jurl should pick out">
         <button type="button" data-mode="gist" aria-pressed="true">the gist</button>
@@ -342,7 +342,7 @@ footer { margin-top: 160px; padding-bottom: 48px; }
     </div>
     <div class="out" aria-live="polite" hidden></div>
   </div>
-  <p class="disclose">Runs the real jurl. The URL and the page's text go to TypeSafe, and images to Cloudflare for photos. Tries are logged to stop abuse and limited per day.</p>
+  <p class="disclose">Runs the real jurl, minus JavaScript rendering (that's in the CLI). The URL and the page's text go to TypeSafe, and images to Cloudflare for photos. Tries are logged to stop abuse and limited per day.</p>
   <div id="ts"></div>
 </section>
 
@@ -678,7 +678,10 @@ document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click'
     out.replaceChildren(el('div', 'echo', echo(mode, q, url)), wait);
     const slow = setTimeout(() => { wait.textContent = 'waking jurl up — the first try after a quiet spell takes a few seconds'; }, 4000);
     try {
-      const res = await fetch('/api/try', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode, url, q, token: await token() }) });
+      let t;
+      try { t = await token(); }
+      catch { out.replaceChildren(el('div', 'echo', echo(mode, q, url)), el('div', 'err', "Couldn't check you're human: something is blocking Cloudflare Turnstile. Allow challenges.cloudflare.com and try again.")); return; }
+      const res = await fetch('/api/try', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode, url, q, token: t }) });
       const data = await res.json().catch(() => ({ error: 'Something went wrong. Try again.' }));
       if (data.error) out.replaceChildren(el('div', 'echo', echo(mode, q, url)), el('div', 'err', data.error));
       else render(data);
