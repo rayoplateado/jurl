@@ -184,6 +184,7 @@ table.big th:not(:first-child), table.big td:not(:first-child) { text-align: rig
 .verbatim em { color: var(--ember); }
 
 /* playground */
+.try[hidden] { display: none; }
 .try { max-width: 920px; margin: 64px auto 0; padding: 0 24px; }
 .try-card { background: var(--card); border: 1px solid var(--ink); border-radius: 2px; box-shadow: 6px 6px 0 var(--navy); padding: 22px 24px 20px; }
 .try-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
@@ -315,7 +316,7 @@ footer { margin-top: 160px; padding-bottom: 48px; }
 </header>
 <p class="lede">It hands you the part you came for, <em>and nothing it prints was made up.</em></p>
 
-<section class="try" id="try" aria-labelledby="try-h">
+<section class="try" id="try" aria-labelledby="try-h" hidden>
   <div class="try-card">
     <div class="try-head"><h2 id="try-h">Point it at a page. <em>See what it keeps.</em></h2></div>
     <form class="tryform" novalidate>
@@ -592,6 +593,8 @@ document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click'
 // Playground: runs the real jurl through /api/try. Everything from the page
 // being read is third-party text, so it only ever goes in via textContent.
 (() => {
+  const section = document.getElementById('try');
+  fetch('/api/status').then(r => r.json()).then(s => { if (s.enabled) section.hidden = false; }).catch(() => {});
   const form = document.querySelector('.tryform'), out = document.querySelector('.out');
   const qIn = form.q, urlIn = form.url, runBtn = form.querySelector('.run'), flag = form.querySelector('.flag');
   const picks = [...form.querySelectorAll('[data-mode]')];

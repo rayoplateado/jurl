@@ -97,12 +97,20 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/api/try" && request.method === "POST") return tryIt(request, env);
+    // The page only shows the playground when it can work. Removing a secret
+    // (e.g. TURNSTILE_SECRET) hides it: the kill switch.
+    if (url.pathname === "/api/status") return json({ enabled: enabled(env) });
     if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;
 
+function enabled(env: Env): boolean {
+  return Boolean(env.TURNSTILE_SECRET && env.TYPESAFE_API_KEY && env.CLOUDFLARE_AI_ACCOUNT_ID && env.CLOUDFLARE_AI_TOKEN);
+}
+
 async function tryIt(request: Request, env: Env): Promise<Response> {
+  if (!enabled(env)) return json({ error: "The playground is off right now. Install jurl: it takes two lines." }, 503);
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   let body: { mode?: string; url?: string; q?: string; token?: string };
   try {
