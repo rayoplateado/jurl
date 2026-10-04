@@ -17,6 +17,7 @@ jurl -n 5 example.com/post                                      # solo los 5 mej
 jurl --all example.com/docs                                     # todo lo que pase el umbral
 jurl --image example.com/post | xargs -n1 curl -sO              # imágenes de contenido, mejor primero
 jurl --vision example.com/post                                  # igual, pero Clef mira los píxeles
+jurl --find "a cathedral" en.wikipedia.org/wiki/Cologne         # la foto que mejor casa con la descripción
 jurl -q "how do I install it?" github.com/BurntSushi/ripgrep  # solo lo que responde a la pregunta
 jurl --code github.com/BurntSushi/ripgrep                       # bloques de código: ejemplos, comandos
 jurl --links -n 10 news.ycombinator.com                         # enlaces que merece la pena seguir
@@ -31,6 +32,7 @@ jurl --json -t example.com                                      # JSON con proba
 | `-l, --links` | URLs de enlaces de contenido, mejor primero (sin navegación, login, redes, legal) |
 | `-r, --render` | Ejecuta el JavaScript con [Lightpanda](https://lightpanda.io) antes de leer. Automático si la página es un *app shell* (scripts + `#root`/`<noscript>`/HTML pesado) sin texto |
 | `-i, --image` | URLs de imágenes de contenido (Jev juzga alt, caption, nombre y tamaño) |
+| `-f, --find "…"` | Busca la imagen que mejor casa con la descripción: Clef mira **todas** (hasta 80, en paralelo; si hay más, Jev preselecciona por alt/caption). Devuelve la mejor; `-n 3` para las tres mejores |
 | `--vision` | Clef-flash clasifica los píxeles de las 12 primeras imágenes **a la vez que Jev** y se promedia con Jev; el resto conserva la nota de Jev |
 | `-n, --max N` | Máximo de resultados (12 bloques, 5 con `--ask`, 8 de código, 20 enlaces, imágenes sin límite) |
 | `-a, --all` | Sin máximo |
@@ -58,6 +60,20 @@ Del entorno, o de `~/.config/jurl/env` / `./.env` (`KEY=valor`):
 
 `--vision`: 1,3–1,9 s en total (Clef corre en paralelo con Jev).
 `--render`: 2,5–5 s según la SPA (hn.algolia ~3 s, Bluesky ~5 s); el tope es 5 s de espera.
+
+## Coste
+
+Solo se paga la entrada: Jev 0,042 $/M tokens, Clef-flash 0,09 $/M tokens. Medido en estas páginas; en euros con 1 $ ≈ 0,9 € (aproximado).
+
+| Llamada | Tokens | Coste | Por 1 € |
+| --- | --- | --- | --- |
+| `jurl <url>` (artículo) | 10k–32k Jev | 0,0004–0,0012 € | ~800–2.500 páginas |
+| `jurl -l` (Hacker News) | ~23k Jev | ~0,0009 € | ~1.100 |
+| `jurl --image` | ~1k Jev | ~0,00004 € | ~25.000 |
+| `jurl --vision` (8 imágenes) | 1k Jev + 8×255 Clef | ~0,0002 € | ~5.000 |
+| `jurl --find` (Wikipedia, 73 imágenes) | 9k Jev + 73×255 Clef | ~0,0018 € | ~550 |
+
+Las llamadas a Clef que pasan de 700 ms se duplican (*hedging*), así que en el peor caso la parte de Clef cuesta hasta el doble. `--json`/`-t` muestran los tokens de Jev por llamada.
 
 ## Decisiones
 

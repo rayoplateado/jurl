@@ -38,6 +38,9 @@ struct Args {
     /// With --image: let Clef look at the pixels (slower)
     #[arg(long)]
     vision: bool,
+    /// Find the images that show this ("a cathedral"): Clef looks at every candidate
+    #[arg(short, long, value_name = "WHAT")]
+    find: Option<String>,
     /// Print the links worth following (one URL per line, best first)
     #[arg(short, long)]
     links: bool,
@@ -83,6 +86,8 @@ const MAX_QUESTIONS: usize = 120;
 const STATE_TEXT_CHARS: usize = 1_200;
 /// --vision looks at this many images, starting while Jev is still thinking.
 const VISION_MAX: usize = 12;
+/// --find looks at up to this many; on bigger pages Jev shortlists them by alt/caption first.
+const FIND_MAX: usize = 80;
 /// Past this, an image keeps its text-only score.
 const VISION_DEADLINE: Duration = Duration::from_millis(2500);
 /// Clef's latency has a long tail: if a call is slower than this, race a duplicate.
@@ -199,6 +204,13 @@ async fn main() -> ExitCode {
 async fn run(mut args: Args) -> Result<()> {
     if !args.url.contains("://") {
         args.url = format!("https://{}", args.url);
+    }
+    if let Some(what) = args.find.take() {
+        if args.ask.is_some() {
+            bail!("--find already is the question; drop --ask");
+        }
+        args.vision = true;
+        args.ask = Some(what);
     }
     let modes = [args.image || args.vision, args.links, args.code].iter().filter(|m| **m).count();
     if modes > 1 {
@@ -439,31 +451,44 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
                 "width": i.width,
                 "height": i.height,
             }),
-            question: Some(ctx.args.question(
-                &format!("The image in `images` with i={}", i.i),
-                "is meaningful content of this page (photo, diagram, chart, screenshot, illustration or product \
-                 shot), not a logo, icon, avatar, ad, badge or decoration.",
-            )),
+            question: Some(match &ctx.args.ask {
+                Some(q) => noul(format!(
+                    "Judging by its file name, alt text and caption, the image in `images` with i={} shows: {q}",
+                    i.i
+                )),
+                None => noul(format!(
+                    "The image in `images` with i={} is meaningful content of this page (photo, diagram, chart, \
+                     screenshot, illustration or product shot), not a logo, icon, avatar, ad, badge or decoration.",
+                    i.i
+                )),
+            }),
         })
         .collect();
+    let query = ctx.args.ask.as_deref().filter(|_| ctx.args.vision);
 
     // Clef starts at the same time as Jev, on the first images in page order (the noise
     // filter already dropped icons and trackers), so --vision costs max(jev, clef), not the sum.
     // One HTTP/1 connection per Clef call: multiplexing them all over a single HTTP/2
     // connection measured ~2x slower at the tail.
     let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
-    let looking = async {
-        let Some((account, token)) = &clef_keys else { return Vec::new() };
-        let clef_client = &clef_client;
-        join_all(ex.images.iter().take(VISION_MAX).map(|img| async move {
-            let look = tokio::time::timeout(VISION_DEADLINE, look(ctx.client, clef_client, account, token, &ex.title, img)).await;
-            (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms", VISION_DEADLINE.as_millis()))))
-        }))
-        .await
+    let cap = if query.is_some() { FIND_MAX } else { VISION_MAX };
+    let (a, looks) = if query.is_some() && ex.images.len() > cap {
+        // Too many to look at: Jev shortlists by text, then Clef looks at the shortlist.
+        let a = ctx.judge("images", items, Map::new()).await?;
+        t.lap(a.label());
+        let mut ranked: Vec<&Image> = ex.images.iter().collect();
+        let p = |i: &Image| a.noul(&format!("img{}", i.i)).unwrap_or(0.0);
+        ranked.sort_by(|x, y| p(y).total_cmp(&p(x)));
+        ranked.truncate(cap);
+        let looks = look_all(ctx.client, &clef_client, clef_keys.as_ref(), &ex.title, ranked, query).await;
+        t.lap(format!("clef({} img)", looks.len()));
+        (a, looks)
+    } else {
+        let (a, looks) = tokio::join!(ctx.judge("images", items, Map::new()), look_all(ctx.client, &clef_client, clef_keys.as_ref(), &ex.title, ex.images.iter().take(cap).collect(), query));
+        let a = a?;
+        t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
+        (a, looks)
     };
-    let (a, looks) = tokio::join!(ctx.judge("images", items, Map::new()), looking);
-    let a = a?;
-    t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
 
     let looks: HashMap<usize, Result<f64>> = looks.into_iter().collect();
     let mut scored: Vec<(&Image, f64)> = ex
@@ -472,6 +497,8 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         .map(|img| {
             let p_text = a.noul(&format!("img{}", img.i)).unwrap_or(0.0);
             let p = match looks.get(&img.i) {
+                // Searching: Clef saw the pixels *and* the alt/caption, so it decides.
+                Some(Ok(p_pixels)) if query.is_some() => *p_pixels,
                 // Pixels say what it is; Jev's page context says whether it belongs here.
                 Some(Ok(p_pixels)) => (p_pixels + p_text) / 2.0,
                 Some(Err(e)) => {
@@ -487,11 +514,15 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         .collect();
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
+    let best = scored.first().map(|(i, p)| (i.url.clone(), *p));
     let kept: Vec<_> = scored
         .into_iter()
         .filter(|(_, p)| *p >= ctx.args.threshold)
-        .take(ctx.args.limit(usize::MAX))
+        .take(ctx.args.limit(if query.is_some() { 1 } else { usize::MAX }))
         .collect();
+    if kept.is_empty() && let (Some(q), Some((url, p))) = (query, best) {
+        bail!("no image in {} looks like \"{q}\" (closest: {url}, p={p:.2})", ctx.url);
+    }
     let mut out = stdout().lock();
     if ctx.args.json {
         let v: Vec<_> = kept
@@ -507,16 +538,49 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
     Ok(())
 }
 
-/// Clef's view of one image: probability that it shows content rather than chrome.
-async fn look(client: &Client, clef_client: &Client, account: &str, token: &str, title: &str, img: &Image) -> Result<f64> {
+/// Clef on several images at once, each bounded by the vision deadline.
+async fn look_all(
+    client: &Client,
+    clef_client: &Client,
+    keys: Option<&(String, String)>,
+    title: &str,
+    imgs: Vec<&Image>,
+    query: Option<&str>,
+) -> Vec<(usize, Result<f64>)> {
+    let Some((account, token)) = keys else { return Vec::new() };
+    join_all(imgs.into_iter().map(|img| async move {
+        let look = tokio::time::timeout(VISION_DEADLINE, look(client, clef_client, account, token, title, img, query)).await;
+        (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms", VISION_DEADLINE.as_millis()))))
+    }))
+    .await
+}
+
+/// Clef's view of one image: with a query, P(it shows that); without, P(it is content, not chrome).
+#[allow(clippy::too_many_arguments)]
+async fn look(
+    client: &Client,
+    clef_client: &Client,
+    account: &str,
+    token: &str,
+    title: &str,
+    img: &Image,
+    query: Option<&str>,
+) -> Result<f64> {
     let data = thumbnail(client, &img.preview).await?;
     let state = json!({ "page_title": title, "alt": img.alt, "caption": img.caption });
-    // Clef answers "what is this?" far better than "does this matter?", so ask the
-    // factual question and add up the content classes here.
-    let qs = Map::from_iter([("shows".to_string(), choice("What does the attached image show?", VISUAL_KINDS.clone()))]);
+    // Clef answers "what is this?" far better than "does this matter?", so without a query
+    // ask the factual question and add up the content classes here.
+    let question = match query {
+        Some(q) => noul(format!("The attached image shows: {q}")),
+        None => choice("What does the attached image show?", VISUAL_KINDS.clone()),
+    };
+    let qs = Map::from_iter([("q".to_string(), question)]);
     let call = || decide::clef(clef_client, account, token, state.clone(), qs.clone(), vec![data.clone()]);
     let a = hedged(call, VISION_HEDGE).await?;
-    let probs = a.probabilities("shows").context("clef returned no answer")?;
+    if query.is_some() {
+        return a.noul("q").context("clef returned no answer");
+    }
+    let probs = a.probabilities("q").context("clef returned no answer")?;
     Ok(CONTENT_KINDS.iter().filter_map(|k| probs.get(*k)).sum())
 }
 
