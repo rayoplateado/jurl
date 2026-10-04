@@ -2,6 +2,8 @@ mod config;
 mod decide;
 mod extract;
 mod fetch;
+mod lightpanda;
+mod setup;
 
 use std::{
     collections::HashMap,
@@ -28,6 +30,7 @@ use crate::{
 #[derive(Parser)]
 #[command(version)]
 struct Args {
+    /// The page to read, or `init` to set up your API keys
     url: String,
     /// Keep what helps answer this question instead of a general summary
     #[arg(short = 'q', long)]
@@ -202,6 +205,15 @@ async fn main() -> ExitCode {
 }
 
 async fn run(mut args: Args) -> Result<()> {
+    let mut cfg = Config::load();
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/0.1")
+        .timeout(Duration::from_secs(20))
+        .pool_idle_timeout(Duration::from_secs(30))
+        .build()?;
+    if args.url == "init" {
+        return setup::init(&mut cfg, &client).await;
+    }
     if !args.url.contains("://") {
         args.url = format!("https://{}", args.url);
     }
@@ -216,13 +228,7 @@ async fn run(mut args: Args) -> Result<()> {
     if modes > 1 {
         bail!("pick one of --image/--vision, --links, --code");
     }
-    let cfg = Config::load();
-    let key = cfg.get("TYPESAFE_API_KEY").context("TYPESAFE_API_KEY not set (env or ~/.config/jurl/env)")?;
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/0.1")
-        .timeout(Duration::from_secs(20))
-        .pool_idle_timeout(Duration::from_secs(30))
-        .build()?;
+    let key = setup::typesafe_key(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
     // Warm the API connections (TLS handshakes) while the page downloads.
@@ -234,12 +240,11 @@ async fn run(mut args: Args) -> Result<()> {
         let c = client.clone();
         async move { join_all(hosts.into_iter().map(|h| c.head(h).send())).await }
     });
-    let lightpanda = fetch::lightpanda(cfg.get("JURL_LIGHTPANDA"));
     let target: url::Url = args.url.parse().with_context(|| format!("bad url {}", args.url))?;
 
     let page = if args.render {
-        let bin = lightpanda.as_deref().context("--render needs Lightpanda (https://lightpanda.io) on PATH or JURL_LIGHTPANDA")?;
-        let page = fetch::render(bin, &target).await?;
+        let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
+        let page = fetch::render(&bin, &target).await?;
         t.lap("render");
         page
     } else {
@@ -257,11 +262,14 @@ async fn run(mut args: Args) -> Result<()> {
     // A JS app with (almost) no server-rendered text: render it instead of giving up.
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
     if !args.render && ex.app_shell && text < 300 {
-        if let Some(bin) = &lightpanda {
-            eprintln!("jurl: no text without JavaScript, rendering with Lightpanda…");
-            let rendered = fetch::render(bin, &page.url).await?;
-            ex = extract::html(&rendered.body, &rendered.url);
-            t.lap("render");
+        match lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await {
+            Ok(bin) => {
+                eprintln!("jurl: no text without JavaScript, rendering with Lightpanda…");
+                let rendered = fetch::render(&bin, &page.url).await?;
+                ex = extract::html(&rendered.body, &rendered.url);
+                t.lap("render");
+            }
+            Err(e) => eprintln!("jurl: {e:#}"),
         }
     }
     let _ = warm.await;
@@ -292,7 +300,7 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
         if args.code {
             bail!("no code blocks in {}", ctx.url);
         }
-        bail!("no readable content in {} (JS-rendered? install Lightpanda, https://lightpanda.io, and jurl renders it)", ctx.url);
+        bail!("no readable content in {} (if it needs JavaScript, try --render)", ctx.url);
     }
 
     let default = if args.code {
@@ -430,8 +438,8 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         bail!("no images found in {}", ctx.url);
     }
     let clef_keys = if ctx.args.vision {
-        let account = cfg.get("CLOUDFLARE_ACCOUNT_ID").context("--vision needs CLOUDFLARE_ACCOUNT_ID")?;
-        let token = cfg.get("CLOUDFLARE_AI_TOKEN").context("--vision needs CLOUDFLARE_AI_TOKEN")?;
+        let account = cfg.get("CLOUDFLARE_ACCOUNT_ID").context("--vision and --find need a Cloudflare Workers AI token: run `jurl init`")?;
+        let token = cfg.get("CLOUDFLARE_AI_TOKEN").context("--vision and --find need a Cloudflare Workers AI token: run `jurl init`")?;
         Some((account, token))
     } else {
         None

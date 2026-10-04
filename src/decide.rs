@@ -60,7 +60,10 @@ pub async fn clef(
     images: Vec<String>,
 ) -> Result<Answers> {
     let url = format!("https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/cloudflare/{CLEF_MODEL}");
-    let body = json!({ "model": CLEF_MODEL, "state": state, "questions": questions, "images": images });
+    let mut body = json!({ "model": CLEF_MODEL, "state": state, "questions": questions });
+    if !images.is_empty() {
+        body["images"] = json!(images);
+    }
     let v = post(client, &url, token, &body).await?;
     Ok(parse(v.get("result").unwrap_or(&v)))
 }
