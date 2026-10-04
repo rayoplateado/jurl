@@ -6,6 +6,7 @@ description = "curl that reads the page for you: decision models pick the paragr
 homepage = "https://jurl.dev"
 repository = "https://github.com/rayoplateado/jurl"
 readme = "README.md"
+license = "MIT OR Apache-2.0"
 keywords = ["cli", "curl", "scraping", "llm", "readability"]
 categories = ["command-line-utilities", "web-programming::http-client"]
 

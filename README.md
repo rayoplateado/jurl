@@ -436,3 +436,9 @@ The code is deliberately small:
 | `src/extract.rs` | HTML and markdown → blocks, links and images |
 | `src/decide.rs` | Jev and Clef clients (same `{state, questions} → answers` contract) |
 | `src/main.rs` | The modes, chunking, hedging and output |
+
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+[Lightpanda](https://lightpanda.io), which jurl downloads on first use for JavaScript rendering, is a separate program under AGPL-3.0. It is not bundled with jurl.
