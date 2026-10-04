@@ -18,10 +18,18 @@ pub const VERSION: &str = "1.0.0";
 /// Release asset and its SHA-256 for this platform (from the 1.0.0 release digests).
 fn asset() -> Option<(&'static str, &'static str)> {
     Some(match (env::consts::OS, env::consts::ARCH) {
-        ("macos", "aarch64") => ("lightpanda-aarch64-macos", "955440053a84754dd64c62f970449a56a2b350cdf43ea5f2e809a73047b8173d"),
-        ("macos", "x86_64") => ("lightpanda-x86_64-macos", "e510299683b37a203912eac0ee00732224b2ef9b07fe58e69c467f5255be45e2"),
-        ("linux", "aarch64") => ("lightpanda-aarch64-linux", "69791924bcee43b13b224af4c845622c5fe66fdbc1b8143bfaa39ca8f85244f5"),
-        ("linux", "x86_64") => ("lightpanda-x86_64-linux", "aa5a4b8ed53d1e38b3c73f5b2647d0a84a82e6744557f45f9a9c85858aa031c3"),
+        ("macos", "aarch64") => {
+            ("lightpanda-aarch64-macos", "955440053a84754dd64c62f970449a56a2b350cdf43ea5f2e809a73047b8173d")
+        }
+        ("macos", "x86_64") => {
+            ("lightpanda-x86_64-macos", "e510299683b37a203912eac0ee00732224b2ef9b07fe58e69c467f5255be45e2")
+        }
+        ("linux", "aarch64") => {
+            ("lightpanda-aarch64-linux", "69791924bcee43b13b224af4c845622c5fe66fdbc1b8143bfaa39ca8f85244f5")
+        }
+        ("linux", "x86_64") => {
+            ("lightpanda-x86_64-linux", "aa5a4b8ed53d1e38b3c73f5b2647d0a84a82e6744557f45f9a9c85858aa031c3")
+        }
         _ => return None,
     })
 }
@@ -48,10 +56,7 @@ pub fn find(configured: Option<String>) -> Option<PathBuf> {
     if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) {
         dirs.push(PathBuf::from(home).join(".local/bin"));
     }
-    dirs.into_iter()
-        .map(|d| d.join("lightpanda"))
-        .chain(cached())
-        .find(|p| p.is_file())
+    dirs.into_iter().map(|d| d.join("lightpanda")).chain(cached()).find(|p| p.is_file())
 }
 
 /// Find Lightpanda, downloading it once if needed.
@@ -94,7 +99,11 @@ async fn download(name: &str, sha: &str, dest: &PathBuf) -> Result<()> {
         file.write_all(&chunk)?;
         got += chunk.len() as u64;
         if tty && total > 0 {
-            eprint!("\rjurl: this page needs JavaScript; downloading Lightpanda {VERSION} ({} MB, once)… {:>3}%", mb(total), got * 100 / total);
+            eprint!(
+                "\rjurl: this page needs JavaScript; downloading Lightpanda {VERSION} ({} MB, once)… {:>3}%",
+                mb(total),
+                got * 100 / total
+            );
         }
     }
     drop(file);

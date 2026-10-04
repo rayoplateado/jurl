@@ -252,11 +252,8 @@ async fn run(mut args: Args) -> Result<()> {
         t.lap("fetch");
         page
     };
-    let mut ex = if page.is_markdown {
-        extract::markdown(&page.body, &page.url)
-    } else {
-        extract::html(&page.body, &page.url)
-    };
+    let mut ex =
+        if page.is_markdown { extract::markdown(&page.body, &page.url) } else { extract::html(&page.body, &page.url) };
     t.lap(if page.is_markdown { "extract(md)" } else { "extract" });
 
     // A JS app with (almost) no server-rendered text: render it instead of giving up.
@@ -339,7 +336,13 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     let scores: Vec<Option<f64>> = ex.blocks.iter().map(|b| a.noul(&format!("b{}", b.i))).collect();
 
     // Top-N by probability, printed in page order. Headings survive when their section does.
-    let default_max = if args.code { 8 } else if args.ask.is_some() { 5 } else { 12 };
+    let default_max = if args.code {
+        8
+    } else if args.ask.is_some() {
+        5
+    } else {
+        12
+    };
     let keep = top(&scores, args.threshold, args.limit(default_max));
     let mut pending_heading = None;
     let mut selected = Vec::new();
@@ -423,7 +426,11 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
                 json!({ "url": l.url.as_str(), "text": l.text, "p": p })
             })
             .collect();
-        writeln!(out, "{}", serde_json::to_string_pretty(&json!({ "url": ctx.url.as_str(), "title": ex.title, "links": v }))?)?;
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&json!({ "url": ctx.url.as_str(), "title": ex.title, "links": v }))?
+        )?;
     } else {
         for (i, _) in kept {
             writeln!(out, "{}", ex.links[i].url)?;
@@ -438,8 +445,12 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         bail!("no images found in {}", ctx.url);
     }
     let clef_keys = if ctx.args.vision {
-        let account = cfg.get("CLOUDFLARE_ACCOUNT_ID").context("--vision and --find need a Cloudflare Workers AI token: run `jurl init`")?;
-        let token = cfg.get("CLOUDFLARE_AI_TOKEN").context("--vision and --find need a Cloudflare Workers AI token: run `jurl init`")?;
+        let account = cfg
+            .get("CLOUDFLARE_ACCOUNT_ID")
+            .context("--vision and --find need a Cloudflare Workers AI token: run `jurl init`")?;
+        let token = cfg
+            .get("CLOUDFLARE_AI_TOKEN")
+            .context("--vision and --find need a Cloudflare Workers AI token: run `jurl init`")?;
         Some((account, token))
     } else {
         None
@@ -492,7 +503,17 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         t.lap(format!("clef({} img)", looks.len()));
         (a, looks)
     } else {
-        let (a, looks) = tokio::join!(ctx.judge("images", items, Map::new()), look_all(ctx.client, &clef_client, clef_keys.as_ref(), &ex.title, ex.images.iter().take(cap).collect(), query));
+        let (a, looks) = tokio::join!(
+            ctx.judge("images", items, Map::new()),
+            look_all(
+                ctx.client,
+                &clef_client,
+                clef_keys.as_ref(),
+                &ex.title,
+                ex.images.iter().take(cap).collect(),
+                query
+            )
+        );
         let a = a?;
         t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
         (a, looks)
@@ -528,7 +549,9 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         .filter(|(_, p)| *p >= ctx.args.threshold)
         .take(ctx.args.limit(if query.is_some() { 1 } else { usize::MAX }))
         .collect();
-    if kept.is_empty() && let (Some(q), Some((url, p))) = (query, best) {
+    if kept.is_empty()
+        && let (Some(q), Some((url, p))) = (query, best)
+    {
         bail!("no image in {} looks like \"{q}\" (closest: {url}, p={p:.2})", ctx.url);
     }
     let mut out = stdout().lock();
@@ -537,7 +560,11 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
             .iter()
             .map(|(i, p)| json!({ "url": i.url.as_str(), "alt": i.alt, "caption": i.caption, "p": p }))
             .collect();
-        writeln!(out, "{}", serde_json::to_string_pretty(&json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }))?)?;
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }))?
+        )?;
     } else {
         for (i, _) in kept {
             writeln!(out, "{}", i.url)?;
@@ -557,7 +584,8 @@ async fn look_all(
 ) -> Vec<(usize, Result<f64>)> {
     let Some((account, token)) = keys else { return Vec::new() };
     join_all(imgs.into_iter().map(|img| async move {
-        let look = tokio::time::timeout(VISION_DEADLINE, look(client, clef_client, account, token, title, img, query)).await;
+        let look =
+            tokio::time::timeout(VISION_DEADLINE, look(client, clef_client, account, token, title, img, query)).await;
         (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms", VISION_DEADLINE.as_millis()))))
     }))
     .await
@@ -626,7 +654,8 @@ async fn thumbnail(client: &Client, url: &url::Url) -> Result<String> {
     let bytes = fetch::fetch_bytes(client, url).await?;
     tokio::task::spawn_blocking(move || -> Result<String> {
         let img = image::load_from_memory(&bytes)?;
-        let img = if img.width() > VISION_PX || img.height() > VISION_PX { img.thumbnail(VISION_PX, VISION_PX) } else { img };
+        let img =
+            if img.width() > VISION_PX || img.height() > VISION_PX { img.thumbnail(VISION_PX, VISION_PX) } else { img };
         let mut jpg = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 75).encode_image(&img.to_rgb8())?;
         Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(jpg)))

@@ -23,11 +23,8 @@ pub async fn fetch(client: &Client, url: &str) -> Result<Page> {
         bail!("{url} returned HTTP {status}");
     }
     let final_url = res.url().clone();
-    let is_markdown = res
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.contains("markdown"));
+    let is_markdown =
+        res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|ct| ct.contains("markdown"));
     let body = res.text().await?;
     Ok(Page { url: final_url, body, is_markdown })
 }

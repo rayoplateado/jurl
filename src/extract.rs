@@ -70,13 +70,12 @@ pub struct Extracted {
 }
 
 const SKIP: &[&str] = &[
-    "script", "style", "noscript", "nav", "footer", "aside", "form", "svg", "button", "iframe",
-    "template", "select", "input", "textarea", "dialog", "canvas", "video", "audio", "object",
+    "script", "style", "noscript", "nav", "footer", "aside", "form", "svg", "button", "iframe", "template", "select",
+    "input", "textarea", "dialog", "canvas", "video", "audio", "object",
 ];
 const INLINE: &[&str] = &[
-    "a", "span", "em", "strong", "b", "i", "code", "small", "sup", "sub", "abbr", "mark", "u",
-    "s", "del", "ins", "time", "br", "kbd", "q", "cite", "label", "var", "samp", "dfn", "bdi",
-    "wbr", "font", "img", "picture", "data",
+    "a", "span", "em", "strong", "b", "i", "code", "small", "sup", "sub", "abbr", "mark", "u", "s", "del", "ins",
+    "time", "br", "kbd", "q", "cite", "label", "var", "samp", "dfn", "bdi", "wbr", "font", "img", "picture", "data",
 ];
 
 pub fn html(body: &str, base: &Url) -> Extracted {
@@ -111,15 +110,17 @@ pub fn html(body: &str, base: &Url) -> Extracted {
             continue;
         }
         let a = |k| img.value().attr(k);
-        let src = a("srcset")
-            .or(a("data-srcset"))
-            .and_then(best_srcset)
-            .or(a("data-src").or(a("data-lazy-src")).or(a("data-original")).or(a("src")).map(String::from));
+        let src = a("srcset").or(a("data-srcset")).and_then(best_srcset).or(a("data-src")
+            .or(a("data-lazy-src"))
+            .or(a("data-original"))
+            .or(a("src"))
+            .map(String::from));
         let Some(src) = src else { continue };
-        let preview = a("srcset")
-            .or(a("data-srcset"))
-            .and_then(small_srcset)
-            .or(a("data-src").or(a("data-lazy-src")).or(a("src")).filter(|s| !s.starts_with("data:")).map(String::from));
+        let preview = a("srcset").or(a("data-srcset")).and_then(small_srcset).or(a("data-src")
+            .or(a("data-lazy-src"))
+            .or(a("src"))
+            .filter(|s| !s.starts_with("data:"))
+            .map(String::from));
         let alt = collapse(a("alt").or(a("title")).unwrap_or(""));
         let caption = figcaption(img);
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
@@ -144,7 +145,12 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         let context = a
             .ancestors()
             .filter_map(ElementRef::wrap)
-            .find(|e| matches!(e.value().name(), "p" | "li" | "td" | "dd" | "blockquote" | "figcaption" | "h1" | "h2" | "h3" | "h4"))
+            .find(|e| {
+                matches!(
+                    e.value().name(),
+                    "p" | "li" | "td" | "dd" | "blockquote" | "figcaption" | "h1" | "h2" | "h3" | "h4"
+                )
+            })
             .map(|e| collapse(&inline_text(e)))
             .filter(|c| *c != text)
             .map(|c| c.chars().take(200).collect())
@@ -154,7 +160,10 @@ pub fn html(body: &str, base: &Url) -> Extracted {
 
     let app_shell = doc.select(&sel("script")).next().is_some()
         && (body.len() > 4096
-            || doc.select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]")).next().is_some());
+            || doc
+                .select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]"))
+                .next()
+                .is_some());
     Extracted { title: collapse(&title), blocks: w.blocks, images, links, app_shell }
 }
 
@@ -183,7 +192,13 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             let lang = lines.next().unwrap_or("").trim_matches(|c| c == '`' || c == '~').trim().to_string();
             let body: Vec<_> = lines.collect();
             let body = body[..body.len().saturating_sub(1)].join("\n");
-            blocks.push(Block { i, kind: Kind::Code, level: None, lang: Some(lang).filter(|l| !l.is_empty()), text: body });
+            blocks.push(Block {
+                i,
+                kind: Kind::Code,
+                level: None,
+                lang: Some(lang).filter(|l| !l.is_empty()),
+                text: body,
+            });
             return;
         } else if text.starts_with('>') {
             let t = text.lines().map(|l| l.trim_start_matches('>').trim()).collect::<Vec<_>>().join("\n");
@@ -231,7 +246,11 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             cur.push(line);
         }
         for (text, href) in md_links(line) {
-            let context = if line.trim() == format!("[{text}]({href})") { String::new() } else { collapse(line).chars().take(200).collect() };
+            let context = if line.trim() == format!("[{text}]({href})") {
+                String::new()
+            } else {
+                collapse(line).chars().take(200).collect()
+            };
             push_link(&mut links, base, href, collapse(text), context);
         }
         for (alt, src) in md_images(line) {
@@ -239,7 +258,9 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         }
     }
     flush(&mut cur, &mut blocks);
-    if title.is_empty() && let Some(h) = blocks.iter().find(|b| b.kind == Kind::Heading) {
+    if title.is_empty()
+        && let Some(h) = blocks.iter().find(|b| b.kind == Kind::Heading)
+    {
         title = h.text.clone();
     }
     Extracted { title, blocks, images, links, app_shell: false }
@@ -308,7 +329,9 @@ impl Walker {
                     .next()
                     .and_then(|c| c.value().attr("class"))
                     .or(el.value().attr("class"))
-                    .and_then(|c| c.split_whitespace().find_map(|k| k.strip_prefix("language-").or(k.strip_prefix("lang-"))))
+                    .and_then(|c| {
+                        c.split_whitespace().find_map(|k| k.strip_prefix("language-").or(k.strip_prefix("lang-")))
+                    })
                     .map(String::from);
                 self.push(Kind::Code, None, lang, el.text().collect());
             }
@@ -319,7 +342,9 @@ impl Walker {
                 for c in el.children() {
                     match c.value() {
                         Node::Text(t) => own.push_str(t),
-                        Node::Element(e) if matches!(e.name(), "ul" | "ol") => nested.push(ElementRef::wrap(c).unwrap()),
+                        Node::Element(e) if matches!(e.name(), "ul" | "ol") => {
+                            nested.push(ElementRef::wrap(c).unwrap())
+                        }
                         Node::Element(_) => {
                             let c = ElementRef::wrap(c).unwrap();
                             if !self.skipped(c) {
@@ -418,10 +443,7 @@ fn best_srcset(srcset: &str) -> Option<String> {
         .filter_map(|c| {
             let mut parts = c.split_whitespace();
             let url = parts.next()?;
-            let w = parts
-                .next()
-                .and_then(|d| d.trim_end_matches(['w', 'x']).parse::<f32>().ok())
-                .unwrap_or(1.0);
+            let w = parts.next().and_then(|d| d.trim_end_matches(['w', 'x']).parse::<f32>().ok()).unwrap_or(1.0);
             Some((url.to_string(), w))
         })
         .max_by(|a, b| a.1.total_cmp(&b.1))
@@ -484,7 +506,8 @@ fn noise(url: &Url, width: Option<u32>, height: Option<u32>) -> bool {
     if width.is_some_and(|w| w < 48) || height.is_some_and(|h| h < 48) {
         return true;
     }
-    const WORDS: &[&str] = &["sprite", "pixel", "tracking", "spacer", "blank.gif", "favicon", "1x1", "spinner", "emoji"];
+    const WORDS: &[&str] =
+        &["sprite", "pixel", "tracking", "spacer", "blank.gif", "favicon", "1x1", "spinner", "emoji"];
     let full = url.as_str().to_ascii_lowercase();
     WORDS.iter().any(|w| full.contains(w))
 }
@@ -631,7 +654,8 @@ mod tests {
 
     #[test]
     fn markdown_frontmatter_and_empty_images() {
-        let md = "---\ntitle: Hello\n---\n\n# Heading\n\nSome text ![]() and ![pic](img.png)\n\n```rust\nfn x() {}\n```\n";
+        let md =
+            "---\ntitle: Hello\n---\n\n# Heading\n\nSome text ![]() and ![pic](img.png)\n\n```rust\nfn x() {}\n```\n";
         let ex = markdown(md, &base());
         assert_eq!(ex.title, "Hello");
         assert_eq!(ex.images.len(), 1);

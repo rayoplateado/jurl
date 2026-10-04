@@ -32,17 +32,14 @@ impl Config {
     }
 
     pub fn path() -> Option<PathBuf> {
-        let base = env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(|h| PathBuf::from(h).join(".config")))?;
+        let base = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| {
+            env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(|h| PathBuf::from(h).join(".config"))
+        })?;
         Some(base.join("jurl/env"))
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
-        env::var(key)
-            .ok()
-            .filter(|v| !v.is_empty())
-            .or_else(|| self.file.get(key).cloned())
+        env::var(key).ok().filter(|v| !v.is_empty()).or_else(|| self.file.get(key).cloned())
     }
 
     /// Set `key` in `~/.config/jurl/env`, keeping every other line. The file is private (0600).
