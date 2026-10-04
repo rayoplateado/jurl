@@ -172,11 +172,25 @@ table.big th:not(:first-child), table.big td:not(:first-child) { text-align: rig
 .verbatim { margin-top: 64px; text-align: center; font-size: clamp(30px, 3.6vw, 44px); line-height: 1.12; max-width: 860px; margin-left: auto; margin-right: auto; }
 .verbatim em { color: var(--ember); }
 
-/* footer */
-footer { margin-top: 160px; border-top: 1px solid var(--ink); padding: 32px 0 48px; }
-footer .wrap { display: flex; flex-wrap: wrap; gap: 24px 40px; align-items: baseline; font: 13px/1.6 var(--mono); color: var(--ink-2); }
-footer .mark { font: italic 44px/1 var(--serif); color: var(--ink); margin-right: auto; }
-footer a { color: var(--ink); }
+/* footer: jurl answering who made it */
+footer { margin-top: 160px; padding-bottom: 48px; }
+.maker { max-width: 760px; margin: 0 auto; background: var(--card); border: 1px solid var(--ink); border-radius: 2px; box-shadow: 6px 6px 0 var(--navy); padding: 22px 24px 20px; font: 14px/1.65 var(--mono); transform: rotate(-.6deg); }
+.maker .cmd { display: block; margin-bottom: 14px; }
+.maker .made { font: 30px/1.15 var(--serif); }
+.maker .made em { color: var(--ember); }
+.maker .joke { font: 20px/1.35 var(--serif); color: var(--ink-2); margin-top: 14px; }
+.maker .joke em { color: var(--ink); }
+.books { list-style: none; padding: 0; margin-top: 10px; }
+.books li { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-bottom: 1px dashed var(--rule); }
+.books a { font: italic 21px/1.2 var(--serif); text-decoration: none; }
+.books a:hover { color: var(--ember-ink); }
+.books span { color: var(--ink-2); font-size: 12px; white-space: nowrap; align-self: center; }
+.links { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 16px; }
+.links a { text-decoration: none; border-bottom: 1px solid var(--rule); }
+.links a:hover { border-color: var(--ember); color: var(--ember-ink); }
+.legal { display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: baseline; margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--ink); font: 12.5px/1.6 var(--mono); color: var(--ink-2); }
+.legal .mark { font: italic 36px/1 var(--serif); color: var(--ink); margin-right: auto; }
+.legal a { color: var(--ink); }
 
 .toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: #fff; font: 13px var(--mono); padding: 10px 14px; border-radius: 2px; pointer-events: none; transition: opacity .18s, transform .18s; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
@@ -202,6 +216,10 @@ footer a { color: var(--ink); }
   table.big td:first-child .dim { display: none; }
   table.big th { font-size: 10px; }
   footer { margin-top: 110px; }
+  .maker { transform: none; padding: 18px 16px; font-size: 13px; }
+  .maker .made { font-size: 25px; }
+  .books li { flex-direction: column; gap: 0; }
+  .books span { align-self: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
 </style>
@@ -413,9 +431,27 @@ Get one at https://console.typesafe.ai</span>
 
 <footer>
   <div class="wrap">
-    <span class="mark">jurl</span>
-    <span><a href="https://github.com/rayoplateado/jurl">GitHub</a> · <a href="https://github.com/rayoplateado/jurl#reference">All flags</a></span>
-    <span>MIT or Apache-2.0. Lightpanda, which jurl downloads for JavaScript pages, is a separate program under AGPL-3.0.</span>
+    <div class="maker">
+      <span class="cmd">jurl -q "who made this?" jurl.dev</span>
+      <p class="made">Made with <em>love</em> in Murcia by Ray García.</p>
+      <p class="joke">jurl can't make things up. Ray can: <em>he saves it for his novels.</em></p>
+      <ul class="books">
+        <li><a href="https://www.amazon.es/dp/B08LQYLVLK">La Única Verdad</a><span>en español</span></li>
+        <li><a href="https://www.amazon.es/dp/B0BMJH7MF6">La Única Realidad</a><span>en español</span></li>
+        <li><a href="https://www.amazon.com/dp/B0C8TSVW7F">The Only Truth</a><span>in English</span></li>
+      </ul>
+      <div class="links">
+        <a href="https://ray-garcia.fika.bar">blog</a>
+        <a href="https://x.com/rayoplateado">@rayoplateado on X</a>
+        <a href="https://www.linkedin.com/in/rayg/">LinkedIn</a>
+        <a href="mailto:ray@rayoplateado.com">ray@rayoplateado.com</a>
+      </div>
+    </div>
+    <div class="legal">
+      <span class="mark">jurl</span>
+      <span><a href="https://github.com/rayoplateado/jurl">GitHub</a> · <a href="https://github.com/rayoplateado/jurl#reference">All flags</a></span>
+      <span>MIT or Apache-2.0. Lightpanda, which jurl downloads for JavaScript pages, is a separate program under AGPL-3.0.</span>
+    </div>
   </div>
 </footer>
 
