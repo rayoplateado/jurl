@@ -196,15 +196,15 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
 
     // YAML frontmatter: take the title, don't treat it as content.
     let mut body = body;
-    if let Some(rest) = body.strip_prefix("---\n") {
-        if let Some(end) = rest.find("\n---") {
-            for line in rest[..end].lines() {
-                if let Some(v) = line.strip_prefix("title:") {
-                    title = v.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
-                }
+    if let Some(rest) = body.strip_prefix("---\n")
+        && let Some(end) = rest.find("\n---")
+    {
+        for line in rest[..end].lines() {
+            if let Some(v) = line.strip_prefix("title:") {
+                title = v.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
             }
-            body = rest[end + 4..].trim_start_matches(['-', '\n']);
         }
+        body = rest[end + 4..].trim_start_matches(['-', '\n']);
     }
 
     for line in body.lines() {

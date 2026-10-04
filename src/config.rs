@@ -34,7 +34,7 @@ impl Config {
     pub fn path() -> Option<PathBuf> {
         let base = env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+            .or_else(|| env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(|h| PathBuf::from(h).join(".config")))?;
         Some(base.join("jurl/env"))
     }
 

@@ -28,7 +28,7 @@ fn asset() -> Option<(&'static str, &'static str)> {
 
 /// `~/Library/Caches/jurl` on macOS, `$XDG_CACHE_HOME/jurl` or `~/.cache/jurl` elsewhere.
 fn cache_dir() -> Option<PathBuf> {
-    let home = env::var_os("HOME").map(PathBuf::from);
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(PathBuf::from);
     if env::consts::OS == "macos" {
         return home.map(|h| h.join("Library/Caches/jurl"));
     }
@@ -45,7 +45,7 @@ pub fn find(configured: Option<String>) -> Option<PathBuf> {
         return Some(PathBuf::from(p));
     }
     let mut dirs: Vec<PathBuf> = env::var_os("PATH").map(|p| env::split_paths(&p).collect()).unwrap_or_default();
-    if let Some(home) = env::var_os("HOME") {
+    if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) {
         dirs.push(PathBuf::from(home).join(".local/bin"));
     }
     dirs.into_iter()
