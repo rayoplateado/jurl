@@ -5,7 +5,7 @@
 <h1 align="center">jurl</h1>
 
 <p align="center"><b>curl that reads the page for you.</b><br>
-It hands you the part you came for, and nothing it prints was made up.</p>
+Tell it what you want. It picks it out of the page.</p>
 
 ---
 
@@ -43,7 +43,7 @@ https://gamehistory.org/5k-magazines/
 
 ## Why jurl
 
-- **It can't make things up.** jurl doesn't use a chatbot. It uses *decision models*: [Jev](https://docs.typesafe.ai/introduction) reads the text and [Clef](https://developers.cloudflare.com/workers-ai/models/clef-flash/) looks at the images. Neither writes a word. They only say how likely each paragraph, link or image is to be what you want, and jurl prints the winners **exactly as they appear on the page**. You never get a summary that drifts or a URL that doesn't exist.
+- **It picks. It doesn't write.** jurl doesn't use a chatbot. It uses *decision models*: [Jev](https://docs.typesafe.ai/introduction) reads the text and [Clef](https://developers.cloudflare.com/workers-ai/models/clef-flash/) looks at the images. Neither writes a word. They only say how likely each paragraph, link or image is to be what you want, and jurl prints the winners **exactly as they appear on the page**. You never get a summary that drifts or a URL that doesn't exist.
 - **It's fast.** Most pages take under a second, end to end.
 - **It's cheap.** About a thousand pages per dollar of API usage.
 
