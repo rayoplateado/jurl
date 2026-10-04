@@ -94,9 +94,10 @@ export class Budget extends DurableObject<Env> {
 // ---------- the API ----------
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/api/try" && request.method === "POST") return tryIt(request, env);
+    if (url.pathname === "/api/warm" && request.method === "POST") return warm(request, env, ctx);
     // The page only shows the playground when it can work. Removing a secret
     // (e.g. TURNSTILE_SECRET) hides it: the kill switch.
     if (url.pathname === "/api/status") return json({ enabled: enabled(env) });
@@ -104,6 +105,17 @@ export default {
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;
+
+// The page calls this when the playground scrolls into view, so the container
+// is awake by the time someone clicks Run. One container, so a flood of warms
+// costs at most one instance kept awake.
+async function warm(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  if (enabled(env) && (await env.PER_MINUTE.limit({ key: `warm:${ip}` })).success) {
+    ctx.waitUntil(getContainer(env.JURL, "jurl").fetch(new Request("http://jurl/health")).catch(() => undefined));
+  }
+  return new Response(null, { status: 204 });
+}
 
 function enabled(env: Env): boolean {
   return Boolean(env.TURNSTILE_SECRET && env.TYPESAFE_API_KEY && env.CLOUDFLARE_AI_ACCOUNT_ID && env.CLOUDFLARE_AI_TOKEN);
@@ -129,13 +141,16 @@ async function tryIt(request: Request, env: Env): Promise<Response> {
   if (typeof target === "string") return json({ error: target }, 400);
 
   if (!(await env.PER_MINUTE.limit({ key: ip })).success) return json({ error: "Easy there. Try again in a minute." }, 429);
-  if (!(await turnstileOk(body.token ?? "", ip, env))) return json({ error: "Couldn't verify you're human. Reload and try again." }, 403);
 
+  // These three don't depend on each other: run them together.
   const key = await cacheKey(mode, target.href, q);
-  const hit = await env.CACHE.get(key, "json");
+  const [human, hit, where] = await Promise.all([
+    turnstileOk(body.token ?? "", ip, env),
+    env.CACHE.get(key, "json"),
+    checkHost(target.hostname),
+  ]);
+  if (!human) return json({ error: "Couldn't verify you're human. Reload and try again." }, 403);
   if (hit) return json({ ...(hit as object), cached: true });
-
-  const where = await checkHost(target.hostname);
   if (where) return json({ error: where }, 400);
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
@@ -217,7 +232,7 @@ function parseUrl(raw: string): URL | string {
 }
 
 async function checkHost(host: string): Promise<string | null> {
-  const addrs = [...(await resolve(host, "A")), ...(await resolve(host, "AAAA"))];
+  const addrs = (await Promise.all([resolve(host, "A"), resolve(host, "AAAA")])).flat();
   if (addrs.length === 0) return `Couldn't find ${host}.`;
   if (addrs.some(isPrivate)) return "Only public http(s) pages.";
   return null;
