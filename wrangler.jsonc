@@ -1,0 +1,11 @@
+// jurl.dev: the landing in site/, served as static assets by a Worker (no code).
+{
+  "name": "jurl-dev",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./site"
+  },
+  "routes": [
+    { "pattern": "jurl.dev", "custom_domain": true }
+  ]
+}
