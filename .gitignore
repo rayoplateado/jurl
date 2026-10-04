@@ -1,2 +1,8 @@
 /target
 .env
+
+# Cloudflare Worker (worker/)
+.wrangler/
+worker/.wrangler/
+worker/node_modules/
+.dev.vars
