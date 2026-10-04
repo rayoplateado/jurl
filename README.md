@@ -295,6 +295,10 @@ Releases are built by [cargo-dist](https://opensource.axo.dev/cargo-dist/) when 
 
 </details>
 
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first; security problems go to [SECURITY.md](SECURITY.md).
+
 ## License
 
 MIT or Apache-2.0, at your option. [Lightpanda](https://lightpanda.io), which jurl downloads for JavaScript pages, is a separate program under AGPL-3.0.

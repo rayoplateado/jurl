@@ -1,0 +1,16 @@
+name: Feature request
+description: Something jurl should pick out, or a way it should work.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: use
+    attributes:
+      label: What are you trying to do?
+      description: The page and the part of it you came for. A real example beats a general idea.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: A flag, a mode, a change in what's kept. Keep in mind jurl only prints what's on the page.
