@@ -594,7 +594,17 @@ document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click'
 // being read is third-party text, so it only ever goes in via textContent.
 (() => {
   const section = document.getElementById('try');
-  fetch('/api/status').then(r => r.json()).then(s => { if (s.enabled) section.hidden = false; }).catch(() => {});
+  fetch('/api/status').then(r => r.json()).then(s => {
+    if (!s.enabled) return;
+    section.hidden = false;
+    // Get ready before the click: wake the container, solve Turnstile.
+    new IntersectionObserver((entries, io) => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      io.disconnect();
+      fetch('/api/warm', { method: 'POST' }).catch(() => {});
+      prime();
+    }, { rootMargin: '200px' }).observe(section);
+  }).catch(() => {});
   const form = document.querySelector('.tryform'), out = document.querySelector('.out');
   const qIn = form.q, urlIn = form.url, runBtn = form.querySelector('.run'), flag = form.querySelector('.flag');
   const picks = [...form.querySelectorAll('[data-mode]')];
@@ -617,7 +627,28 @@ document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click'
   const quote = s => '"' + s.replace(/"/g, '\\"') + '"';
   const echo = (m, q, u) => ['jurl', FLAGS[m][0], q && FLAGS[m][1] ? quote(q) : '', u.replace(/^https?:\/\//, '')].filter(Boolean).join(' ');
 
-  function token() {
+  // Turnstile tokens are single-use and expire after 300 s, so keep one
+  // ready and fetch the next as soon as it's spent.
+  let ready = null, readyAt = 0;
+  function prime() {
+    if (!ready || Date.now() - readyAt > 240000) {
+      readyAt = Date.now();
+      ready = token();
+      ready.catch(() => { ready = null; });
+    }
+    return ready;
+  }
+  function take() {
+    const t = prime();
+    ready = null;
+    return t;
+  }
+  async function loaded() {
+    for (let i = 0; i < 50 && !window.turnstile; i++) await new Promise(r => setTimeout(r, 100));
+  }
+
+  async function token() {
+    await loaded();
     return new Promise((resolve, reject) => {
       if (!window.turnstile) return reject(new Error('turnstile'));
       waiter = { resolve, reject };
@@ -679,10 +710,10 @@ document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click'
     busy = true; runBtn.disabled = true;
     const wait = el('div', 'wait', 'reading the page');
     out.replaceChildren(el('div', 'echo', echo(mode, q, url)), wait);
-    const slow = setTimeout(() => { wait.textContent = 'waking jurl up — the first try after a quiet spell takes a few seconds'; }, 4000);
+    const slow = setTimeout(() => { wait.textContent = 'waking jurl up — the first try after a quiet spell takes a few seconds'; }, 2500);
     try {
       let t;
-      try { t = await token(); }
+      try { t = await take(); }
       catch { out.replaceChildren(el('div', 'echo', echo(mode, q, url)), el('div', 'err', "Couldn't check you're human: something is blocking Cloudflare Turnstile. Allow challenges.cloudflare.com and try again.")); return; }
       const res = await fetch('/api/try', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode, url, q, token: t }) });
       const data = await res.json().catch(() => ({ error: 'Something went wrong. Try again.' }));
@@ -692,6 +723,7 @@ document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click'
       out.replaceChildren(el('div', 'echo', echo(mode, q, url)), el('div', 'err', "Couldn't reach jurl. Check your connection and try again."));
     } finally {
       clearTimeout(slow); busy = false; runBtn.disabled = false;
+      prime();
     }
   }
 
