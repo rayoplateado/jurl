@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jurl — curl that reads the page for you</title>
+<meta name="description" content="jurl fetches a URL and hands you the part you came for: the answer, the code, the links, the photo. Decision models pick; nothing it prints was made up.">
+<meta property="og:title" content="jurl — curl that reads the page for you">
+<meta property="og:description" content="It hands you the part you came for, and nothing it prints was made up.">
+<meta property="og:image" content="https://jurl.dev/img/jurl.png">
+<meta property="og:url" content="https://jurl.dev">
+<meta name="theme-color" content="#F1F3F4">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='2' fill='%230F172A'/%3E%3Ctext x='16' y='24' font-family='Georgia,serif' font-style='italic' font-size='24' fill='%23DE7236' text-anchor='middle'%3Ej%3C/text%3E%3C/svg%3E">
+<link rel="preload" href="fonts/instrument-serif-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face { font-family: "Instrument Serif"; font-display: swap; src: url(fonts/instrument-serif-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "Instrument Serif"; font-display: swap; font-style: italic; src: url(fonts/instrument-serif-latin-400-italic.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-display: swap; src: url(fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-display: swap; font-weight: 700; src: url(fonts/jetbrains-mono-latin-700-normal.woff2) format("woff2"); }
+:root {
+  --paper: #F1F3F4; --card: #FFFFFF; --ink: #0F172A; --ink-2: #475569; --rule: #CBD5E1; --muted: #E2E8F0;
+  --navy: #304169; --ember: #DE7236; --ember-ink: #B4531C; --gold: #D7AE4F;
+  --serif: "Instrument Serif", Georgia, serif; --mono: "JetBrains Mono", ui-monospace, monospace;
+  --shadow: 5px 5px 0 var(--navy);
+}
+* { box-sizing: border-box; margin: 0; }
+html { scroll-behavior: smooth; }
+body { background: var(--paper); color: var(--ink); font-family: var(--serif); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+a { color: inherit; }
+code, pre { font-family: var(--mono); }
+::selection { background: var(--ember); color: #fff; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 40px; }
+
+/* nav */
+nav { display: flex; align-items: center; gap: 28px; padding: 18px 40px; font: 13px var(--mono); }
+nav .mark { font: italic 30px/1 var(--serif); margin-right: auto; text-decoration: none; }
+nav a { text-decoration: none; }
+nav a:not(.mark):hover { text-decoration: underline; text-underline-offset: 4px; }
+.copy { font: 13px var(--mono); background: var(--navy); color: #fff; border: 0; border-radius: 2px; padding: 10px 14px; cursor: pointer; transition: transform .08s, background .15s; }
+.copy:hover { background: var(--ink); }
+.copy:active { transform: scale(.97); }
+.copy .p { color: var(--gold); }
+
+/* hero */
+.hero { text-align: center; padding: 6px 40px 0; }
+.hero h1 { font-weight: 400; font-size: clamp(56px, 9.4vw, 124px); line-height: .9; letter-spacing: -.02em; }
+.hero h1 em { color: var(--ember); }
+.stage { position: relative; width: min(660px, 100%); margin: -10px auto 0; }
+.stage img { display: block; width: 100%; height: auto; }
+.slip {
+  position: absolute; left: 50%; top: 73%; width: 450px; text-align: left; background: var(--card);
+  border: 1px solid var(--ink); border-radius: 2px; padding: 14px 16px 12px; font: 13px/1.55 var(--mono);
+  transform: rotate(-2.5deg); box-shadow: var(--shadow); transition: transform .25s cubic-bezier(.2,.8,.2,1);
+}
+.slip:hover { transform: rotate(-1deg) translateY(-6px); }
+.slip .c { color: var(--ink-2); }
+.slip .o { font-weight: 700; word-break: break-all; margin-top: 6px; border-left: 3px solid var(--ember); padding-left: 10px; }
+.slip .f { margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+.lede { text-align: center; padding: 72px 24px 0; font-size: 34px; line-height: 1.18; max-width: 720px; margin: 0 auto; }
+.lede em { color: var(--ember-ink); }
+
+/* entrance: the drawing first, then the slip lands in his fingers */
+@media (prefers-reduced-motion: no-preference) {
+  .hero h1 { animation: rise .6s cubic-bezier(.2,.8,.2,1) both; }
+  .stage img { animation: rise .7s .08s cubic-bezier(.2,.8,.2,1) both; }
+  .slip { animation: land .55s .45s cubic-bezier(.3,1.4,.5,1) both; }
+  .lede { animation: rise .6s .6s cubic-bezier(.2,.8,.2,1) both; }
+}
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+@keyframes land { from { opacity: 0; transform: translate(40px, -30px) rotate(-9deg); } }
+
+/* section heads */
+.sec { padding: 140px 0 0; }
+.kicker { font: 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.kicker::before { content: "§ "; color: var(--ember); }
+h2 { font-weight: 400; font-size: clamp(44px, 6vw, 76px); line-height: .95; letter-spacing: -.01em; margin-top: 14px; }
+h2 em { color: var(--ember); }
+.sub { font-size: 23px; line-height: 1.3; color: var(--ink-2); margin-top: 16px; max-width: 620px; }
+
+/* why */
+.why { display: grid; grid-template-columns: 1.35fr 1fr; gap: 64px; border-top: 1px solid var(--ink); padding-top: 28px; margin-top: 40px; }
+.why h3 { font-weight: 400; font-size: 34px; line-height: 1.05; }
+.why p { font-size: 20px; line-height: 1.38; color: var(--ink-2); margin-top: 12px; }
+.why p b { font-weight: 400; color: var(--ink); font-style: italic; }
+.why .big h3 { font-size: clamp(40px, 4.6vw, 60px); line-height: .98; }
+.why .big h3 em { color: var(--ember); }
+.why .side { display: grid; gap: 36px; }
+.why .side > div { border-top: 1px solid var(--rule); padding-top: 18px; }
+.why .side > div:first-child { border-top: 0; padding-top: 0; }
+.why .num { font: 13px var(--mono); color: var(--ember-ink); margin-top: 10px; }
+
+/* modes */
+.board { display: grid; grid-template-columns: 1fr 1.3fr; gap: 56px; margin-top: 48px; align-items: start; }
+.list { list-style: none; padding: 0; border-top: 1px solid var(--ink); }
+.list button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 1fr auto; align-items: baseline; width: 100%; padding: 13px 0 11px; border-bottom: 1px solid var(--rule); font-size: 31px; line-height: 1.1; position: relative; transition: padding .2s cubic-bezier(.2,.8,.2,1); }
+.list button code { font-size: 13px; color: var(--ink-2); }
+.list button:hover { padding-left: 8px; }
+.list button[aria-selected="true"] { padding-left: 24px; }
+.list button[aria-selected="true"] code { color: var(--ember-ink); }
+.list button::before { content: ""; position: absolute; left: 0; top: 50%; width: 12px; height: 12px; margin-top: -6px; background: var(--ember); border-radius: 50%; transform: scale(0); transition: transform .2s cubic-bezier(.3,1.4,.5,1); }
+.list button[aria-selected="true"]::before { transform: scale(1); }
+.list button:focus-visible { outline: 2px solid var(--ember); outline-offset: 3px; }
+.jsnote { margin-top: 22px; font-size: 19px; line-height: 1.35; color: var(--ink-2); }
+.jsnote b { font-weight: 400; color: var(--ink); font-style: italic; }
+.term { background: var(--card); border: 1px solid var(--ink); border-radius: 2px; box-shadow: 6px 6px 0 var(--navy); padding: 20px 22px; font: 13.5px/1.6 var(--mono); min-height: 470px; position: sticky; top: 24px; }
+.term pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmd { font-weight: 700; }
+.cmd::before { content: "$ "; color: var(--ember); }
+.dim { color: var(--ink-2); }
+.say { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--rule); font: 20px/1.3 var(--serif); }
+.say em { color: var(--ember-ink); }
+.say code, .keys code, .jsnote code { font-size: .78em; }
+.panel[hidden] { display: none; }
+@media (prefers-reduced-motion: no-preference) { .panel { animation: rise .22s ease-out; } }
+.mini { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12.5px; }
+.mini th, .mini td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--muted); vertical-align: top; }
+.mini th { font-weight: 400; color: var(--ink-2); }
+.mini td.n { text-align: right; white-space: nowrap; }
+.mini b { color: var(--ember-ink); }
+
+/* recipes */
+.recipes { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 48px; }
+.recipe { background: var(--card); border: 1px solid var(--ink); border-radius: 2px; box-shadow: var(--shadow); padding: 18px 20px; font: 13.5px/1.6 var(--mono); }
+.recipe p { font: 21px/1.2 var(--serif); margin-bottom: 12px; }
+.recipe pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.recipe .pipe { color: var(--ember-ink); font-weight: 700; }
+
+/* speed & cost */
+.costs { margin-top: 48px; overflow-x: auto; }
+table.big { width: 100%; border-collapse: collapse; min-width: 560px; }
+table.big th { font: 12px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); text-align: left; padding: 0 0 12px; border-bottom: 1px solid var(--ink); }
+table.big td { padding: 16px 0; border-bottom: 1px solid var(--rule); font-size: 26px; }
+table.big td:first-child { font: 15px var(--mono); }
+table.big th:not(:first-child), table.big td:not(:first-child) { text-align: right; }
+.fine { font: 13px/1.6 var(--mono); color: var(--ink-2); margin-top: 16px; }
+
+/* install */
+.install { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; margin-top: 48px; align-items: start; }
+.row { display: flex; align-items: center; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--rule); font: 15px var(--mono); }
+.row:first-child { border-top: 1px solid var(--ink); }
+.row .c { flex: 1; overflow-wrap: anywhere; }
+.row .c::before { content: "$ "; color: var(--ember); }
+.row small { display: block; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.row button { font: 12px var(--mono); background: none; color: var(--ink); border: 1px solid var(--ink); border-radius: 2px; padding: 6px 10px; cursor: pointer; transition: transform .08s; }
+.row button:hover { background: var(--ink); color: #fff; }
+.row button:active { transform: scale(.96); }
+.alt { font: 12.5px/1.7 var(--mono); color: var(--ink-2); margin-top: 18px; overflow-wrap: anywhere; }
+.alt b { color: var(--ink); font-weight: 400; }
+.first { background: var(--card); border: 1px solid var(--ink); border-radius: 2px; box-shadow: var(--shadow); padding: 18px 20px; font: 13px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.first .ok { color: var(--ember-ink); font-weight: 700; }
+.install .say { border: 0; padding: 0; margin-top: 20px; color: var(--ink-2); }
+
+/* keys */
+.keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; margin-top: 48px; border-top: 1px solid var(--ink); padding-top: 26px; }
+.keys h3 { font-weight: 400; font-size: 30px; line-height: 1.05; }
+.keys p { font-size: 19px; line-height: 1.4; color: var(--ink-2); margin-top: 10px; }
+.keys code { font-size: 14px; color: var(--ink); }
+
+/* how it works */
+.flow { margin-top: 48px; display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 0; align-items: stretch; border: 1px solid var(--ink); border-radius: 2px; background: var(--card); box-shadow: 6px 6px 0 var(--navy); }
+.flow > div { padding: 24px 24px 26px; }
+.flow > div + div { border-left: 1px solid var(--rule); }
+.flow h3 { font-weight: 400; font-size: 30px; }
+.flow h3 span { font: 12px var(--mono); color: var(--ember-ink); display: block; margin-bottom: 6px; letter-spacing: .06em; }
+.flow p { font-size: 18px; line-height: 1.4; color: var(--ink-2); margin-top: 10px; }
+.judges { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+.judge { border: 1px solid var(--rule); border-radius: 2px; padding: 14px; font: 12.5px/1.55 var(--mono); }
+.judge b { display: block; font: 22px var(--serif); margin-bottom: 6px; }
+.judge .pp { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.judge .bar { flex: 1; height: 6px; background: var(--muted); position: relative; }
+.judge .bar i { position: absolute; inset: 0 auto 0 0; background: var(--ember); }
+.verbatim { margin-top: 64px; text-align: center; font-size: clamp(30px, 3.6vw, 44px); line-height: 1.12; max-width: 860px; margin-left: auto; margin-right: auto; }
+.verbatim em { color: var(--ember); }
+
+/* footer */
+footer { margin-top: 160px; border-top: 1px solid var(--ink); padding: 32px 0 48px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 24px 40px; align-items: baseline; font: 13px/1.6 var(--mono); color: var(--ink-2); }
+footer .mark { font: italic 44px/1 var(--serif); color: var(--ink); margin-right: auto; }
+footer a { color: var(--ink); }
+
+.toast { position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: #fff; font: 13px var(--mono); padding: 10px 14px; border-radius: 2px; pointer-events: none; transition: opacity .18s, transform .18s; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-width: 900px) {
+  .wrap { padding: 0 16px; }
+  nav { padding: 14px 16px; gap: 14px; } nav .hide { display: none; }
+  .copy { font-size: 11px; padding: 8px 10px; }
+  .hero { padding: 6px 16px 0; }
+  .slip { position: relative; left: auto; top: auto; width: auto; margin: -36px 4px 0; transform: rotate(-1.5deg); }
+  @media (prefers-reduced-motion: no-preference) { .slip { animation-name: rise; } }
+  .lede { font-size: 26px; padding-top: 56px; }
+  .sec { padding-top: 96px; }
+  .why, .board, .install, .keys, .recipes { grid-template-columns: 1fr; gap: 32px; }
+  .list button { font-size: 25px; }
+  .term { position: static; min-height: 0; font-size: 12px; padding: 16px; }
+  .flow { grid-template-columns: 1fr; }
+  .flow > div + div { border-left: 0; border-top: 1px solid var(--rule); }
+  .judges { grid-template-columns: 1fr; }
+  table.big { min-width: 0; }
+  table.big td { font-size: 17px; padding: 12px 0; }
+  table.big td:first-child { font-size: 12px; padding-right: 10px; }
+  table.big td:first-child .dim { display: none; }
+  table.big th { font-size: 10px; }
+  footer { margin-top: 110px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="mark" href="#">jurl</a>
+  <a class="hide" href="#what">what it does</a>
+  <a class="hide" href="#how">how it works</a>
+  <a class="hide" href="https://github.com/rayoplateado/jurl">github</a>
+  <button class="copy" type="button" data-copy="brew install rayoplateado/tap/jurl"><span class="p">$</span> brew install rayoplateado/tap/jurl</button>
+</nav>
+
+<header class="hero">
+  <h1>curl that reads<br>the page <em>for you.</em></h1>
+  <div class="stage">
+    <img src="img/jurl.png" width="900" height="675" alt="Ink drawing of a man in a suit and leopard-print tie, pinching his fingers as if picking something out">
+    <div class="slip">
+      <div class="c">$ jurl --find "a cathedral" en.wikipedia.org/wiki/Cologne</div>
+      <div class="o">https://thumb.wikimedia.org/wikipedia/commons/thumb/2/27/Kdom.jpg/250px-Kdom.jpg</div>
+      <div class="f">73 images looked at · 2.3 s · $0.002</div>
+    </div>
+  </div>
+</header>
+<p class="lede">It hands you the part you came for, <em>and nothing it prints was made up.</em></p>
+
+<main>
+<section class="sec wrap" id="why">
+  <div class="kicker">Why jurl</div>
+  <div class="why">
+    <div class="big">
+      <h3>It can rank badly.<br><em>It can't make things up.</em></h3>
+      <p>jurl doesn't use a chatbot. It uses <b>decision models</b>: Jev reads the text and Clef looks at the images. Neither writes a word. They only say how likely each paragraph, link or image is to be what you want, and jurl prints the winners exactly as they appear on the page. No summary that drifts, no URL that doesn't exist.</p>
+    </div>
+    <div class="side">
+      <div><h3>It's fast.</h3><p>Most pages take under a second, end to end.</p><div class="num">jurl &lt;url&gt; · 0.6–1 s</div></div>
+      <div><h3>It's cheap.</h3><p>About a thousand pages per dollar of API usage.</p><div class="num">jurl &lt;url&gt; · $0.0004–0.0013</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec wrap" id="what">
+  <div class="kicker">What you can do</div>
+  <h2>Same command. <em>Six things</em> to ask for.</h2>
+  <div class="board">
+    <div>
+      <ul class="list" role="tablist" aria-label="jurl modes">
+        <li><button role="tab" id="t-gist" aria-controls="p-gist" aria-selected="true">The gist <code>jurl url</code></button></li>
+        <li><button role="tab" id="t-ask" aria-controls="p-ask" aria-selected="false" tabindex="-1">One answer <code>-q "…"</code></button></li>
+        <li><button role="tab" id="t-code" aria-controls="p-code" aria-selected="false" tabindex="-1">Just the code <code>--code</code></button></li>
+        <li><button role="tab" id="t-links" aria-controls="p-links" aria-selected="false" tabindex="-1">Links worth following <code>--links</code></button></li>
+        <li><button role="tab" id="t-img" aria-controls="p-img" aria-selected="false" tabindex="-1">The real images <code>--image</code></button></li>
+        <li><button role="tab" id="t-find" aria-controls="p-find" aria-selected="false" tabindex="-1">A photo, by description <code>--find "…"</code></button></li>
+      </ul>
+      <p class="jsnote"><b>Pages built by JavaScript just work.</b> jurl spots the empty app shell and renders it in Lightpanda, a fast headless browser it fetches the first time one shows up.</p>
+    </div>
+    <div class="term">
+<div class="panel" id="p-gist" role="tabpanel" aria-labelledby="t-gist"><pre><span class="cmd">jurl -n 3 blog.cloudflare.com/markdown-for-agents/</span>
+# Introducing Markdown for Agents
+
+<span class="dim">&lt;https://blog.cloudflare.com/markdown-for-agents/&gt; · article (1.00)</span>
+
+The way content and businesses are discovered online is changing rapidly. In the past, traffic originated from traditional search engines, and SEO determined who got found first. <span class="dim">…</span>
+
+## Convert HTML to markdown, automatically
+
+Cloudflare's network now supports real-time content conversion at the source, <span class="dim">…</span></pre>
+<p class="say">The title, what kind of page it is, and the blocks that carry it, in reading order. No navigation, cookie banners, sign-up prompts or footers.</p></div>
+
+<div class="panel" id="p-ask" role="tabpanel" aria-labelledby="t-ask" hidden><pre><span class="cmd">jurl -q "What is the Jevons paradox?" -n 2 en.wikipedia.org/wiki/William_Stanley_Jevons</span>
+<span class="dim">…</span>
+Jevons received public recognition for his work on The Coal Question (1865), in which he called attention to the gradual exhaustion of Britain's coal supplies and also put forth the view that increases in energy production efficiency leads to more, not less, consumption. <span class="dim">…</span>
+
+## Practical economics
+
+In The Coal Question, Jevons covered a breadth of concepts on energy depletion <span class="dim">…</span></pre>
+<p class="say">About 240 blocks on the page. <em>The two that answer it.</em></p></div>
+
+<div class="panel" id="p-code" role="tabpanel" aria-labelledby="t-code" hidden><pre><span class="cmd">jurl --code -n 2 github.com/BurntSushi/ripgrep</span>
+### Installation
+
+    $ brew install ripgrep
+
+    $ cargo install ripgrep</pre>
+<p class="say">Code blocks only, under the headings they belong to.</p></div>
+
+<div class="panel" id="p-links" role="tabpanel" aria-labelledby="t-links" hidden><pre><span class="cmd">jurl --links -n 3 news.ycombinator.com</span>
+https://github.com/PowderworksCode/headstart
+https://www.da.vidbuchanan.co.uk/blog/hacking-time.html
+https://gamehistory.org/5k-magazines/
+
+<span class="cmd">jurl --links -n 3 -q "official installation instructions" github.com/BurntSushi/ripgrep</span>
+https://www.macports.org/ports.php?by=name&amp;substr=ripgrep
+https://packages.gentoo.org/packages/sys-apps/ripgrep
+https://chocolatey.org/packages/ripgrep</pre>
+<p class="say">Content first, ahead of <em>login</em>, <em>share</em> or <em>privacy policy</em>. Add <code>-q</code> to keep only the links about something.</p></div>
+
+<div class="panel" id="p-img" role="tabpanel" aria-labelledby="t-img" hidden><pre><span class="cmd">jurl --vision blog.cloudflare.com/markdown-for-agents/</span></pre>
+<table class="mini">
+  <tr><th>Image on the post</th><th>Alt text</th><th class="n">--image</th><th class="n">--vision</th></tr>
+  <tr><td>Stacked area chart</td><td>BLOG-3162 4</td><td class="n">0.64</td><td class="n"><b>0.82</b></td></tr>
+  <tr><td>Diagram</td><td>BLOG-3162 3</td><td class="n">0.63</td><td class="n"><b>0.82</b></td></tr>
+  <tr><td>Author avatar</td><td>Will Allen</td><td class="n">0.38</td><td class="n"><b>0.21</b></td></tr>
+  <tr><td>Company logo</td><td>Cloudflare</td><td class="n">0.09</td><td class="n"><b>0.08</b></td></tr>
+</table>
+<p class="say"><code>--image</code> judges by file name, alt text and caption. <code>--vision</code> also has Clef look at the pixels, <em>which matters when the alt text says nothing.</em></p></div>
+
+<div class="panel" id="p-find" role="tabpanel" aria-labelledby="t-find" hidden><pre><span class="cmd">jurl --find "a cathedral" -n 3 en.wikipedia.org/wiki/Cologne</span></pre>
+<table class="mini">
+  <tr><th></th><th>Image</th><th>Why it matched</th><th class="n">p</th></tr>
+  <tr><td>1</td><td>Kdom.jpg</td><td>Cologne Cathedral</td><td class="n">0.96</td></tr>
+  <tr><td>2</td><td>Köln_um_1890.jpg</td><td>The 1890 skyline, the cathedral towering over it</td><td class="n">0.95</td></tr>
+  <tr><td>3</td><td>Kranhäuser_Cologne_April_2018.jpg</td><td>The Rhine at dusk, the lit cathedral on the right. <b>No alt text, no caption.</b></td><td class="n">0.95</td></tr>
+</table>
+<pre style="margin-top:16px"><span class="cmd">jurl --find "a carnival parade" en.wikipedia.org/wiki/Cologne</span>
+jurl: no image in https://en.wikipedia.org/wiki/Cologne looks like "a carnival parade" (closest: …, p=0.02)</pre>
+<p class="say">73 images, every one looked at, in 2.3 s. Number three could only be found by its pixels. <em>And when nothing matches, jurl says so.</em></p></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec wrap" id="recipes">
+  <div class="kicker">Recipes</div>
+  <h2>Plain text out. <em>Pipes</em> in.</h2>
+  <p class="sub">Everything prints plain text or plain URLs, so jurl fits in a pipe — or in an agent's toolbox.</p>
+  <div class="recipes">
+    <div class="recipe"><p>Read the top 3 Hacker News stories, one key paragraph each</p><pre>jurl -l -n 3 news.ycombinator.com <span class="pipe">|</span> xargs -n1 jurl -n 1</pre></div>
+    <div class="recipe"><p>Download the photo that matches</p><pre>jurl -f "a bridge over a river" en.wikipedia.org/wiki/Cologne <span class="pipe">|</span> xargs curl -sO</pre></div>
+    <div class="recipe"><p>Every chart in a post</p><pre>jurl -f "a chart or graph" -n 10 blog.cloudflare.com/markdown-for-agents/ <span class="pipe">|</span> xargs -n1 curl -sO</pre></div>
+    <div class="recipe"><p>Only the confident answers, for scripts</p><pre>jurl --json -q "installation" github.com/BurntSushi/ripgrep <span class="pipe">|</span> jq -r '.blocks[] | select(.p &gt; 0.8) | .text'</pre></div>
+  </div>
+</section>
+
+<section class="sec wrap" id="speed">
+  <div class="kicker">Speed and cost</div>
+  <h2>Under a second. <em>A fraction of a cent.</em></h2>
+  <div class="costs">
+    <table class="big">
+      <thead><tr><th>Command</th><th>Typical time</th><th>Typical cost</th></tr></thead>
+      <tbody>
+        <tr><td>jurl &lt;url&gt;</td><td>0.6–1 s</td><td>$0.0004–0.0013</td></tr>
+        <tr><td>jurl -i &lt;url&gt;</td><td>0.5–0.7 s</td><td>$0.00004</td></tr>
+        <tr><td>jurl --vision &lt;url&gt;</td><td>1.3–1.9 s</td><td>$0.0002</td></tr>
+        <tr><td>jurl --find "…" &lt;url&gt; <span class="dim">(73 images)</span></td><td>2.2–2.9 s</td><td>$0.002</td></tr>
+        <tr><td>JavaScript apps</td><td>+3–6 s</td><td>same</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="fine">Measured on 2026-10-04. Run any command with -t to see your own numbers.</p>
+</section>
+
+<section class="sec wrap" id="install">
+  <div class="kicker">Install</div>
+  <h2>Two lines. <em>That's the whole setup.</em></h2>
+  <div class="install">
+    <div>
+      <div class="row"><span class="c">brew install rayoplateado/tap/jurl<small>macOS, Linux</small></span><button type="button" data-copy="brew install rayoplateado/tap/jurl">copy</button></div>
+      <div class="row"><span class="c">curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.sh | sh<small>no Homebrew</small></span><button type="button" data-copy="curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.sh | sh">copy</button></div>
+      <p class="alt"><b>Windows</b> · powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"<br><b>From source</b> · cargo install --git https://github.com/rayoplateado/jurl</p>
+    </div>
+    <div>
+<div class="first"><span class="cmd">jurl example.com</span>
+<span class="dim">jurl reads pages with Jev, TypeSafe's decision model. It needs your API key, once.
+Get one at https://console.typesafe.ai</span>
+
+    TypeSafe API key (hidden):
+    Checking… <span class="ok">ok.</span> Saved to ~/.config/jurl/env</div>
+      <p class="say">The first run asks for a <a href="https://console.typesafe.ai">TypeSafe API key</a>, checks it and saves it. For <code>--vision</code> and <code>--find</code>, run <code>jurl init</code> and add a Cloudflare Workers AI token.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec wrap" id="keys">
+  <div class="kicker">Your keys, your data</div>
+  <h2>No server. <em>No account.</em></h2>
+  <p class="sub">jurl talks to the model APIs directly, with your keys.</p>
+  <div class="keys">
+    <div><h3>Who you pay</h3><p>TypeSafe for Jev ($0.042 per million input tokens) and Cloudflare for Clef-flash ($0.09 per million). Output is free on both.</p></div>
+    <div><h3>What leaves your machine</h3><p>The text of the page goes to TypeSafe. With <code>--vision</code> or <code>--find</code>, the images go to Cloudflare too. Keep that in mind for internal pages.</p></div>
+    <div><h3>What jurl can't read</h3><p>It sends no cookies, so pages behind a login are out of reach.</p></div>
+  </div>
+</section>
+
+<section class="sec wrap" id="how">
+  <div class="kicker">How it works</div>
+  <h2>One yes-or-no question <em>per candidate.</em></h2>
+  <div class="flow">
+    <div>
+      <h3><span>01 · FETCH</span>Split the page</h3>
+      <p>jurl asks for markdown first. Otherwise its own extractor drops navigation, footers and scripts, and splits the rest into blocks, links and images. Empty JavaScript app? It renders it in Lightpanda.</p>
+    </div>
+    <div>
+      <h3><span>02 · ASK</span>Two judges, at once</h3>
+      <div class="judges">
+        <div class="judge"><b>Jev reads text</b>"is block 12 the point?"<div class="pp"><span class="bar"><i style="width:97%"></i></span>p = 0.97</div></div>
+        <div class="judge"><b>Clef looks at images</b>"does this show a cathedral?"<div class="pp"><span class="bar"><i style="width:96%"></i></span>p = 0.96</div></div>
+      </div>
+      <p>Every question goes to Jev in a single request, so asking 100 takes about as long as asking one. Clef looks at the pixels while Jev reads, not after.</p>
+    </div>
+    <div>
+      <h3><span>03 · PRINT</span>Keep the winners</h3>
+      <p>What clears the threshold, in page order. A heading comes back only when something in its section does. Verbatim, always.</p>
+    </div>
+  </div>
+  <p class="verbatim">Models choose, they don't write. <em>That's why the output is safe to pipe into xargs curl.</em></p>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="mark">jurl</span>
+    <span><a href="https://github.com/rayoplateado/jurl">GitHub</a> · <a href="https://github.com/rayoplateado/jurl#reference">All flags</a></span>
+    <span>MIT or Apache-2.0. Lightpanda, which jurl downloads for JavaScript pages, is a separate program under AGPL-3.0.</span>
+  </div>
+</footer>
+
+<div class="toast" role="status" aria-live="polite"></div>
+
+<script>
+// Tabs: click or arrow keys move the selection; panels swap in place.
+const tabs = [...document.querySelectorAll('[role=tab]')];
+function select(t) {
+  tabs.forEach(x => {
+    const on = x === t;
+    x.setAttribute('aria-selected', on);
+    x.tabIndex = on ? 0 : -1;
+    document.getElementById(x.getAttribute('aria-controls')).hidden = !on;
+  });
+}
+tabs.forEach((t, i) => {
+  t.addEventListener('click', () => select(t));
+  t.addEventListener('keydown', e => {
+    const d = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const n = tabs[(i + d + tabs.length) % tabs.length];
+    select(n); n.focus();
+  });
+});
+
+// Copy buttons say what they copied.
+const toast = document.querySelector('.toast');
+let hide;
+document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', async () => {
+  const text = b.dataset.copy;
+  try { await navigator.clipboard.writeText(text); toast.textContent = 'Copied: ' + text; }
+  catch { toast.textContent = 'Select and copy: ' + text; }
+  toast.classList.add('on');
+  clearTimeout(hide); hide = setTimeout(() => toast.classList.remove('on'), 1800);
+}));
+</script>
+</body>
+</html>
