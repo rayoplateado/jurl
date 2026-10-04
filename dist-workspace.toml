@@ -23,3 +23,5 @@ tap = "rayoplateado/homebrew-tap"
 publish-jobs = ["homebrew"]
 # Build every platform on pull requests, not just plan: catches Windows/Linux breakage before a tag
 pr-run-mode = "upload"
+# release.yml has a hand-added paths filter so landing-only PRs don't build jurl
+allow-dirty = ["ci"]
