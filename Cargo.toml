@@ -2,6 +2,13 @@
 name = "jurl"
 version = "0.1.0"
 edition = "2024"
+description = "curl that reads the page for you: decision models pick the paragraphs, links, code and images that matter"
+homepage = "https://jurl.dev"
+repository = "https://github.com/rayoplateado/jurl"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["cli", "curl", "scraping", "llm", "readability"]
+categories = ["command-line-utilities", "web-programming::http-client"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -10,9 +17,11 @@ clap = { version = "4.6.7", features = ["derive"] }
 futures = "0.3.34"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "gzip", "brotli", "http2", "charset"] }
+rpassword = "7.5.4"
 scraper = "0.27.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.11.0"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time", "process"] }
 url = "2.5.8"
 
@@ -20,3 +29,7 @@ url = "2.5.8"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"

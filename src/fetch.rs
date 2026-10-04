@@ -1,9 +1,4 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-    process::Stdio,
-    time::Duration,
-};
+use std::{path::Path, process::Stdio, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use reqwest::{Client, header};
@@ -35,18 +30,6 @@ pub async fn fetch(client: &Client, url: &str) -> Result<Page> {
         .is_some_and(|ct| ct.contains("markdown"));
     let body = res.text().await?;
     Ok(Page { url: final_url, body, is_markdown })
-}
-
-/// Lightpanda binary: `$JURL_LIGHTPANDA`, then `lightpanda` on PATH, then `~/.local/bin`.
-pub fn lightpanda(configured: Option<String>) -> Option<PathBuf> {
-    if let Some(p) = configured {
-        return Some(PathBuf::from(p));
-    }
-    let mut dirs: Vec<PathBuf> = env::var_os("PATH").map(|p| env::split_paths(&p).collect()).unwrap_or_default();
-    if let Some(home) = env::var_os("HOME") {
-        dirs.push(PathBuf::from(home).join(".local/bin"));
-    }
-    dirs.into_iter().map(|d| d.join("lightpanda")).find(|p| p.is_file())
 }
 
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.

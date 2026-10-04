@@ -67,24 +67,46 @@ url ─fetch─▶│ HTML ──scraper──▶ blocks · links · images     
 ## Install
 
 ```sh
+# macOS or Linux, with Homebrew
+brew install rayoplateado/tap/jurl
+
+# macOS or Linux, without Homebrew
+curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"
+
+# From source
 cargo install --git https://github.com/rayoplateado/jurl
 ```
 
-Put your keys in the environment, or as `KEY=value` lines in `~/.config/jurl/env` or `./.env`:
+Then just run it. The first time, jurl asks for a [TypeSafe](https://console.typesafe.ai) API key, checks it against the API and saves it:
 
-| Variable | Needed for |
+```console
+$ jurl example.com
+jurl reads pages with Jev, TypeSafe's decision model. It needs your API key, once.
+Get one at https://console.typesafe.ai
+
+    TypeSafe API key (hidden):
+    Checking… ok. Saved to ~/.config/jurl/env
+
+# Example Domain
+
+<https://example.com/> · docs (0.86)
+
+This domain is for use in documentation examples without needing permission. …
+```
+
+`jurl init` adds the optional Cloudflare token for `--vision` and `--find`, or replaces either key. The keys are saved to `~/.config/jurl/env` with `0600` permissions. You can also use environment variables:
+
+| Variable | What it's for |
 | --- | --- |
 | `TYPESAFE_API_KEY` | Everything. Get one at [console.typesafe.ai](https://console.typesafe.ai) |
-| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN` | `--vision` and `--find` (the token needs Workers AI access) |
-| `JURL_LIGHTPANDA` | Optional: the path to Lightpanda, if it's not on `PATH` or in `~/.local/bin` |
+| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN` | `--vision` and `--find` (a token with the *Workers AI* permission) |
+| `JURL_LIGHTPANDA` | Use this Lightpanda binary instead of the one jurl manages |
+| `JURL_NO_DOWNLOAD` | Never download Lightpanda |
 
-For JavaScript-heavy sites you can also install [Lightpanda](https://lightpanda.io), a tiny headless browser written in Zig. It's optional:
-
-```sh
-# macOS on Apple Silicon; builds for other platforms are on the releases page
-gh release download -R lightpanda-io/browser -p lightpanda-aarch64-macos -O ~/.local/bin/lightpanda
-chmod +x ~/.local/bin/lightpanda
-```
+**JavaScript rendering needs no setup.** The first time a page needs JavaScript, jurl downloads [Lightpanda](https://lightpanda.io) 1.0.0 (about 90 MB on macOS, once). It comes from Lightpanda's official GitHub release, and jurl checks its SHA-256 before running it and caches it in `~/Library/Caches/jurl` (or `~/.cache/jurl` on Linux). Lightpanda is AGPL-3.0, which is why jurl never bundles it. If you already have it on `PATH`, jurl uses that one. Lightpanda has no Windows build, so `--render` isn't available on Windows.
 
 ## Usage
 
@@ -256,7 +278,7 @@ jurl -f "a stacked area chart" blog.cloudflare.com/markdown-for-agents/ | xargs 
 
 ### JavaScript apps
 
-Some pages arrive as an empty app shell: scripts plus a `#root` element, a `<noscript>` tag or a heavy bundle, and no text. jurl renders those in [Lightpanda](https://lightpanda.io) automatically:
+Some pages arrive as an empty app shell: scripts plus a `#root` element, a `<noscript>` tag or a heavy bundle, and no text. jurl renders those in [Lightpanda](https://lightpanda.io) automatically, and downloads Lightpanda the first time it's needed:
 
 ```console
 $ jurl -n 3 hn.algolia.com
@@ -392,7 +414,7 @@ A Clef call that gets a backup is paid twice, so in the worst case the Clef part
 - **Jev and Clef are new** (launched September and October 2026), so prices, limits and calibration may change. jurl pins `jev-1.13.0` to keep its thresholds meaningful.
 - **Logged-in pages are out of scope**: jurl sends no cookies.
 - **The output is only as good as the page's markup.** Text inside a canvas or baked into an image is invisible to the text modes.
-- **`--render` needs Lightpanda.** Pages that only show content after you interact with them will still come back thin.
+- **`--render` isn't available on Windows** (Lightpanda has no Windows build). Pages that only show content after you interact with them will still come back thin.
 - **The speed and cost numbers come from one machine on one day.** Run with `-t` to see your own.
 
 ## Development
@@ -408,6 +430,15 @@ The code is deliberately small:
 | File | What's in it |
 | --- | --- |
 | `src/fetch.rs` | HTTP fetching and Lightpanda rendering |
+| `src/lightpanda.rs` | Finding Lightpanda, or downloading and verifying it on first use |
+| `src/setup.rs` | First-run key prompt and `jurl init` |
+| `src/config.rs` | Keys from the environment and `~/.config/jurl/env` |
 | `src/extract.rs` | HTML and markdown → blocks, links and images |
 | `src/decide.rs` | Jev and Clef clients (same `{state, questions} → answers` contract) |
 | `src/main.rs` | The modes, chunking, hedging and output |
+
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+[Lightpanda](https://lightpanda.io), which jurl downloads on first use for JavaScript rendering, is a separate program under AGPL-3.0. It is not bundled with jurl.
