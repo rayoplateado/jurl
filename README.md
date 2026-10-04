@@ -1,5 +1,9 @@
 # jurl
 
+<p align="center">
+  <img src="docs/jurl.png" alt="Ink drawing of a man in a suit and leopard-print tie, pinching his fingers as if picking something out" width="420">
+</p>
+
 **curl that reads the page for you.**
 
 ```console
