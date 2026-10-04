@@ -20,6 +20,7 @@ jurl --vision example.com/post                                  # igual, pero Cl
 jurl -q "how do I install it?" github.com/BurntSushi/ripgrep  # solo lo que responde a la pregunta
 jurl --code github.com/BurntSushi/ripgrep                       # bloques de código: ejemplos, comandos
 jurl --links -n 10 news.ycombinator.com                         # enlaces que merece la pena seguir
+jurl --render bsky.app/profile/bsky.app                         # ejecuta el JS con Lightpanda antes de leer
 jurl --json -t example.com                                      # JSON con probabilidades + tiempos en stderr
 ```
 
@@ -28,8 +29,9 @@ jurl --json -t example.com                                      # JSON con proba
 | `-q, --ask "…"` | Elige lo que responde a la pregunta (combina con `--code`, `--links`, `--image`) |
 | `-c, --code` | Solo bloques de código |
 | `-l, --links` | URLs de enlaces de contenido, mejor primero (sin navegación, login, redes, legal) |
+| `-r, --render` | Ejecuta el JavaScript con [Lightpanda](https://lightpanda.io) antes de leer. Automático si la página es un *app shell* (scripts + `#root`/`<noscript>`/HTML pesado) sin texto |
 | `-i, --image` | URLs de imágenes de contenido (Jev juzga alt, caption, nombre y tamaño) |
-| `--vision` | Clef-flash clasifica los píxeles de las 8 mejores según Jev y se promedia con Jev; el resto conserva la nota de Jev |
+| `--vision` | Clef-flash clasifica los píxeles de las 12 primeras imágenes **a la vez que Jev** y se promedia con Jev; el resto conserva la nota de Jev |
 | `-n, --max N` | Máximo de resultados (12 bloques, 5 con `--ask`, 8 de código, 20 enlaces, imágenes sin límite) |
 | `-a, --all` | Sin máximo |
 | `--threshold P` | Probabilidad mínima (0.5) |
@@ -42,6 +44,7 @@ Del entorno, o de `~/.config/jurl/env` / `./.env` (`KEY=valor`):
 
 - `TYPESAFE_API_KEY` — siempre
 - `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN` — solo `--vision`
+- `JURL_LIGHTPANDA` — ruta a Lightpanda si no está en el PATH ni en `~/.local/bin`
 
 ## Latencia medida (2026-10-04, mediana de 3 pasadas)
 
@@ -53,7 +56,8 @@ Del entorno, o de `~/.config/jurl/env` / `./.env` (`KEY=valor`):
 | Rust book | 104 ms | 504 ms | 605 ms |
 | Hacker News | 732 ms | 245 ms | 982 ms |
 
-`--vision` añade ~1,2–1,5 s (descarga + Clef, en paralelo).
+`--vision`: 1,3–1,9 s en total (Clef corre en paralelo con Jev).
+`--render`: 2,5–5 s según la SPA (hn.algolia ~3 s, Bluesky ~5 s); el tope es 5 s de espera.
 
 ## Decisiones
 
@@ -61,8 +65,7 @@ Del entorno, o de `~/.config/jurl/env` / `./.env` (`KEY=valor`):
 - `Accept: text/markdown` primero: los sitios con *Markdown for Agents* de Cloudflare se saltan el parseo HTML.
 - Una Noul por bloque en **un** request; si la página no cabe (~60k chars de state o 120 preguntas) se parte en requests paralelos.
 - Los headings no se preguntan: se imprimen si su sección conserva algún bloque.
+- `--render` espera a `networkalmostidle` **y** a que `innerText` pase de 1.500 caracteres (tope 5 s): las SPA nunca quedan del todo inactivas y pintan después de que la red se calme.
+- `--vision` arranca Clef en paralelo con Jev sobre imágenes reducidas a 384 px (variante pequeña del `srcset` si la hay), con *hedging*: si una llamada pasa de 700 ms se lanza un duplicado y gana la primera. Las llamadas van por HTTP/1, una conexión por imagen: multiplexadas en una sola conexión HTTP/2 la cola era ~2× más lenta. Lo que no vuelve en 2,5 s se queda con la nota de Jev.
 - Clef responde mejor a *qué es* (Choice: foto, gráfica, logo, avatar…) que a *si importa*; se suman las clases de contenido y se promedia con el juicio de contexto de Jev.
 
-## Pendiente
-
-- `--render` para páginas JS (hoy: error claro "no readable content").

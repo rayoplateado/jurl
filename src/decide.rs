@@ -14,9 +14,14 @@ pub const CLEF_MODEL: &str = "clef-flash";
 pub struct Answers {
     pub answers: HashMap<String, Value>,
     pub input_tokens: u64,
+    pub requests: usize,
 }
 
 impl Answers {
+    pub fn label(&self) -> String {
+        format!("jev({} req, {} tok)", self.requests, self.input_tokens)
+    }
+
     pub fn noul(&self, id: &str) -> Option<f64> {
         self.answers.get(id)?.get("noul")?.as_f64()
     }
@@ -67,7 +72,7 @@ fn parse(v: &Value) -> Answers {
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
     let input_tokens = v.pointer("/usage/input_tokens").and_then(Value::as_u64).unwrap_or(0);
-    Answers { answers, input_tokens }
+    Answers { answers, input_tokens, requests: 1 }
 }
 
 /// POST with a short backoff on 429/529, honouring `Retry-After`.

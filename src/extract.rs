@@ -43,6 +43,8 @@ impl Block {
 pub struct Image {
     pub i: usize,
     pub url: Url,
+    /// A smaller variant when the page offers one: what gets downloaded for Clef.
+    pub preview: Url,
     pub alt: String,
     pub caption: String,
     pub width: Option<u32>,
@@ -62,6 +64,9 @@ pub struct Extracted {
     pub blocks: Vec<Block>,
     pub images: Vec<Image>,
     pub links: Vec<Link>,
+    /// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no
+    /// text, the page is a JS app.
+    pub app_shell: bool,
 }
 
 const SKIP: &[&str] = &[
@@ -99,7 +104,7 @@ pub fn html(body: &str, base: &Url) -> Extracted {
 
     let mut images = Vec::new();
     if let Some(og) = meta(&doc, "meta[property='og:image']") {
-        push_image(&mut images, base, &og, String::new(), String::new(), None, None);
+        push_image(&mut images, base, &og, None, String::new(), String::new(), None, None);
     }
     for img in root.select(&sel("img")) {
         if hidden(img) || has_skipped_ancestor(img, in_body) {
@@ -111,10 +116,14 @@ pub fn html(body: &str, base: &Url) -> Extracted {
             .and_then(best_srcset)
             .or(a("data-src").or(a("data-lazy-src")).or(a("data-original")).or(a("src")).map(String::from));
         let Some(src) = src else { continue };
+        let preview = a("srcset")
+            .or(a("data-srcset"))
+            .and_then(small_srcset)
+            .or(a("data-src").or(a("data-lazy-src")).or(a("src")).filter(|s| !s.starts_with("data:")).map(String::from));
         let alt = collapse(a("alt").or(a("title")).unwrap_or(""));
         let caption = figcaption(img);
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
-        push_image(&mut images, base, &src, alt, caption, dim("width"), dim("height"));
+        push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
     }
 
     let mut links = Vec::new();
@@ -143,7 +152,10 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         push_link(&mut links, base, v.attr("href").unwrap_or(""), text, context);
     }
 
-    Extracted { title: collapse(&title), blocks: w.blocks, images, links }
+    let app_shell = doc.select(&sel("script")).next().is_some()
+        && (body.len() > 4096
+            || doc.select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]")).next().is_some());
+    Extracted { title: collapse(&title), blocks: w.blocks, images, links, app_shell }
 }
 
 /// Server already sent markdown (`Accept: text/markdown`). Split on blank lines,
@@ -223,14 +235,14 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             push_link(&mut links, base, href, collapse(text), context);
         }
         for (alt, src) in md_images(line) {
-            push_image(&mut images, base, src, collapse(alt), String::new(), None, None);
+            push_image(&mut images, base, src, None, collapse(alt), String::new(), None, None);
         }
     }
     flush(&mut cur, &mut blocks);
     if title.is_empty() && let Some(h) = blocks.iter().find(|b| b.kind == Kind::Heading) {
         title = h.text.clone();
     }
-    Extracted { title, blocks, images, links }
+    Extracted { title, blocks, images, links, app_shell: false }
 }
 
 struct Walker {
@@ -416,10 +428,27 @@ fn best_srcset(srcset: &str) -> Option<String> {
         .map(|(u, _)| u)
 }
 
+/// Smallest srcset candidate that is still big enough to recognise (≥320w).
+fn small_srcset(srcset: &str) -> Option<String> {
+    srcset
+        .split(',')
+        .filter_map(|c| {
+            let mut parts = c.split_whitespace();
+            let url = parts.next()?;
+            let w = parts.next()?.strip_suffix('w')?.parse::<u32>().ok()?;
+            Some((url.to_string(), w))
+        })
+        .filter(|(_, w)| *w >= 320)
+        .min_by_key(|(_, w)| *w)
+        .map(|(u, _)| u)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn push_image(
     out: &mut Vec<Image>,
     base: &Url,
     src: &str,
+    preview: Option<&str>,
     alt: String,
     caption: String,
     width: Option<u32>,
@@ -442,7 +471,8 @@ fn push_image(
         }
         return;
     }
-    out.push(Image { i: out.len(), url, alt, caption, width, height });
+    let preview = preview.and_then(|p| base.join(p.trim()).ok()).unwrap_or_else(|| url.clone());
+    out.push(Image { i: out.len(), url, preview, alt, caption, width, height });
 }
 
 /// Cheap pre-filter: things that are never content, so no model needs to see them.
@@ -587,6 +617,16 @@ mod tests {
         assert_eq!(ex.links.len(), 1);
         assert_eq!(ex.links[0].url.as_str(), "https://example.com/docs");
         assert_eq!(ex.links[0].text, "the docs");
+    }
+
+    #[test]
+    fn app_shell_needs_scripts_and_a_shell() {
+        let tiny = "<html><body><p>Example Domain text.</p><script>1</script></body></html>";
+        assert!(!html(tiny, &base()).app_shell);
+        let spa = "<html><body><div id=\"root\"></div><script src=\"/app.js\"></script></body></html>";
+        assert!(html(spa, &base()).app_shell);
+        let static_page = "<html><body><div id=\"root\"><p>Server text</p></div></body></html>";
+        assert!(!html(static_page, &base()).app_shell);
     }
 
     #[test]

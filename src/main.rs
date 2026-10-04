@@ -44,6 +44,9 @@ struct Args {
     /// Only code blocks: examples, commands, snippets
     #[arg(short, long)]
     code: bool,
+    /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text)
+    #[arg(short, long)]
+    render: bool,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     max: Option<usize>,
@@ -78,7 +81,13 @@ impl Args {
 const MAX_STATE_CHARS: usize = 60_000;
 const MAX_QUESTIONS: usize = 120;
 const STATE_TEXT_CHARS: usize = 1_200;
-const VISION_TOP_K: usize = 8;
+/// --vision looks at this many images, starting while Jev is still thinking.
+const VISION_MAX: usize = 12;
+/// Past this, an image keeps its text-only score.
+const VISION_DEADLINE: Duration = Duration::from_millis(2500);
+/// Clef's latency has a long tail: if a call is slower than this, race a duplicate.
+const VISION_HEDGE: Duration = Duration::from_millis(700);
+const VISION_PX: u32 = 384;
 const CONTENT_KINDS: &[&str] = &["photo", "chart", "diagram", "screenshot", "illustration", "product"];
 static VISUAL_KINDS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
     json!({
@@ -137,7 +146,7 @@ struct Item {
 
 impl Ctx<'_> {
     /// Chunk items so each request fits the budget, ask all chunks in parallel, merge.
-    async fn judge(&self, field: &str, items: Vec<Item>, extra: Map<String, Value>, t: &mut Timer) -> Result<Answers> {
+    async fn judge(&self, field: &str, items: Vec<Item>, extra: Map<String, Value>) -> Result<Answers> {
         let mut chunks: Vec<(Vec<Value>, Map<String, Value>)> = vec![(Vec::new(), extra)];
         let mut size = 0;
         for item in items {
@@ -165,13 +174,12 @@ impl Ctx<'_> {
             decide::jev(self.client, self.key, state, qs)
         }))
         .await;
-        let mut merged = Answers::default();
+        let mut merged = Answers { requests: n, ..Answers::default() };
         for r in results {
             let a = r?;
             merged.input_tokens += a.input_tokens;
             merged.answers.extend(a.answers);
         }
-        t.lap(format!("jev({n} req, {} tok)", merged.input_tokens));
         Ok(merged)
     }
 }
@@ -205,20 +213,45 @@ async fn run(mut args: Args) -> Result<()> {
         .build()?;
 
     let mut t = Timer::new();
-    // Warm the Jev connection (TLS handshake) while the page downloads.
+    // Warm the API connections (TLS handshakes) while the page downloads.
+    let mut hosts = vec!["https://api.typesafe.ai/"];
+    if args.vision {
+        hosts.push("https://api.cloudflare.com/");
+    }
     let warm = tokio::spawn({
         let c = client.clone();
-        async move { c.head("https://api.typesafe.ai/").send().await.ok() }
+        async move { join_all(hosts.into_iter().map(|h| c.head(h).send())).await }
     });
-    let page = fetch::fetch(&client, &args.url).await?;
-    t.lap("fetch");
+    let lightpanda = fetch::lightpanda(cfg.get("JURL_LIGHTPANDA"));
+    let target: url::Url = args.url.parse().with_context(|| format!("bad url {}", args.url))?;
 
-    let ex = if page.is_markdown {
+    let page = if args.render {
+        let bin = lightpanda.as_deref().context("--render needs Lightpanda (https://lightpanda.io) on PATH or JURL_LIGHTPANDA")?;
+        let page = fetch::render(bin, &target).await?;
+        t.lap("render");
+        page
+    } else {
+        let page = fetch::fetch(&client, &args.url).await?;
+        t.lap("fetch");
+        page
+    };
+    let mut ex = if page.is_markdown {
         extract::markdown(&page.body, &page.url)
     } else {
         extract::html(&page.body, &page.url)
     };
     t.lap(if page.is_markdown { "extract(md)" } else { "extract" });
+
+    // A JS app with (almost) no server-rendered text: render it instead of giving up.
+    let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
+    if !args.render && ex.app_shell && text < 300 {
+        if let Some(bin) = &lightpanda {
+            eprintln!("jurl: no text without JavaScript, rendering with Lightpanda…");
+            let rendered = fetch::render(bin, &page.url).await?;
+            ex = extract::html(&rendered.body, &rendered.url);
+            t.lap("render");
+        }
+    }
     let _ = warm.await;
 
     let ctx = Ctx { args: &args, client: &client, key: &key, url: &page.url, title: &ex.title };
@@ -247,7 +280,7 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
         if args.code {
             bail!("no code blocks in {}", ctx.url);
         }
-        bail!("no readable content in {} (JS-rendered page? --render is not implemented yet)", ctx.url);
+        bail!("no readable content in {} (JS-rendered? install Lightpanda, https://lightpanda.io, and jurl renders it)", ctx.url);
     }
 
     let default = if args.code {
@@ -280,7 +313,8 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
             }),
         ),
     )]);
-    let a = ctx.judge("blocks", items, extra, t).await?;
+    let a = ctx.judge("blocks", items, extra).await?;
+    t.lap(a.label());
     let kind = a.choice("page_kind");
     let scores: Vec<Option<f64>> = ex.blocks.iter().map(|b| a.noul(&format!("b{}", b.i))).collect();
 
@@ -354,7 +388,8 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
             )),
         })
         .collect();
-    let a = ctx.judge("links", items, Map::new(), t).await?;
+    let a = ctx.judge("links", items, Map::new()).await?;
+    t.lap(a.label());
     let scores: Vec<Option<f64>> = ex.links.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
     let mut kept: Vec<_> = top(&scores, ctx.args.threshold, ctx.args.limit(20)).into_iter().collect();
     kept.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -382,7 +417,15 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
     if ex.images.is_empty() {
         bail!("no images found in {}", ctx.url);
     }
-    // Text-only judgement first: alt, caption, file name and size are usually enough.
+    let clef_keys = if ctx.args.vision {
+        let account = cfg.get("CLOUDFLARE_ACCOUNT_ID").context("--vision needs CLOUDFLARE_ACCOUNT_ID")?;
+        let token = cfg.get("CLOUDFLARE_AI_TOKEN").context("--vision needs CLOUDFLARE_AI_TOKEN")?;
+        Some((account, token))
+    } else {
+        None
+    };
+
+    // Text-only judgement: alt, caption, file name and size are usually enough.
     let items = ex
         .images
         .iter()
@@ -403,48 +446,46 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
             )),
         })
         .collect();
-    let a = ctx.judge("images", items, Map::new(), t).await?;
-    let mut scored: Vec<(&Image, f64)> =
-        ex.images.iter().map(|i| (i, a.noul(&format!("img{}", i.i)).unwrap_or(0.0))).collect();
-    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-    if ctx.args.vision {
-        let account = cfg.get("CLOUDFLARE_ACCOUNT_ID").ok_or_else(|| anyhow!("--vision needs CLOUDFLARE_ACCOUNT_ID"))?;
-        let token = cfg.get("CLOUDFLARE_AI_TOKEN").ok_or_else(|| anyhow!("--vision needs CLOUDFLARE_AI_TOKEN"))?;
-        let slow = Client::builder().timeout(Duration::from_secs(45)).build()?;
-        let top: Vec<_> = scored.iter().filter(|(_, p)| *p >= 0.2).take(VISION_TOP_K).cloned().collect();
-        let title = &ex.title;
-        let looks = join_all(top.iter().map(|(img, _)| {
-            let (client, slow, account, token) = (ctx.client, &slow, &account, &token);
-            async move {
-                let data = thumbnail(client, &img.url).await?;
-                let state = json!({ "page_title": title, "alt": img.alt, "caption": img.caption });
-                // Clef answers "what is this?" far better than "does this matter?", so ask the
-                // factual question and add up the content classes here.
-                let qs = Map::from_iter([("shows".to_string(), choice("What does the attached image show?", VISUAL_KINDS.clone()))]);
-                let a = decide::clef(slow, account, token, state, qs, vec![data]).await?;
-                let probs = a.probabilities("shows").ok_or_else(|| anyhow!("clef returned no answer"))?;
-                Ok::<f64, anyhow::Error>(CONTENT_KINDS.iter().filter_map(|k| probs.get(*k)).sum())
-            }
+    // Clef starts at the same time as Jev, on the first images in page order (the noise
+    // filter already dropped icons and trackers), so --vision costs max(jev, clef), not the sum.
+    // One HTTP/1 connection per Clef call: multiplexing them all over a single HTTP/2
+    // connection measured ~2x slower at the tail.
+    let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
+    let looking = async {
+        let Some((account, token)) = &clef_keys else { return Vec::new() };
+        let clef_client = &clef_client;
+        join_all(ex.images.iter().take(VISION_MAX).map(|img| async move {
+            let look = tokio::time::timeout(VISION_DEADLINE, look(ctx.client, clef_client, account, token, &ex.title, img)).await;
+            (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms", VISION_DEADLINE.as_millis()))))
         }))
-        .await;
-        t.lap(format!("clef({} img)", top.len()));
-        let mut seen: Vec<(&Image, f64)> = Vec::new();
-        for ((img, p_text), look) in top.iter().zip(looks) {
-            match look {
+        .await
+    };
+    let (a, looks) = tokio::join!(ctx.judge("images", items, Map::new()), looking);
+    let a = a?;
+    t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
+
+    let looks: HashMap<usize, Result<f64>> = looks.into_iter().collect();
+    let mut scored: Vec<(&Image, f64)> = ex
+        .images
+        .iter()
+        .map(|img| {
+            let p_text = a.noul(&format!("img{}", img.i)).unwrap_or(0.0);
+            let p = match looks.get(&img.i) {
                 // Pixels say what it is; Jev's page context says whether it belongs here.
-                Ok(p) => seen.push((img, (p + p_text) / 2.0)),
-                Err(e) => {
-                    eprintln!("jurl: clef skipped {}: {e:#}", img.url);
-                    seen.push((img, *p_text));
+                Some(Ok(p_pixels)) => (p_pixels + p_text) / 2.0,
+                Some(Err(e)) => {
+                    if ctx.args.timing {
+                        eprintln!("jurl: clef skipped {}: {e:#}", img.url);
+                    }
+                    p_text
                 }
-            }
-        }
-        // Images Clef didn't look at keep Jev's text-only score.
-        seen.extend(scored.iter().filter(|(i, _)| !top.iter().any(|(t, _)| t.i == i.i)).cloned());
-        seen.sort_by(|a, b| b.1.total_cmp(&a.1));
-        scored = seen;
-    }
+                None => p_text,
+            };
+            (img, p)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
 
     let kept: Vec<_> = scored
         .into_iter()
@@ -466,6 +507,39 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
     Ok(())
 }
 
+/// Clef's view of one image: probability that it shows content rather than chrome.
+async fn look(client: &Client, clef_client: &Client, account: &str, token: &str, title: &str, img: &Image) -> Result<f64> {
+    let data = thumbnail(client, &img.preview).await?;
+    let state = json!({ "page_title": title, "alt": img.alt, "caption": img.caption });
+    // Clef answers "what is this?" far better than "does this matter?", so ask the
+    // factual question and add up the content classes here.
+    let qs = Map::from_iter([("shows".to_string(), choice("What does the attached image show?", VISUAL_KINDS.clone()))]);
+    let call = || decide::clef(clef_client, account, token, state.clone(), qs.clone(), vec![data.clone()]);
+    let a = hedged(call, VISION_HEDGE).await?;
+    let probs = a.probabilities("shows").context("clef returned no answer")?;
+    Ok(CONTENT_KINDS.iter().filter_map(|k| probs.get(*k)).sum())
+}
+
+/// Start `call`; if it hasn't finished after `after`, start a second one and take whichever wins.
+async fn hedged<F, Fut, T>(call: F, after: Duration) -> Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let first = call();
+    tokio::pin!(first);
+    tokio::select! {
+        r = &mut first => return r,
+        _ = tokio::time::sleep(after) => {}
+    }
+    let second = call();
+    tokio::pin!(second);
+    tokio::select! {
+        r = &mut first => r,
+        r = &mut second => r,
+    }
+}
+
 /// Indices of the `max` best scores at or above `threshold`.
 fn top(scores: &[Option<f64>], threshold: f64, max: usize) -> HashMap<usize, f64> {
     let mut ranked: Vec<(usize, f64)> =
@@ -475,14 +549,14 @@ fn top(scores: &[Option<f64>], threshold: f64, max: usize) -> HashMap<usize, f64
     ranked.into_iter().collect()
 }
 
-/// Download and shrink to ≤768px JPEG so Clef gets a small payload.
+/// Download and shrink to a small JPEG: fewer vision tokens, faster Clef.
 async fn thumbnail(client: &Client, url: &url::Url) -> Result<String> {
     let bytes = fetch::fetch_bytes(client, url).await?;
     tokio::task::spawn_blocking(move || -> Result<String> {
         let img = image::load_from_memory(&bytes)?;
-        let img = if img.width() > 768 || img.height() > 768 { img.thumbnail(768, 768) } else { img };
+        let img = if img.width() > VISION_PX || img.height() > VISION_PX { img.thumbnail(VISION_PX, VISION_PX) } else { img };
         let mut jpg = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 80).encode_image(&img.to_rgb8())?;
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 75).encode_image(&img.to_rgb8())?;
         Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(jpg)))
     })
     .await?
