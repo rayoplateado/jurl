@@ -91,8 +91,14 @@ const STATE_TEXT_CHARS: usize = 1_200;
 const VISION_MAX: usize = 12;
 /// --find looks at up to this many; on bigger pages Jev shortlists them by alt/caption first.
 const FIND_MAX: usize = 80;
-/// Past this, an image keeps its text-only score.
-const VISION_DEADLINE: Duration = Duration::from_millis(2500);
+/// Past this, an image keeps its text-only score. JURL_VISION_TIMEOUT_MS raises it for batch use, where a slow host
+/// (full-size images, a far CDN) matters more than a second of waiting.
+const VISION_DEADLINE_MS: u64 = 2500;
+
+fn vision_deadline() -> Duration {
+    let ms = std::env::var("JURL_VISION_TIMEOUT_MS").ok().and_then(|v| v.trim().parse::<u64>().ok());
+    Duration::from_millis(ms.filter(|&m| m > 0).unwrap_or(VISION_DEADLINE_MS))
+}
 /// Clef's latency has a long tail: if a call is slower than this, race a duplicate.
 const VISION_HEDGE: Duration = Duration::from_millis(700);
 const VISION_PX: u32 = 384;
@@ -583,10 +589,10 @@ async fn look_all(
     query: Option<&str>,
 ) -> Vec<(usize, Result<f64>)> {
     let Some((account, token)) = keys else { return Vec::new() };
+    let deadline = vision_deadline();
     join_all(imgs.into_iter().map(|img| async move {
-        let look =
-            tokio::time::timeout(VISION_DEADLINE, look(client, clef_client, account, token, title, img, query)).await;
-        (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms", VISION_DEADLINE.as_millis()))))
+        let look = tokio::time::timeout(deadline, look(client, clef_client, account, token, title, img, query)).await;
+        (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms (JURL_VISION_TIMEOUT_MS)", deadline.as_millis()))))
     }))
     .await
 }
