@@ -153,6 +153,8 @@ $ jurl --find "a carnival parade" en.wikipedia.org/wiki/Cologne
 jurl: no image in https://en.wikipedia.org/wiki/Cologne looks like "a carnival parade" (closest: …, p=0.02)
 ```
 
+The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer.
+
 ### JavaScript apps
 
 Some pages arrive empty because their content is built by JavaScript. jurl spots those and renders them in [Lightpanda](https://lightpanda.io), a fast headless browser:
