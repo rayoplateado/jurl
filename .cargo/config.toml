@@ -1,0 +1,5 @@
+# rustc's code-generation threads take their stack from RUST_MIN_STACK. With lto = "fat" and codegen-units = 1, the
+# Windows MSVC build overflowed the default stack while optimizing hashbrown
+# ("thread 'optimize module hashbrown…' has overflowed its stack") and the release job hung.
+[env]
+RUST_MIN_STACK = "16777216"
