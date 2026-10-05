@@ -106,7 +106,7 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         push_image(&mut images, base, &og, None, String::new(), String::new(), None, None);
     }
     for img in root.select(&sel("img")) {
-        if hidden(img) || has_skipped_ancestor(img, in_body) {
+        if image_skipped(img, in_body) {
             continue;
         }
         let a = |k| img.value().attr(k);
@@ -420,6 +420,27 @@ fn has_skipped_ancestor(el: ElementRef, skip_header: bool) -> bool {
     })
 }
 
+/// An image is skipped like any element, except that a hidden carousel slide still counts: sliders hide every slide
+/// but the active one with `display:none`, and those are the page's photos (a restaurant's dishes), not chrome.
+fn image_skipped(img: ElementRef, skip_header: bool) -> bool {
+    let carousel = std::iter::once(img)
+        .chain(img.ancestors().filter_map(ElementRef::wrap))
+        .take(8)
+        .any(|a| a.value().attr("class").is_some_and(is_carousel));
+    let skipped_by = |a: ElementRef| {
+        let n = a.value().name();
+        SKIP.contains(&n) || (skip_header && n == "header") || (!carousel && hidden(a))
+    };
+    (!carousel && hidden(img)) || img.ancestors().filter_map(ElementRef::wrap).any(skipped_by)
+}
+
+const CAROUSEL: &[&str] = &["slide", "slider", "carousel", "swiper", "splide", "glide", "owl-", "slick", "gallery"];
+
+fn is_carousel(class: &str) -> bool {
+    let c = class.to_ascii_lowercase();
+    CAROUSEL.iter().any(|w| c.contains(w))
+}
+
 fn hidden(el: ElementRef) -> bool {
     let v = el.value();
     v.attr("hidden").is_some()
@@ -650,6 +671,19 @@ mod tests {
         assert!(html(spa, &base()).app_shell);
         let static_page = "<html><body><div id=\"root\"><p>Server text</p></div></body></html>";
         assert!(!html(static_page, &base()).app_shell);
+    }
+
+    #[test]
+    fn hidden_carousel_slides_keep_their_images() {
+        let html_doc = r#"<html><body><article><p>Our kitchen and our dishes, every day.</p>
+            <div class='frs-slide-img-wrapper' style='display:none;'><div class='frs-slide-img' style='display:none'>
+            <img alt='4' src='https://example.com/amatriciana.jpg'></div></div>
+            <div style="display:none"><img src="https://example.com/tracker-banner.jpg"></div>
+            </article></body></html>"#;
+        let ex = html(html_doc, &base());
+        let urls: Vec<&str> = ex.images.iter().map(|i| i.url.as_str()).collect();
+        assert!(urls.contains(&"https://example.com/amatriciana.jpg"), "{urls:?}");
+        assert!(!urls.contains(&"https://example.com/tracker-banner.jpg"), "{urls:?}");
     }
 
     #[test]
