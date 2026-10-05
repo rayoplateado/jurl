@@ -209,6 +209,8 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 
 Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`.
 
+`--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
+
 ## Speed and cost
 
 | Command | Typical time | Typical cost |
