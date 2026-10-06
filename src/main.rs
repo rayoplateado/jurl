@@ -87,6 +87,10 @@ impl Args {
 const MAX_STATE_CHARS: usize = 60_000;
 const MAX_QUESTIONS: usize = 120;
 const STATE_TEXT_CHARS: usize = 1_200;
+/// --links and --image don't send the blocks, so Jev sees this much page text to spot a block page.
+const EXCERPT_CHARS: usize = 800;
+/// Past this, the page is a block page (rate limit, bot check…) standing in for the real one.
+const BLOCKED_P: f64 = 0.8;
 /// --vision looks at this many images, starting while Jev is still thinking.
 const VISION_MAX: usize = 12;
 /// --find looks at up to this many; on bigger pages Jev shortlists them by alt/caption first.
@@ -148,6 +152,7 @@ struct Ctx<'a> {
     key: &'a str,
     url: &'a url::Url,
     title: &'a str,
+    excerpt: String,
 }
 
 /// A candidate for Jev: its entry in the state, plus a question if it is being judged
@@ -160,7 +165,15 @@ struct Item {
 
 impl Ctx<'_> {
     /// Chunk items so each request fits the budget, ask all chunks in parallel, merge.
-    async fn judge(&self, field: &str, items: Vec<Item>, extra: Map<String, Value>) -> Result<Answers> {
+    /// A page that is really a rate-limit or bot-check interstitial fails instead of printing nothing.
+    async fn judge(&self, field: &str, items: Vec<Item>, mut extra: Map<String, Value>) -> Result<Answers> {
+        extra.insert(
+            "blocked".to_string(),
+            noul(
+                "This page is an access-denied, rate-limit, CAPTCHA, bot-check or 'enable JavaScript/cookies' \
+                 interstitial standing in for the real page, not a page whose content merely discusses those topics.",
+            ),
+        );
         let mut chunks: Vec<(Vec<Value>, Map<String, Value>)> = vec![(Vec::new(), extra)];
         let mut size = 0;
         for item in items {
@@ -184,7 +197,10 @@ impl Ctx<'_> {
 
         let n = chunks.len();
         let results = join_all(chunks.into_iter().map(|(entries, qs)| {
-            let state = json!({ "title": self.title, "url": self.url.as_str(), field: entries });
+            let mut state = json!({ "title": self.title, "url": self.url.as_str(), field: entries });
+            if field != "blocks" {
+                state["page_text"] = json!(self.excerpt);
+            }
             decide::jev(self.client, self.key, state, qs)
         }))
         .await;
@@ -193,6 +209,13 @@ impl Ctx<'_> {
             let a = r?;
             merged.input_tokens += a.input_tokens;
             merged.answers.extend(a.answers);
+        }
+        if let Some(p) = merged.noul("blocked").filter(|&p| p >= BLOCKED_P) {
+            let title = if self.title.is_empty() { String::new() } else { format!(": \"{}\"", self.title) };
+            bail!(
+                "{} served a block page (rate limit, bot check or access denied), not its content{title} (p={p:.2})",
+                self.url
+            );
         }
         Ok(merged)
     }
@@ -277,7 +300,9 @@ async fn run(mut args: Args) -> Result<()> {
     }
     let _ = warm.await;
 
-    let ctx = Ctx { args: &args, client: &client, key: &key, url: &page.url, title: &ex.title };
+    let excerpt = ex.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
+    let excerpt = excerpt.chars().take(EXCERPT_CHARS).collect();
+    let ctx = Ctx { args: &args, client: &client, key: &key, url: &page.url, title: &ex.title, excerpt };
     if args.image || args.vision {
         images(&ctx, &cfg, &ex, &mut t).await?;
     } else if args.links {
@@ -302,6 +327,9 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     if !ex.blocks.iter().any(is_candidate) {
         if args.code {
             bail!("no code blocks in {}", ctx.url);
+        }
+        if args.render {
+            bail!("no readable content in {}", ctx.url);
         }
         bail!("no readable content in {} (if it needs JavaScript, try --render)", ctx.url);
     }
@@ -362,8 +390,11 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
             selected.push(b);
         }
     }
-    if selected.is_empty() && args.ask.is_some() {
-        bail!("nothing in {} answers that (try a lower --threshold)", ctx.url);
+    if selected.is_empty() {
+        if args.ask.is_some() {
+            bail!("nothing in {} answers that (try a lower --threshold)", ctx.url);
+        }
+        bail!("nothing in {} looks like content (try a lower --threshold)", ctx.url);
     }
 
     let mut out = stdout().lock();
@@ -421,6 +452,9 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     t.lap(a.label());
     let scores: Vec<Option<f64>> = ex.links.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
     let mut kept: Vec<_> = top(&scores, ctx.args.threshold, ctx.args.limit(20)).into_iter().collect();
+    if kept.is_empty() {
+        bail!("no links worth following in {} (try a lower --threshold)", ctx.url);
+    }
     kept.sort_by(|a, b| b.1.total_cmp(&a.1));
 
     let mut out = stdout().lock();
@@ -559,6 +593,9 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         && let (Some(q), Some((url, p))) = (query, best)
     {
         bail!("no image in {} looks like \"{q}\" (closest: {url}, p={p:.2})", ctx.url);
+    }
+    if kept.is_empty() {
+        bail!("no content images in {} (try a lower --threshold)", ctx.url);
     }
     let mut out = stdout().lock();
     if ctx.args.json {
