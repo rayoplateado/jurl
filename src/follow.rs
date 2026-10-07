@@ -26,6 +26,11 @@ const MAX_LINKS: usize = 250;
 const MAX_HINTS: usize = 300;
 /// A link's score is discounted per hop, so a good lead near the start beats a slightly better one deep down.
 const HOP_DECAY: f64 = 0.85;
+/// Hot or cold: a link is worth as much as the page it's on is close to the answer. A page with nothing on the
+/// question still passes on this share of its links' scores, so a home page's menu stays usable.
+const COLD_PAGE: f64 = 0.3;
+/// When the best lead left is weaker than this, the trail has gone cold: stop instead of opening pages blindly.
+const COLD_TRAIL: f64 = 0.02;
 const ASSETS: &[&str] = &[
     ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".zip", ".gz", ".xml", ".json", ".css", ".js", ".mp4",
     ".mp3", ".dmg", ".exe", ".tar", ".ico",
@@ -208,6 +213,8 @@ struct Visit {
     found: Option<Found>,
     /// How sure jurl is that this page answers: the --precise answer's p, or the best block's.
     score: f64,
+    /// How close the page is to the question at all: its best block's probability of helping answer it.
+    warmth: f64,
     links: Vec<(Url, f64)>,
 }
 
@@ -215,7 +222,7 @@ struct Visit {
 async fn visit(args: &Args, cfg: &Config, client: &Client, key: &str, url: &Url, site: &Site) -> Result<Visit> {
     let mut t = Timer::new();
     let (url, ex) = load(args, cfg, client, url, &mut t).await?;
-    let (found, score, links) = {
+    let (found, score, warmth, links) = {
         let ctx = Ctx::new(args, client, key, &url, &ex);
         let mut seen = HashSet::new();
         // The article's own links first (on Wikipedia, "France" and "Medicine"), then menus and footers ("Pricing").
@@ -230,29 +237,35 @@ async fn visit(args: &Args, cfg: &Config, client: &Client, key: &str, url: &Url,
             .collect();
         let answer = async {
             let mut t = Timer::new();
-            let (scores, kind) = score_blocks(&ctx, &ex, &mut t).await.ok()?;
+            let Ok((scores, kind)) = score_blocks(&ctx, &ex, &mut t).await else { return (None, 0.0) };
+            let warmth = scores.iter().flatten().copied().fold(0.0, f64::max);
             if args.precise {
                 let keep = top(&scores, PRECISE_BLOCK_FLOOR, 3);
                 if keep.is_empty() {
-                    return None;
+                    return (None, warmth);
                 }
-                let pick = precise_pick(&ctx, &ex, &keep, &mut t).await.ok()?;
-                let p = pick.p;
-                Some((Found::Precise(pick), p))
+                match precise_pick(&ctx, &ex, &keep, &mut t).await {
+                    Ok(pick) => {
+                        let p = pick.p;
+                        (Some((Found::Precise(pick), p)), warmth)
+                    }
+                    Err(_) => (None, warmth),
+                }
             } else {
                 let keep = top(&scores, args.threshold(), args.limit(5));
                 let best = keep.values().copied().fold(0.0, f64::max);
-                (!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best))
+                ((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth)
             }
         };
-        let (answer, scores) = tokio::join!(answer, score_links(&ctx, &candidates, "Following the link in `links`"));
+        let ((answer, warmth), scores) =
+            tokio::join!(answer, score_links(&ctx, &candidates, "Following the link in `links`"));
         let links = candidates.into_iter().zip(scores).map(|(l, p)| (l.url, p)).collect();
         match answer {
-            Some((found, score)) => (Some(found), score, links),
-            None => (None, 0.0, links),
+            Some((found, score)) => (Some(found), score, warmth, links),
+            None => (None, 0.0, warmth, links),
         }
     };
-    Ok(Visit { url, ex, found, score, links })
+    Ok(Visit { url, ex, found, score, warmth, links })
 }
 
 fn key_differs(a: &Url, b: &Url) -> bool {
@@ -299,11 +312,18 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
 
     // A page that answers is ranked by how sure Jev is of the answer AND of the page: a blog post from two years ago
     // can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
+    // What each page was like, for -t: how warm, how sure of an answer.
+    let mut log: Vec<(Url, f64, f64)> = Vec::new();
     let mut take =
         |v: Visit, lead: f64, path: Vec<Url>, leads: &mut Vec<Lead>, found: &mut Vec<(f64, Visit, Vec<Url>)>| {
+            log.push((v.url.clone(), v.warmth, v.score));
+            // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
+            // the search goes back to the leads of a page that was getting warmer.
+            // The page you started from is never cold: its links are all there is to go on.
+            let heat = if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth };
             let decay = HOP_DECAY.powi(path.len() as i32 - 1);
             for (url, p) in &v.links {
-                leads.push(Lead { url: url.clone(), score: p * decay, path: path.clone() });
+                leads.push(Lead { url: url.clone(), score: p * decay * heat, path: path.clone() });
             }
             let rank = v.score * lead;
             if v.found.is_some() && v.score >= threshold {
@@ -318,8 +338,14 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         leads.push(Lead { url, score: p, path: vec![start.clone()] });
     }
 
+    let mut cold = false;
     while found.is_empty() && pages < max {
         leads.sort_by(|a, b| b.score.total_cmp(&a.score));
+        leads.retain(|l| !visited.contains(&self::key(&l.url)));
+        if leads.first().is_none_or(|l| l.score < COLD_TRAIL) {
+            cold = true;
+            break;
+        }
         let mut batch = Vec::new();
         let mut rest = Vec::new();
         for lead in leads.drain(..) {
@@ -349,11 +375,17 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
                     path.push(v.url.clone());
                     take(v, lead.score, path, &mut leads, &mut found);
                 }
-                Err(e) => eprintln!("jurl: skipped {}: {e:#}", lead.url),
+                Err(e) if args.timing => eprintln!("jurl: skipped {}: {e:#}", lead.url),
+                Err(_) => {}
             }
         }
     }
 
+    if args.timing {
+        for (url, warmth, score) in &log {
+            eprintln!("   warmth {warmth:.2} · answer {score:.2} · {url}");
+        }
+    }
     found.sort_by(|a, b| b.0.total_cmp(&a.0));
     let trail = |path: &[Url]| {
         path.iter().map(|u| u.as_str().trim_start_matches("https://").to_string()).collect::<Vec<_>>().join(" → ")
@@ -365,7 +397,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             Some((_, v, path)) if args.json && args.precise => (v, path, false),
             Some((_, v, path)) => {
                 let what = match &v.found {
-                    Some(Found::Precise(pick)) => {
+                    Some(Found::Precise(pick)) if pick.p >= PRECISE_BLOCK_FLOOR => {
                         format!(
                             " (closest: \"{}\" on {}, p={:.2})",
                             &v.ex.blocks[pick.block].text[pick.range.clone()],
@@ -377,6 +409,9 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
                 };
                 let _ = path;
                 bail!("read {pages} pages of {} and none answers that{what}", site.root);
+            }
+            None if cold => {
+                bail!("read {pages} pages of {} and none answers that; no link left looks promising", site.root)
             }
             None => bail!("read {pages} pages of {} and none answers that", site.root),
         },
