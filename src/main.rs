@@ -321,30 +321,39 @@ async fn run(mut args: Args) -> Result<()> {
         async move { join_all(hosts.into_iter().map(|h| c.head(h).send())).await }
     });
     let target: url::Url = args.url.parse().with_context(|| format!("bad url {}", args.url))?;
-    if args.follow.is_some() {
-        let _ = warm.await;
-        follow::run(&args, &cfg, &client, &key, target, &mut t).await?;
-        if args.timing {
-            t.report();
-        }
-        return Ok(());
-    }
-
-    let (url, ex) = load(&args, &cfg, &client, &target, &mut t).await?;
-    let _ = warm.await;
-
-    let ctx = Ctx::new(&args, &client, &key, &url, &ex);
-    if args.image || args.vision {
-        images(&ctx, &cfg, &ex, &mut t).await?;
-    } else if args.links {
-        links(&ctx, &ex, &mut t).await?;
-    } else {
-        blocks(&ctx, &ex, &mut t).await?;
-    }
+    let done = read(&args, &cfg, &client, &key, target, warm, &mut t).await;
+    // A miss costs tokens too: -t reports them either way.
     if args.timing {
         t.report();
     }
-    Ok(())
+    done
+}
+
+/// The page (or with --follow, the site) read in the mode asked for.
+async fn read(
+    args: &Args,
+    cfg: &Config,
+    client: &Client,
+    key: &str,
+    target: url::Url,
+    warm: tokio::task::JoinHandle<impl Sized>,
+    t: &mut Timer,
+) -> Result<()> {
+    if args.follow.is_some() {
+        let _ = warm.await;
+        return follow::run(args, cfg, client, key, target, t).await;
+    }
+    let (url, ex) = load(args, cfg, client, &target, t).await?;
+    let _ = warm.await;
+
+    let ctx = Ctx::new(args, client, key, &url, &ex);
+    if args.image || args.vision {
+        images(&ctx, cfg, &ex, t).await
+    } else if args.links {
+        links(&ctx, &ex, t).await
+    } else {
+        blocks(&ctx, &ex, t).await
+    }
 }
 
 /// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images.
@@ -483,10 +492,11 @@ fn print_blocks(
     let args = ctx.args;
     let mut pending_heading = None;
     let mut selected = Vec::new();
+    let items = extract::short_items_of_kept_lists(&ex.blocks, |i| keep.contains_key(&i));
     for b in &ex.blocks {
         if b.kind == Kind::Heading {
             pending_heading = Some(b);
-        } else if keep.contains_key(&b.i) {
+        } else if keep.contains_key(&b.i) || items.contains(&b.i) {
             if let Some(h) = pending_heading.take() {
                 selected.push(h);
             }
@@ -664,6 +674,10 @@ fn print_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url:
             doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
         }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+        // The JSON says what came closest, but a miss is still a miss: the same exit code as without --json.
+        if p < threshold {
+            bail!("no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})", ctx.url);
+        }
         return Ok(());
     }
     if p < threshold {

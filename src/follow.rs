@@ -499,7 +499,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     let (v, path, answered) = match found.into_iter().next() {
         Some((_, v, path)) => (v, path, true),
         None => match closest {
-            // JSON says what came closest, as on a single page; text fails with it.
+            // JSON says what came closest, as on a single page, and fails like it; text fails with it in the message.
             Some((_, v, path)) if args.json && args.precise => (v, path, false),
             Some((_, v, path)) => {
                 let what = match &v.found {

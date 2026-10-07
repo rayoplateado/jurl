@@ -382,7 +382,7 @@ mod tests {
     use super::*;
 
     fn block(kind: Kind, text: &str) -> Block {
-        Block { i: 0, kind, level: None, lang: None, text: text.to_string() }
+        Block { i: 0, kind, level: None, lang: None, text: text.to_string(), list: None }
     }
 
     #[test]
