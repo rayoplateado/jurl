@@ -108,6 +108,19 @@ All of these requests count towards your personal rate limit of 5,000 requests p
 
 The first line is the answer, still in the page's own words: jurl splits the best blocks into candidates (values, names, clauses, sentences, lines of code) and Jev picks the one that is exactly the answer, then, among the shorter ones inside it, the one with nothing extra ("2009", not "2009; 17 years ago"). Then the block it came from, and a link that opens the page with the answer highlighted. If no part of the page is the answer, jurl says so and exits with an error instead of guessing, so a script gets an empty cell, not a wrong one. It never computes: if the page says "$8 a month", it won't tell you the yearly price. On 30 SaaS pricing pages ("What is the monthly price of the cheapest paid plan?") it answered 15, all of them right (Notion's as `Plus*€9.50`, with the plan's name stuck to it on the page), and left the rest empty.
 
+### Not on this page? Follow the site
+
+```console
+$ jurl --precise --follow -q "What is the monthly price of the cheapest paid plan?" linear.app
+$10 per user/month
+…
+jurl: found after reading 4 pages: linear.app/ → linear.app/pricing
+```
+
+With `--follow`, a page that doesn't answer isn't the end. jurl reads the site's own map (`llms.txt`, `sitemap.xml`) while it reads the first page, Jev scores every link by how likely it leads to the answer, then compares the best ten side by side and opens the two it likes most, keeping on from whichever page looks closest, the way people play the Wikipedia game. It plays hot and cold: a link counts for as much as its page is close to the question (a docs index with a link straight to the answer counts as close), so a wrong turn is dropped and the search goes back to the page that was getting warmer. A page that answers is ranked by how sure Jev is of the answer and of the page, and jurl stops only when no page left could beat it by much: the pricing page beats both a home-page FAQ line and an old blog post quoting last year's price. It stays on the same site (subdomains included), skips what `robots.txt` disallows, and stops after 5 pages (`--follow 10` for more; longer searches open three pages per step). The path comes last, on stderr, or as `path` in `--json`; `-t` shows how warm each page was.
+
+On [18 searches](bench/follow.json), each run 3 times: 23/24 pricing pages found from the bare domain (3 pages, ~2.5 s, ~$0.003 each), 6/9 answers in docs found from the docs' root, 12/12 Wikipedia games (Medicine → Pharmaceutical drug → Aspirin: `C9H8O4`; Paris → Aspirin in 15 pages), and 9/9 questions the site doesn't answer left empty.
+
 ### Just the code
 
 ````console
@@ -209,6 +222,7 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 | Flag | |
 | --- | --- |
 | `-q, --ask "…"` | Keep what answers the question. Works with every mode |
+| `--follow [N]` | With `-q`: when the page doesn't answer, follow links on the same site, most promising first, reading up to N pages (default 5) |
 | `-p, --precise` | With `-q`: just the answer, in the page's words, then its block and a link to it. Exits with an error when no part of the page is the answer |
 | `-c, --code` | Code blocks only |
 | `-l, --links` | Content links, best first |
@@ -324,6 +338,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | --- | --- |
 | `src/main.rs` | Modes, chunking, hedging, output |
 | `src/precise.rs` | `--precise`: candidate spans and the link to them |
+| `src/follow.rs` | `--follow`: site map, link scoring, best-first search |
 | `src/extract.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |

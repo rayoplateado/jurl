@@ -59,3 +59,14 @@ uv run --with tiktoken --with requests bench/table.py              # the table a
 ```
 
 WebFetch only runs inside Claude Code: [results/webfetch.json](results/webfetch.json) holds its answers, asked with each task's URL and question.
+
+## `--follow`: finding the page on a site
+
+[follow.json](follow.json) holds 18 searches that start from a site's front door: the cheapest paid plan from a bare domain (`linear.app`), an answer in docs from the docs' root, short and long Wikipedia games, and 3 questions the site doesn't answer (right = left empty). [follow.py](follow.py) runs each 3 times with `--precise --follow` and saves `results/follow-<label>.json`.
+
+| | Right | Pricing | Docs | Wikipedia | Not on the site | Median pages (pricing) | Tokens (all 54 runs) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| First version | 44/54 | 21/24 | 3/9 | 11/12 | 9/9 | 4 | 7.5M ($0.32) |
+| Now | 50/54 | 23/24 | 6/9 | 12/12 | 9/9 | 3 | 8.0M ($0.34) |
+
+What changed: the start page is weighed like any other candidate page (a FAQ line on the home page no longer beats `/pricing`); Jev compares the best leads side by side; a docs index counts as warm when it links to the answer; on pages with more links than get scored, those sharing words with the question get in first (Cloudflare's Workers index lists hundreds); table cells reach `--precise` with their row and column ("30 s (CPU time · Paid)"). Warmth is relative too: far from the answer every page is cold, so a page counts as warmer when its best link looks better than the link that led to it; without that, a long game never left the start page's links (Paris → Aspirin went from 2 in 3 to none, and is now 3 in 3, via Glossary of chemical formulae). A wiki's own pages (`Wikipedia:`, `Special:`, `Help:`) aren't followed. Kubernetes is the one miss that stays: the answer page is found, but `--precise` picks another field on it ("NotRequired").

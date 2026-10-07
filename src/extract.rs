@@ -66,6 +66,8 @@ pub struct Extracted {
     pub blocks: Vec<Block>,
     pub images: Vec<Image>,
     pub links: Vec<Link>,
+    /// Every link on the page, menus and footers included: how `--follow` moves around a site.
+    pub site_links: Vec<Link>,
     /// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no
     /// text, the page is a JS app.
     pub app_shell: bool,
@@ -179,7 +181,22 @@ pub fn html(body: &str, base: &Url) -> Extracted {
                 .select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]"))
                 .next()
                 .is_some());
-    Extracted { title: collapse(&title), blocks: join_short(w.blocks), images, links, app_shell }
+    // Menus and footers are where a site keeps "Pricing" and "Docs": only hidden links are left out here.
+    let mut site_links = Vec::new();
+    for a in doc.select(&sel("a[href]")) {
+        if a.ancestors().filter_map(ElementRef::wrap).chain(std::iter::once(a)).any(hidden) {
+            continue;
+        }
+        let v = a.value();
+        let text = collapse(&a.text().collect::<String>());
+        let text = if text.is_empty() {
+            v.attr("aria-label").or(v.attr("title")).map(collapse).unwrap_or_default()
+        } else {
+            text
+        };
+        push_link(&mut site_links, base, v.attr("href").unwrap_or(""), text, String::new());
+    }
+    Extracted { title: collapse(&title), blocks: join_short(w.blocks), images, links, site_links, app_shell }
 }
 
 /// Below this many characters a block says too little to be judged on its own ("Basic", "$10", "per user/month").
@@ -319,7 +336,11 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
     {
         title = h.text.clone();
     }
-    Extracted { title, blocks: join_short(blocks), images, links, app_shell: false }
+    let site_links = links
+        .iter()
+        .map(|l| Link { i: l.i, url: l.url.clone(), text: l.text.clone(), context: l.context.clone() })
+        .collect();
+    Extracted { title, blocks: join_short(blocks), images, links, site_links, app_shell: false }
 }
 
 struct Walker<'a> {
