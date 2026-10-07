@@ -3,14 +3,14 @@
 An agent has a URL and a question. What it gets back from each way of reading the page, on 10 documentation pages.
 Measured on 2026-10-07.
 
-| Reader | Exact answer | Code lines not on the page | Cost per page | Median tokens | Median time |
+| Reader | Exact answer | Code lines not on the page | Cost per 10,000 pages | Median tokens | Median time |
 | --- | --- | --- | --- | --- | --- |
-| jurl -q | 10/10 (30/30 over 3 runs) | 0 of 60 | $0.0004 | 375 | 0.8 s |
-| Claude Code WebFetch | 10/10 | 33 of 63 | ~$0.015 | 148 | — |
-| Exa contents + highlights | 8/10 | 0 of 59 | $0.001 | 351 | 0.3 s |
-| Exa search + highlights | 8/10 | — | $0.007 | 1,529 | 1.9 s |
-| Tavily extract (query) | 5/10 | 8 of 36 | $0.0016 | 524 | 0.5 s |
-| Tavily search | 3/10 | — | $0.008 | 942 | 3.4 s |
+| jurl -q | 10/10 (30/30 over 3 runs) | 0 of 60 | $4 | 375 | 0.8 s |
+| Claude Code WebFetch | 10/10 | 33 of 63 | ~$150 | 148 | — |
+| Exa contents + highlights | 8/10 | 0 of 59 | $10 | 351 | 0.3 s |
+| Exa search + highlights | 8/10 | — | $70 | 1,529 | 1.9 s |
+| Tavily extract (query) | 5/10 | 8 of 36 | $16 | 524 | 0.5 s |
+| Tavily search | 3/10 | — | $80 | 942 | 3.4 s |
 | Whole page as markdown | 10/10 | 0 | — | 15,352 | 1.8 s |
 
 - **Exact answer:** the answer's text (`truth` in [tasks.json](tasks.json)) is in what the reader returned, word for word. This is strict on purpose: an explanation in other words counts as a miss. Exa's React answer, for example, explains cleanup correctly in prose but has no `return () =>`.
