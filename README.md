@@ -108,6 +108,17 @@ All of these requests count towards your personal rate limit of 5,000 requests p
 
 The first line is the answer, still in the page's own words: jurl splits the best blocks into candidates (values, names, clauses, sentences, lines of code) and Jev picks the one that is exactly the answer, then, among the shorter ones inside it, the one with nothing extra ("2009", not "2009; 17 years ago"). Then the block it came from, and a link that opens the page with the answer highlighted. If no part of the page is the answer, jurl says so and exits with an error instead of guessing, so a script gets an empty cell, not a wrong one. It never computes: if the page says "$8 a month", it won't tell you the yearly price. On 30 SaaS pricing pages ("What is the monthly price of the cheapest paid plan?") it answered 15, all of them right (Notion's as `Plus*€9.50`, with the plan's name stuck to it on the page), and left the rest empty.
 
+### Not on this page? Follow the site
+
+```console
+$ jurl --precise --follow -q "What is the monthly price of the cheapest paid plan?" linear.app
+$10 per user/month
+…
+jurl: found after reading 4 pages: linear.app/ → linear.app/pricing
+```
+
+With `--follow`, a page that doesn't answer isn't the end. jurl reads the site's own map (`llms.txt`, `sitemap.xml`) while it reads the first page, Jev scores every link by how likely it leads to the answer, and jurl opens the best three at once, keeping on from whichever page looks closest, the way people play the Wikipedia game. It stays on the same site (subdomains included), skips what `robots.txt` disallows, and stops after 5 pages (`--follow 10` for more). Found pages are ranked by how sure Jev is of the answer and of the page, so the pricing page beats an old blog post that quotes last year's price. The path comes last, on stderr, or as `path` in `--json`. From `en.wikipedia.org/wiki/Medicine`, "What is the chemical formula of aspirin?" goes Medicine → Pharmaceutical drug → Aspirin and answers `C9H8O4` in about 3 seconds.
+
 ### Just the code
 
 ````console
@@ -209,6 +220,7 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 | Flag | |
 | --- | --- |
 | `-q, --ask "…"` | Keep what answers the question. Works with every mode |
+| `--follow [N]` | With `-q`: when the page doesn't answer, follow links on the same site, most promising first, reading up to N pages (default 5) |
 | `-p, --precise` | With `-q`: just the answer, in the page's words, then its block and a link to it. Exits with an error when no part of the page is the answer |
 | `-c, --code` | Code blocks only |
 | `-l, --links` | Content links, best first |
@@ -324,6 +336,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | --- | --- |
 | `src/main.rs` | Modes, chunking, hedging, output |
 | `src/precise.rs` | `--precise`: candidate spans and the link to them |
+| `src/follow.rs` | `--follow`: site map, link scoring, best-first search |
 | `src/extract.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |

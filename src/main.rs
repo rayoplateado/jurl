@@ -2,6 +2,7 @@ mod config;
 mod decide;
 mod extract;
 mod fetch;
+mod follow;
 mod lightpanda;
 mod precise;
 mod setup;
@@ -56,6 +57,10 @@ struct Args {
     /// Exits with an error when no part of the page is exactly the answer
     #[arg(short, long)]
     precise: bool,
+    /// With -q: when the page doesn't answer, follow its links within the same site, most promising first,
+    /// reading up to this many pages in all [default: 5]
+    #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]
+    follow: Option<usize>,
     /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text)
     #[arg(short, long)]
     render: bool,
@@ -178,7 +183,13 @@ struct Item {
     question: Option<Value>,
 }
 
-impl Ctx<'_> {
+impl<'a> Ctx<'a> {
+    fn new(args: &'a Args, client: &'a Client, key: &'a str, url: &'a url::Url, ex: &'a Extracted) -> Self {
+        let excerpt = ex.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
+        let excerpt = excerpt.chars().take(EXCERPT_CHARS).collect();
+        Ctx { args, client, key, url, title: &ex.title, excerpt }
+    }
+
     /// Chunk items so each request fits the budget, ask all chunks in parallel, merge.
     /// A page that is really a rate-limit or bot-check interstitial fails instead of printing nothing.
     async fn judge(&self, field: &str, items: Vec<Item>, mut extra: Map<String, Value>) -> Result<Answers> {
@@ -293,6 +304,9 @@ async fn run(mut args: Args) -> Result<()> {
     if args.precise && args.ask.is_none() {
         bail!("--precise needs a question: add -q \"…\"");
     }
+    if args.follow.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
+        bail!("--follow looks for an answer: use it with -q (and --precise or --code), not images or links");
+    }
     let key = setup::typesafe_key(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
@@ -306,14 +320,47 @@ async fn run(mut args: Args) -> Result<()> {
         async move { join_all(hosts.into_iter().map(|h| c.head(h).send())).await }
     });
     let target: url::Url = args.url.parse().with_context(|| format!("bad url {}", args.url))?;
+    if args.follow.is_some() {
+        let _ = warm.await;
+        follow::run(&args, &cfg, &client, &key, target, &mut t).await?;
+        if args.timing {
+            t.report();
+        }
+        return Ok(());
+    }
 
+    let (url, ex) = load(&args, &cfg, &client, &target, &mut t).await?;
+    let _ = warm.await;
+
+    let ctx = Ctx::new(&args, &client, &key, &url, &ex);
+    if args.image || args.vision {
+        images(&ctx, &cfg, &ex, &mut t).await?;
+    } else if args.links {
+        links(&ctx, &ex, &mut t).await?;
+    } else {
+        blocks(&ctx, &ex, &mut t).await?;
+    }
+    if args.timing {
+        t.report();
+    }
+    Ok(())
+}
+
+/// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images.
+async fn load(
+    args: &Args,
+    cfg: &Config,
+    client: &Client,
+    target: &url::Url,
+    t: &mut Timer,
+) -> Result<(url::Url, Extracted)> {
     let page = if args.render {
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
-        let page = fetch::render(&bin, &target).await?;
+        let page = fetch::render(&bin, target).await?;
         t.lap("render");
         page
     } else {
-        let page = fetch::fetch(&client, &args.url).await?;
+        let page = fetch::fetch(client, target.as_str()).await?;
         t.lap("fetch");
         page
     };
@@ -334,26 +381,42 @@ async fn run(mut args: Args) -> Result<()> {
             Err(e) => eprintln!("jurl: {e:#}"),
         }
     }
-    let _ = warm.await;
-
-    let excerpt = ex.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
-    let excerpt = excerpt.chars().take(EXCERPT_CHARS).collect();
-    let ctx = Ctx { args: &args, client: &client, key: &key, url: &page.url, title: &ex.title, excerpt };
-    if args.image || args.vision {
-        images(&ctx, &cfg, &ex, &mut t).await?;
-    } else if args.links {
-        links(&ctx, &ex, &mut t).await?;
-    } else {
-        blocks(&ctx, &ex, &mut t).await?;
-    }
-    if args.timing {
-        t.report();
-    }
-    Ok(())
+    Ok((page.url, ex))
 }
 
 /// Default mode and --code: pick blocks, print them in page order.
 async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
+    let args = ctx.args;
+    let (scores, kind) = score_blocks(ctx, ex, t).await?;
+
+    // Top-N by probability, printed in page order. Headings survive when their section does.
+    let default_max = if args.code {
+        8
+    } else if args.ask.is_some() {
+        5
+    } else {
+        12
+    };
+    // --precise looks inside the best few blocks even when none of them answers on its own: whether a span of
+    // them is the answer is decided next, at the span's own threshold.
+    if args.precise {
+        let keep = top(&scores, PRECISE_BLOCK_FLOOR, 3);
+        if keep.is_empty() {
+            bail!("nothing in {} answers that", ctx.url);
+        }
+        let pick = precise_pick(ctx, ex, &keep, t).await?;
+        return print_precise(ctx, ex, &pick, None);
+    }
+    let keep = top(&scores, args.threshold(), args.limit(default_max));
+    print_blocks(ctx, ex, &scores, &keep, kind, None)
+}
+
+/// Jev's probability for each block (None for headings and blocks too short to judge alone), and the page's kind.
+async fn score_blocks(
+    ctx: &Ctx<'_>,
+    ex: &Extracted,
+    t: &mut Timer,
+) -> Result<(Vec<Option<f64>>, Option<(String, f64)>)> {
     let args = ctx.args;
     let is_candidate = |b: &Block| match b.kind {
         Kind::Heading => false,
@@ -404,25 +467,19 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     t.lap(a.label());
     let kind = a.choice("page_kind");
     let scores: Vec<Option<f64>> = ex.blocks.iter().map(|b| a.noul(&format!("b{}", b.i))).collect();
+    Ok((scores, kind))
+}
 
-    // Top-N by probability, printed in page order. Headings survive when their section does.
-    let default_max = if args.code {
-        8
-    } else if args.ask.is_some() {
-        5
-    } else {
-        12
-    };
-    // --precise looks inside the best few blocks even when none of them answers on its own: whether a span of
-    // them is the answer is decided next, at the span's own threshold.
-    if args.precise {
-        let keep = top(&scores, PRECISE_BLOCK_FLOOR, 3);
-        if keep.is_empty() {
-            bail!("nothing in {} answers that", ctx.url);
-        }
-        return precise_answer(ctx, ex, &keep, t).await;
-    }
-    let keep = top(&scores, args.threshold(), args.limit(default_max));
+/// The kept blocks in page order, each with its heading, as markdown or JSON. `path` is how --follow got here.
+fn print_blocks(
+    ctx: &Ctx<'_>,
+    ex: &Extracted,
+    scores: &[Option<f64>],
+    keep: &HashMap<usize, f64>,
+    kind: Option<(String, f64)>,
+    path: Option<&[url::Url]>,
+) -> Result<()> {
+    let args = ctx.args;
     let mut pending_heading = None;
     let mut selected = Vec::new();
     for b in &ex.blocks {
@@ -454,13 +511,16 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
                 v
             })
             .collect();
-        let doc = json!({
+        let mut doc = json!({
             "url": ctx.url.as_str(),
             "title": ex.title,
             "ask": args.ask,
             "kind": kind.as_ref().map(|k| json!({ "choice": k.0, "confidence": k.1 })),
             "blocks": blocks,
         });
+        if let Some(path) = path {
+            doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
+        }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
         if !ex.title.is_empty() {
@@ -475,8 +535,15 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     Ok(())
 }
 
-/// --precise: Jev scores spans of the best blocks as the exact answer; the winner is printed on its own line.
-async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>, t: &mut Timer) -> Result<()> {
+/// The --precise answer: a byte range of one block's text, and how sure Jev is that it's exactly the answer.
+struct Pick {
+    block: usize,
+    range: std::ops::Range<usize>,
+    p: f64,
+}
+
+/// --precise: Jev scores spans of the best blocks as the exact answer.
+async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>, t: &mut Timer) -> Result<Pick> {
     let q = ctx.args.ask.as_deref().unwrap_or_default();
     let mut ranked: Vec<(&usize, &f64)> = keep.iter().collect();
     ranked.sort_by(|a, b| b.1.total_cmp(a.1));
@@ -566,13 +633,22 @@ async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64
             best = s;
         }
     }
-    let block = top[best.block];
-    let answer = &block.text[best.range.clone()];
-    let link = precise::link(ctx.url, &block.text, &best.range);
+    Ok(Pick { block: top[best.block].i, range: best.range.clone(), p })
+}
+
+/// The answer on its own line, then the block it's in and a link to it; JSON says how sure. `path` is how --follow got
+/// here.
+fn print_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url::Url]>) -> Result<()> {
+    let q = ctx.args.ask.as_deref().unwrap_or_default();
+    let threshold = ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD);
+    let block = &ex.blocks[pick.block];
+    let answer = &block.text[pick.range.clone()];
+    let link = precise::link(ctx.url, &block.text, &pick.range);
+    let p = pick.p;
 
     let mut out = stdout().lock();
     if ctx.args.json {
-        let doc = json!({
+        let mut doc = json!({
             "url": ctx.url.as_str(),
             "title": ex.title,
             "ask": q,
@@ -583,6 +659,9 @@ async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64
             "block": block.i,
             "link": link,
         });
+        if let Some(path) = path {
+            doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
+        }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
         return Ok(());
     }
