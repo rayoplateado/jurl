@@ -125,3 +125,38 @@ Short list items kept with their list, markdown served as `text/plain` read as m
 The new heldout miss was Chess → the speed of sound, answered "340 m/s" from `Air` once; run again 3 times with each binary, back to back, it was right 3 of 3 with both ([before](results/follow-usecase-base-rerun.json), [after](results/follow-usecase-fixes-rerun.json), docs in the same rerun: 7/9 and 8/9, every miss Kubernetes).
 
 On the 10 docs pages ([before](results/jurl-usecase-base.json), [after](results/jurl-usecase-fixes.json)) both scored 9/10 (27/30): nodejs.org answered HTTP 404 to every request that day, curl included. react.dev answers `Accept: text/markdown` with markdown as `text/plain`, which jurl used to read as HTML, every code block collapsed into one line. Read as markdown, the code jurl returns there keeps its lines (79 code lines checked against the page, 0 not on it, against 30 before), and Jev reads the whole page instead of a few long blocks cut short: 31,380 tokens instead of 5,415 for that task.
+
+#### "The company" is the site's owner
+
+`--follow --precise -q "Where is the company headquartered?" linear.app` answered "San Francisco", then "New York": both from customer stories (`/customers/openai`, `/customers/ramp`), OpenAI's and Ramp's headquarters, not Linear's. On stripe.com it answered from `/es/customers/linear` and `/es/customers/gamma`. On a customer story, "the company" reads as the customer.
+
+When `--follow` starts at a site's front door (`linear.app`, not `en.wikipedia.org/wiki/Paris` or a repo), the question Jev is asked about each block, the `--precise` spans and the side-by-side pick of leads now says so: "(Asked about linear.app: unless the question names someone, "the company", "they", "we" or "it" is the organisation behind linear.app, not a customer or partner it writes about.)". Each link's question only points at that note (`asked_about` in the links' state, once per request): repeated in all 250 link questions it cost 40% more tokens instead of about 25%. What jurl prints is unchanged: still the page's own words. Started from any other page, Jev is asked exactly what it was before.
+
+On the customer stories alone, with `--precise`: `/customers/openai` "Founded San Francisco" (p 0.82–0.84 on main) and `/customers/ramp` "Founded New York" (0.78) became no answer at all, 2 runs of 2 each (`stripe.com/customers/amazon` had none either way). The note had to be in the question: in the state only (once per request) it changed nothing ("Founded San Francisco" 0.85); in the `--precise` question only, `/customers/openai` still passed (0.43, 0.57). Shorter wording without "not a customer or partner" didn't work either (0.80).
+
+What it doesn't fix: Figma's headquarters is still "Berlin", from the German imprint (`/legal/impressum/`, the address of Figma GmbH, p≈0.9 with or without the note). Linear's is now "Singapore" at times: a job listing's location on `/readme`, which main answers too (p 0.97–0.99 on main, 0.79–0.89 after; once the search ended without an answer, closest "North America and Europe" on `/about`).
+
+Measured the same day: the new binary on all 84 runs ([after](results/follow-site-subject.json)) against main's from earlier that day ([main](results/follow-usecase-fixes.json), the same commit), and the groups that start at a front door (pricing, docs, not on the site) run again with main back to back ([main](results/follow-site-subject-base-pricing.json), [docs](results/follow-site-subject-base-docs.json), [trap](results/follow-site-subject-base-trap.json)):
+
+| | All | Pricing | Docs | Wikipedia | long | heldout | Not on the site | Tokens (all 84 runs) |
+|---|---|---|---|---|---|---|---|---|
+| main | 81/84 | 24/24 | 9/9 | 9/9 | 15/15 | 15/18 | 9/9 | 33.5M ($1.41) |
+| main, front-door groups again | | 24/24 | 8/9 | | | | 9/9 | |
+| Site's owner in the question | 77/84 | 24/24 | 6/9 | 9/9 | 15/15 | 14/18 | 9/9 | 33.9M ($1.42) |
+
+Every run that moved starts from a page, not a front door, so Jev was asked byte for byte what main asks (the 10 single-page tasks below used the same tokens to the token with both binaries). Run again with both binaries back to back ([main](results/follow-site-subject-rerun-base.json), [after](results/follow-site-subject-rerun.json)): docs 7/9 and 7/9 (Kubernetes, the known miss: 0/3 in the full run, 1/3 and 1/3 here), Coffee → The Magic Flute 3/3 and 2/3, Bicycle → the Titanic 1/3 and 1/3.
+
+Tokens: searches from a front door read about 25% more (pricing 1.73M → 2.12M, not on the site 0.78M → 0.95M, docs.github.com and Cloudflare 0.64M → 0.90M; the block questions carry the note), about $0.001 more a search. The first version, with the note in every link's question too ([pricing](results/follow-site-subject-inline-pricing.json), [docs](results/follow-site-subject-inline-docs.json), [trap](results/follow-site-subject-inline-trap.json)): 24/24, 7/9, 9/9, at 2.44M, 1.52M and 1.09M.
+
+The 10 docs pages ([main](results/jurl-site-subject-base.json), [after](results/jurl-site-subject-new.json)): 27/30 both, 312,438 Jev tokens both (nodejs.org answered 404 again). A single page is never searched "about" its site: on `github.com/BurntSushi/ripgrep`, "how do I install it?" is about ripgrep, not GitHub.
+
+Headquarters and founding year from more front doors, once each with main and after (the use case's own six domains are in its notes):
+
+| | main | after |
+|---|---|---|
+| stripe.com, headquarters | "San Francisco" from `/es/customers/gamma` (Gamma's); before that, "Área de la Bahía de San Francisco" from `/es/customers/linear` | "Estados Unidos" from `/es/global`; before that, no answer |
+| stripe.com, founded | no answer (closest "100 años", a Hertz story) | no answer |
+| notion.com, headquarters | "San Francisco" (`/about`) | "San Francisco" (`/about`) |
+| notion.com, founded | no answer | no answer |
+| vercel.com, headquarters | "San Francisco" (a press release's dateline) | "San Francisco" (the same) |
+| vercel.com, founded | no answer | no answer |
