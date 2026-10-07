@@ -59,3 +59,14 @@ uv run --with tiktoken --with requests bench/table.py              # the table a
 ```
 
 WebFetch only runs inside Claude Code: [results/webfetch.json](results/webfetch.json) holds its answers, asked with each task's URL and question.
+
+## `--follow`: finding the page on a site
+
+[follow.json](follow.json) holds 18 searches that start from a site's front door: the cheapest paid plan from a bare domain (`linear.app`), an answer in docs from the docs' root, short and long Wikipedia games, and 3 questions the site doesn't answer (right = left empty). [follow.py](follow.py) runs each 3 times with `--precise --follow` and saves `results/follow-<label>.json`.
+
+| | Right | Pricing | Docs | Wikipedia | Not on the site | Median pages (pricing) | Tokens (all 54 runs) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| First version | 44/54 | 21/24 | 3/9 | 11/12 | 9/9 | 4 | 7.5M ($0.32) |
+| Now | 49/54 | 24/24 | 7/9 | 9/12 | 9/9 | 3 | 8.3M ($0.35) |
+
+What changed: the start page is weighed like any other candidate page (a FAQ line on the home page no longer beats `/pricing`); Jev compares the best leads side by side; a docs index counts as warm when it links to the answer; on pages with more links than get scored, those sharing words with the question get in first (Cloudflare's Workers index lists hundreds); table cells reach `--precise` with their row and column ("30 s (CPU time · Paid)"). Paris → Aspirin with 15 pages went from about 3 in 7 to none: side-by-side picks help a site search and don't help a long trail, which is still open.

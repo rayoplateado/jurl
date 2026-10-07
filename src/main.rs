@@ -565,7 +565,7 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>,
         .collect();
     let mut criteria = Map::new();
     for (k, s) in spans.iter().enumerate() {
-        criteria.insert(format!("s{k}"), json!(&top[s.block].text[s.range.clone()]));
+        criteria.insert(format!("s{k}"), json!(s.label.as_deref().unwrap_or(&top[s.block].text[s.range.clone()])));
     }
     criteria.insert("none".to_string(), json!("None of these is exactly the answer"));
     let pick = choice(

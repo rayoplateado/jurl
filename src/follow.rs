@@ -19,8 +19,11 @@ use crate::{
     load, precise_pick, print_blocks, print_precise, score_blocks, top,
 };
 
-/// Pages opened at once on each step.
-const PARALLEL: usize = 3;
+/// Pages opened at once on each step. Two, so the default 5 pages are two full steps (1 + 2 + 2): answers two links
+/// away are within reach, and when Jev's first pick is right (most of the time) the second page costs little.
+const PARALLEL: usize = 2;
+/// A long search (`--follow 10` and up) goes wider: a long trail needs more than one or two guesses per step.
+const PARALLEL_LONG: usize = 3;
 /// Links scored per page, and URLs from the site map: cheap to score (~45 tokens each).
 const MAX_LINKS: usize = 250;
 const MAX_HINTS: usize = 300;
@@ -31,6 +34,10 @@ const HOP_DECAY: f64 = 0.85;
 const COLD_PAGE: f64 = 0.3;
 /// When the best lead left is weaker than this, the trail has gone cold: stop instead of opening pages blindly.
 const COLD_TRAIL: f64 = 0.02;
+/// Each step, Jev compares this many of the best leads side by side to pick the next pages.
+const SHORTLIST: usize = 10;
+/// A page found to answer is kept unless a lead left could beat it by this much: a near tie isn't worth more pages.
+const BETTER_BY: f64 = 0.15;
 const ASSETS: &[&str] = &[
     ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".zip", ".gz", ".xml", ".json", ".css", ".js", ".mp4",
     ".mp3", ".dmg", ".exe", ".tar", ".ico",
@@ -165,8 +172,32 @@ async fn site_map(client: &Client, start: &Url, site: &Site) -> Vec<Link> {
         let text = u.path().to_string();
         add(u, text);
     }
-    out.truncate(MAX_HINTS);
     out
+}
+
+/// How many of the question's words a link shares (by their first five letters: "limit" finds `/limits/`). Only used to
+/// choose which links get scored when a page has more than [`MAX_LINKS`]; Jev does the scoring.
+fn overlap(question: &str, link: &Link) -> usize {
+    const STOP: &[&str] =
+        &["what", "which", "where", "when", "does", "with", "that", "this", "from", "have", "the", "for", "and", "how"];
+    let stem = |w: &str| w.chars().take(5).collect::<String>();
+    let words = |s: &str| -> Vec<String> {
+        s.split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() >= 3).map(|w| w.to_lowercase()).collect()
+    };
+    let link_words: HashSet<String> =
+        words(&format!("{} {}", link.text, link.url.path())).iter().map(|w| stem(w)).collect();
+    words(question).iter().filter(|w| !STOP.contains(&w.as_str())).filter(|w| link_words.contains(&stem(w))).count()
+}
+
+/// The links worth scoring, at most [`MAX_LINKS`]: those that share words with the question first, then in page order.
+fn shortlist_links(question: &str, links: Vec<Link>) -> Vec<Link> {
+    let mut links = links;
+    if links.len() > MAX_LINKS {
+        let mut ranked: Vec<(usize, Link)> = links.into_iter().map(|l| (overlap(question, &l), l)).collect();
+        ranked.sort_by_key(|(o, l)| (std::cmp::Reverse(*o), l.i));
+        links = ranked.into_iter().take(MAX_LINKS).map(|(_, l)| l).collect();
+    }
+    links.into_iter().enumerate().map(|(i, l)| Link { i, ..l }).collect()
 }
 
 /// Every `<loc>…</loc>` in a sitemap.
@@ -188,7 +219,7 @@ async fn score_links(ctx: &Ctx<'_>, links: &[Link], what: &str) -> Vec<f64> {
         .iter()
         .map(|l| Item {
             id: format!("l{}", l.i),
-            state: serde_json::json!({ "i": l.i, "text": l.text, "path": l.url.path() }),
+            state: serde_json::json!({ "i": l.i, "text": l.text, "context": l.context, "path": l.url.path() }),
             question: Some(noul(format!(
                 "{what} with i={} is the page that answers this question, or leads to it: {q}",
                 l.i
@@ -215,7 +246,7 @@ struct Visit {
     score: f64,
     /// How close the page is to the question at all: its best block's probability of helping answer it.
     warmth: f64,
-    links: Vec<(Url, f64)>,
+    links: Vec<(Url, String, f64)>,
 }
 
 /// Read one page: is the answer here, and which of its links lead on? Both questions go to Jev at once.
@@ -226,15 +257,15 @@ async fn visit(args: &Args, cfg: &Config, client: &Client, key: &str, url: &Url,
         let ctx = Ctx::new(args, client, key, &url, &ex);
         let mut seen = HashSet::new();
         // The article's own links first (on Wikipedia, "France" and "Medicine"), then menus and footers ("Pricing").
-        let candidates: Vec<Link> = ex
+        let all: Vec<Link> = ex
             .links
             .iter()
             .chain(&ex.site_links)
             .filter(|l| site.contains(&l.url) && key_differs(&l.url, &url) && seen.insert(self::key(&l.url)))
-            .take(MAX_LINKS)
             .enumerate()
-            .map(|(i, l)| Link { i, url: l.url.clone(), text: l.text.clone(), context: String::new() })
+            .map(|(i, l)| Link { i, url: l.url.clone(), text: l.text.clone(), context: l.context.clone() })
             .collect();
+        let candidates = shortlist_links(args.ask.as_deref().unwrap_or_default(), all);
         let answer = async {
             let mut t = Timer::new();
             let Ok((scores, kind)) = score_blocks(&ctx, &ex, &mut t).await else { return (None, 0.0) };
@@ -259,7 +290,7 @@ async fn visit(args: &Args, cfg: &Config, client: &Client, key: &str, url: &Url,
         };
         let ((answer, warmth), scores) =
             tokio::join!(answer, score_links(&ctx, &candidates, "Following the link in `links`"));
-        let links = candidates.into_iter().zip(scores).map(|(l, p)| (l.url, p)).collect();
+        let links = candidates.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect();
         match answer {
             Some((found, score)) => (Some(found), score, warmth, links),
             None => (None, 0.0, warmth, links),
@@ -275,8 +306,46 @@ fn key_differs(a: &Url, b: &Url) -> bool {
 /// A page waiting to be opened, and how jurl would get there.
 struct Lead {
     url: Url,
+    text: String,
     score: f64,
     path: Vec<Url>,
+}
+
+/// Jev compares the best leads side by side ("which of these is the next step?"): scores given to links on different
+/// pages one at a time aren't on the same scale. Returns the shortlist reordered by Jev's choice, and the share that
+/// went to "none of these" (an option so the others aren't forced to look good).
+async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Option<(Vec<usize>, f64)> {
+    let q = ctx.args.ask.as_deref().unwrap_or_default();
+    let items: Vec<Item> = leads
+        .iter()
+        .enumerate()
+        .map(|(i, l)| Item {
+            id: format!("o{i}"),
+            state: serde_json::json!({ "i": i, "text": l.text, "path": l.url.path(), "found_on": l.path.last().map(|u| u.path()) }),
+            question: None,
+        })
+        .collect();
+    let mut criteria = Map::new();
+    for (i, l) in leads.iter().enumerate() {
+        let name = if l.text.is_empty() { l.url.path().to_string() } else { format!("{} ({})", l.text, l.url.path()) };
+        criteria.insert(format!("o{i}"), serde_json::json!(name));
+    }
+    criteria.insert("none".into(), serde_json::json!("None of these pages has the answer or leads to it"));
+    let pick = crate::decide::choice(
+        &format!(
+            "Looking for the answer to this question on this site: which of these pages is the best next step, the page \
+             that has the answer or the one that leads to it? {q}"
+        ),
+        serde_json::Value::Object(criteria),
+    );
+    let a = ctx.judge("links", items, Map::from_iter([("next".to_string(), pick)])).await.ok()?;
+    let probs = a.probabilities("next")?;
+    let mut order: Vec<usize> = (0..leads.len()).collect();
+    order.sort_by(|&x, &y| {
+        let p = |i: usize| probs.get(&format!("o{i}")).copied().unwrap_or(0.0);
+        p(y).total_cmp(&p(x))
+    });
+    Some((order, probs.get("none").copied().unwrap_or(0.0)))
 }
 
 pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: Url, t: &mut Timer) -> Result<()> {
@@ -286,7 +355,20 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
 
     // The first page, the site's own map and robots.txt, all at once.
     let hints = async {
-        let links = site_map(client, &start, &site).await;
+        let q = args.ask.as_deref().unwrap_or_default();
+        let mut links = site_map(client, &start, &site).await;
+        // The site's pages that share words with the question first, then the shallowest.
+        if links.len() > MAX_HINTS {
+            let mut ranked: Vec<(usize, Link)> = links.into_iter().map(|l| (overlap(q, &l), l)).collect();
+            ranked.sort_by_key(|(o, l)| (std::cmp::Reverse(*o), l.i));
+            links = ranked.into_iter().take(MAX_HINTS).map(|(_, l)| l).collect();
+        }
+        // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
+        links.retain(|l| self::key(&l.url) != self::key(&start));
+        links.insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new() });
+        for (i, l) in links.iter_mut().enumerate() {
+            l.i = i;
+        }
         let empty = Extracted {
             title: String::new(),
             blocks: Vec::new(),
@@ -297,7 +379,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         };
         let ctx = Ctx::new(args, client, key, &start, &empty);
         let scores = score_links(&ctx, &links, "The page at the URL in `links`").await;
-        links.into_iter().zip(scores).map(|(l, p)| (l.url, p)).collect::<Vec<_>>()
+        links.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect::<Vec<_>>()
     };
     let (first, hints, robots) =
         tokio::join!(visit(args, cfg, client, key, &start, &site), hints, Robots::load(client, &start));
@@ -309,6 +391,14 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     let mut closest: Option<(f64, Visit, Vec<Url>)> = None;
     let mut leads: Vec<Lead> = Vec::new();
     let mut found: Vec<(f64, Visit, Vec<Url>)> = Vec::new();
+    // How well the start page fits the question as a page, from the same scoring as the site map's pages. A home page
+    // answering in passing (a FAQ line) counts for less than a pricing page that the site lists.
+    let mut hints = hints;
+    let start_fit = if hints.first().is_some_and(|h| self::key(&h.0) == self::key(&start)) {
+        hints.remove(0).2.max(COLD_PAGE)
+    } else {
+        1.0
+    };
 
     // A page that answers is ranked by how sure Jev is of the answer AND of the page: a blog post from two years ago
     // can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
@@ -320,10 +410,13 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
             // the search goes back to the leads of a page that was getting warmer.
             // The page you started from is never cold: its links are all there is to go on.
-            let heat = if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth };
+            // A hub page (a docs index, a category) says nothing itself but links straight to the answer: it's as warm
+            // as its best link.
+            let best_link = v.links.iter().map(|l| l.2).fold(0.0, f64::max);
+            let heat = if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link) };
             let decay = HOP_DECAY.powi(path.len() as i32 - 1);
-            for (url, p) in &v.links {
-                leads.push(Lead { url: url.clone(), score: p * decay * heat, path: path.clone() });
+            for (url, text, p) in &v.links {
+                leads.push(Lead { url: url.clone(), text: text.clone(), score: p * decay * heat, path: path.clone() });
             }
             let rank = v.score * lead;
             if v.found.is_some() && v.score >= threshold {
@@ -333,36 +426,56 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             }
         };
     let first_path = vec![first.url.clone()];
-    take(first, 1.0, first_path, &mut leads, &mut found);
-    for (url, p) in hints {
-        leads.push(Lead { url, score: p, path: vec![start.clone()] });
+    take(first, start_fit, first_path, &mut leads, &mut found);
+    for (url, text, p) in hints {
+        leads.push(Lead { url, text, score: p, path: vec![start.clone()] });
     }
 
+    let empty = Extracted {
+        title: String::new(),
+        blocks: Vec::new(),
+        images: Vec::new(),
+        links: Vec::new(),
+        site_links: Vec::new(),
+        app_shell: false,
+    };
+    let site_ctx = Ctx::new(args, client, key, &start, &empty);
     let mut cold = false;
-    while found.is_empty() && pages < max {
+    while pages < max {
         leads.sort_by(|a, b| b.score.total_cmp(&a.score));
-        leads.retain(|l| !visited.contains(&self::key(&l.url)));
+        let mut seen = HashSet::new();
+        leads.retain(|l| {
+            let k = self::key(&l.url);
+            !visited.contains(&k) && robots.allows(&l.url) && seen.insert(k)
+        });
+        // Done when no page left could beat what's been found: each lead's score is the most it could rank.
+        let best_found = found.iter().map(|f| f.0).fold(0.0, f64::max);
+        if !found.is_empty() && leads.first().is_none_or(|l| l.score <= best_found + BETTER_BY) {
+            break;
+        }
         if leads.first().is_none_or(|l| l.score < COLD_TRAIL) {
             cold = true;
             break;
         }
-        let mut batch = Vec::new();
-        let mut rest = Vec::new();
-        for lead in leads.drain(..) {
-            let k = self::key(&lead.url);
-            if visited.contains(&k) || !robots.allows(&lead.url) {
-                continue;
-            }
-            if batch.len() < PARALLEL.min(max - pages) {
-                visited.insert(k);
-                batch.push(lead);
-            } else {
-                rest.push(lead);
-            }
+        // Jev picks the next pages out of the best few, side by side, or says none of them leads anywhere.
+        let n = (if max >= 10 { PARALLEL_LONG } else { PARALLEL }).min(max - pages);
+        let short: Vec<&Lead> = leads.iter().take(SHORTLIST).collect();
+        // On a long trail (`--follow 10` and up) no page "is the next step" to something far away, so Jev's side-by-side
+        // pick only adds noise there: the leads' own scores decide.
+        let order = if short.len() > n && max < 10 { shortlist(&site_ctx, &short).await } else { None };
+        t.lap("next");
+        // "None of these leads anywhere" isn't a reason to stop: on a long trail (Paris → … → Aspirin) no single step
+        // looks like it leads to the answer. It only orders the shortlist.
+        let picks: Vec<usize> = match order {
+            Some((order, _)) => order.into_iter().take(n).collect(),
+            None => (0..n.min(leads.len())).collect(),
+        };
+        let mut batch: Vec<Lead> = Vec::new();
+        for i in picks.into_iter().rev().collect::<std::collections::BTreeSet<_>>().into_iter().rev() {
+            batch.push(leads.remove(i));
         }
-        leads = rest;
-        if batch.is_empty() {
-            break;
+        for l in &batch {
+            visited.insert(self::key(&l.url));
         }
         let results = join_all(batch.iter().map(|l| visit(args, cfg, client, key, &l.url, &site))).await;
         pages += batch.len();
@@ -385,6 +498,8 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         for (url, warmth, score) in &log {
             eprintln!("   warmth {warmth:.2} · answer {score:.2} · {url}");
         }
+        let tokens = crate::decide::JEV_TOKENS.load(std::sync::atomic::Ordering::Relaxed);
+        eprintln!("   {pages} pages · {tokens} tokens");
     }
     found.sort_by(|a, b| b.0.total_cmp(&a.0));
     let trail = |path: &[Url]| {
@@ -452,6 +567,22 @@ mod tests {
         assert!(!r.allows(&Url::parse("https://x.com/admin/users").unwrap()));
         assert!(r.allows(&Url::parse("https://x.com/g/page").unwrap()));
         assert!(r.allows(&Url::parse("https://x.com/pricing").unwrap()));
+    }
+
+    #[test]
+    fn question_words_pick_which_links_get_scored() {
+        let link = |i: usize, path: &str| Link {
+            i,
+            url: Url::parse(&format!("https://x.com{path}")).unwrap(),
+            text: String::new(),
+            context: String::new(),
+        };
+        let mut links: Vec<Link> = (0..MAX_LINKS + 50).map(|i| link(i, &format!("/page/{i}"))).collect();
+        links.push(link(MAX_LINKS + 50, "/workers/platform/limits/"));
+        let kept = shortlist_links("What is the CPU time limit for Workers?", links);
+        assert_eq!(kept.len(), MAX_LINKS);
+        assert_eq!(kept[0].url.path(), "/workers/platform/limits/");
+        assert_eq!(kept[0].i, 0);
     }
 
     #[test]

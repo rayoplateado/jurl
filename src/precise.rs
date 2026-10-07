@@ -5,11 +5,13 @@ use std::ops::Range;
 
 use crate::extract::{Block, Kind};
 
-/// A candidate answer: `blocks[block].text[range]`.
+/// A candidate answer: `blocks[block].text[range]`. A table cell carries its row and column as `label`, which is what
+/// Jev is shown ("30 s (CPU time · Paid)"); the answer is still just the cell.
 #[derive(Debug, Clone)]
 pub struct Span {
     pub block: usize,
     pub range: Range<usize>,
+    pub label: Option<String>,
 }
 
 /// More than this and the request stops being one cheap call.
@@ -24,9 +26,14 @@ const CURRENCY: &[&str] = &["$", "€", "£", "¥", "US$", "USD", "EUR", "GBP"];
 /// Candidate spans from `blocks`, taken from each block in turn so a long one (a big table) can't use up the
 /// whole budget. Every span is a substring of its block's text.
 pub fn candidates(blocks: &[&Block]) -> Vec<Span> {
-    let mut queues: Vec<std::vec::IntoIter<Range<usize>>> = blocks
+    let mut queues: Vec<std::vec::IntoIter<(Range<usize>, Option<String>)>> = blocks
         .iter()
-        .map(|b| if b.kind == Kind::Code { code_spans(&b.text) } else { prose_spans(&b.text) }.into_iter())
+        .map(|b| {
+            let mut spans = table_cells(&b.text);
+            let plain = if b.kind == Kind::Code { code_spans(&b.text) } else { prose_spans(&b.text) };
+            spans.extend(plain.into_iter().map(|r| (r, None)));
+            spans.into_iter()
+        })
         .collect();
     let mut out: Vec<Span> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -36,19 +43,63 @@ pub fn candidates(blocks: &[&Block]) -> Vec<Span> {
         for (b, queue) in queues.iter_mut().enumerate() {
             let text = blocks[b].text.as_str();
             // The next span of this block that is new and not too long.
-            for r in queue.by_ref() {
+            for (r, label) in queue.by_ref() {
                 let Some(r) = trim(text, r) else { continue };
                 let s = &text[r.clone()];
-                if s.chars().count() > MAX_SPAN_CHARS || !seen.insert(s.to_string()) {
+                if s.chars().count() > MAX_SPAN_CHARS || !seen.insert(label.clone().unwrap_or_else(|| s.to_string())) {
                     continue;
                 }
-                out.push(Span { block: b, range: r });
+                out.push(Span { block: b, range: r, label });
                 live = true;
                 break;
             }
             if out.len() >= MAX_CANDIDATES {
                 break;
             }
+        }
+    }
+    out
+}
+
+/// The cells of a table written as `| a | b |` lines, each with its row's first cell and its column's header: in a
+/// table comparing plans, "10 ms" and "30 s" only mean something next to "Free" and "Paid".
+fn table_cells(text: &str) -> Vec<(Range<usize>, Option<String>)> {
+    let mut rows: Vec<Vec<Range<usize>>> = Vec::new();
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end();
+        if body.starts_with('|') && body.ends_with('|') && body.len() > 1 {
+            let inner = &body[1..body.len() - 1];
+            // `|---|:--:|` is markdown's header separator, not a row.
+            if !inner.chars().all(|c| matches!(c, '-' | ':' | '|' | ' ')) {
+                let mut cells = Vec::new();
+                let mut at = start + 1;
+                for cell in inner.split('|') {
+                    cells.push(at..at + cell.len());
+                    at += cell.len() + 1;
+                }
+                rows.push(cells);
+            }
+        }
+        start += line.len();
+    }
+    if rows.len() < 2 {
+        return Vec::new();
+    }
+    let cell = |r: &Range<usize>| text[r.clone()].trim().trim_matches(['*', '_']).to_string();
+    let header: Vec<String> = rows[0].iter().map(cell).collect();
+    let mut out = Vec::new();
+    for row in &rows[1..] {
+        let name = row.first().map(cell).unwrap_or_default();
+        for (j, r) in row.iter().enumerate().skip(1) {
+            let value = cell(r);
+            if value.is_empty() {
+                continue;
+            }
+            let column = header.get(j).cloned().unwrap_or_default();
+            let context = [name.as_str(), column.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>();
+            let label = (!context.is_empty()).then(|| format!("{value} ({})", context.join(" · ")));
+            out.push((r.clone(), label));
         }
     }
     out
@@ -328,6 +379,16 @@ mod tests {
 
     fn block(kind: Kind, text: &str) -> Block {
         Block { i: 0, kind, level: None, lang: None, text: text.to_string() }
+    }
+
+    #[test]
+    fn table_cells_know_their_row_and_column() {
+        let b = block(Kind::Table, "| Limit | Free | Paid |\n| --- | --- | --- |\n| **CPU time** | 10 ms | 30 s |");
+        let spans = candidates(&[&b]);
+        let paid = spans.iter().find(|s| &b.text[s.range.clone()] == "30 s").expect("the cell is a candidate");
+        assert_eq!(paid.label.as_deref(), Some("30 s (CPU time · Paid)"));
+        let free = spans.iter().find(|s| s.label.as_deref() == Some("10 ms (CPU time · Free)"));
+        assert!(free.is_some());
     }
 
     fn texts(b: &Block) -> Vec<String> {

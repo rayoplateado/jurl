@@ -1,0 +1,20 @@
+[
+  {"group": "pricing", "start": "linear.app", "q": "What is the monthly price of the cheapest paid plan?", "expect": ["$10"]},
+  {"group": "pricing", "start": "loom.com", "q": "What is the monthly price of the cheapest paid plan?", "expect": ["$18", "$15"]},
+  {"group": "pricing", "start": "calendly.com", "q": "What is the monthly price of the cheapest paid plan?", "expect": ["$10", "$12"]},
+  {"group": "pricing", "start": "cal.com", "q": "What is the monthly price of the cheapest paid plan?", "expect": ["$12", "$15"]},
+  {"group": "pricing", "start": "tailscale.com", "q": "What is the monthly price of the cheapest paid plan?", "expect": ["$5", "$6", "$8"]},
+  {"group": "pricing", "start": "vercel.com", "q": "What is the monthly price of the cheapest paid plan?", "expect": ["$20"]},
+  {"group": "pricing", "start": "raycast.com", "q": "What is the monthly price of the cheapest paid plan?", "expect": ["$10"]},
+  {"group": "pricing", "start": "notion.com", "q": "What is the monthly price of the cheapest paid plan?", "expect": ["9.50", "$10", "$12"]},
+  {"group": "docs", "start": "docs.github.com", "q": "What is the primary rate limit for authenticated users?", "expect": ["5,000"]},
+  {"group": "docs", "start": "developers.cloudflare.com", "q": "What is the CPU time limit for Workers on the paid plan?", "expect": ["30 s", "30 seconds", "5 min", "300,000", "30,000 ms"]},
+  {"group": "docs", "start": "kubernetes.io/docs/home/", "q": "What is the default restart policy of a Pod?", "expect": ["Always"]},
+  {"group": "wikipedia", "start": "en.wikipedia.org/wiki/Medicine", "q": "What is the chemical formula of aspirin?", "expect": ["C9H8O4"], "pages": 8},
+  {"group": "wikipedia", "start": "en.wikipedia.org/wiki/Paris", "q": "Who designed the Eiffel Tower?", "expect": ["Koechlin", "Nouguier", "Sauvestre", "Gustave Eiffel"], "pages": 6},
+  {"group": "wikipedia", "start": "en.wikipedia.org/wiki/Alcohol", "q": "What is the boiling point of ethanol?", "expect": ["78"], "pages": 8},
+  {"group": "wikipedia", "start": "en.wikipedia.org/wiki/Paris", "q": "What is the chemical formula of aspirin?", "expect": ["C9H8O4"], "pages": 15},
+  {"group": "trap", "start": "tailscale.com", "q": "What is the phone number for customer support?", "expect": null, "pages": 8},
+  {"group": "trap", "start": "linear.app", "q": "What is the name of the CEO's dog?", "expect": null, "pages": 8},
+  {"group": "trap", "start": "raycast.com", "q": "What is the price of the Ultra plan?", "expect": null, "pages": 8}
+]

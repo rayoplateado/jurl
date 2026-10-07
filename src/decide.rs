@@ -8,6 +8,9 @@ use reqwest::{Client, StatusCode};
 use serde_json::{Map, Value, json};
 
 pub const JEV_MODEL: &str = "jev-1.13.0";
+
+/// Every Jev input token this run, across all requests: what a --follow search cost.
+pub static JEV_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub const CLEF_MODEL: &str = "clef-flash";
 
 #[derive(Debug, Default)]
@@ -48,7 +51,9 @@ pub fn choice(instructions: &str, criteria: Value) -> Value {
 pub async fn jev(client: &Client, key: &str, state: Value, questions: Map<String, Value>) -> Result<Answers> {
     let body = json!({ "state": state, "model": JEV_MODEL, "questions": questions });
     let v = post(client, "https://api.typesafe.ai/v1/systemone", key, &body).await?;
-    Ok(parse(&v))
+    let a = parse(&v);
+    JEV_TOKENS.fetch_add(a.input_tokens, std::sync::atomic::Ordering::Relaxed);
+    Ok(a)
 }
 
 pub async fn clef(
