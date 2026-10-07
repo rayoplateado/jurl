@@ -1,0 +1,182 @@
+[
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 109701,
+  "ms": 3357,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 108987,
+  "ms": 3961,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 109817,
+  "ms": 3439,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 minutes (300,000 ms)",
+  "right": true,
+  "pages": 5,
+  "tokens": 103595,
+  "ms": 5102,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 min (default: 30 seconds)",
+  "right": true,
+  "pages": 5,
+  "tokens": 106115,
+  "ms": 9936,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/",
+   "https://developers.cloudflare.com/workers/platform/limits/index.md"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 minutes (300,000 ms)",
+  "right": true,
+  "pages": 5,
+  "tokens": 103426,
+  "ms": 4612,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "Always",
+  "right": true,
+  "pages": 5,
+  "tokens": 260647,
+  "ms": 4485,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "NotRequired",
+  "right": false,
+  "pages": 3,
+  "tokens": 175087,
+  "ms": 3161,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "Always",
+  "right": true,
+  "pages": 5,
+  "tokens": 260656,
+  "ms": 5202,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "343 m/s",
+  "right": true,
+  "pages": 10,
+  "tokens": 803104,
+  "ms": 4707,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_science",
+   "https://en.wikipedia.org/wiki/Fluid_dynamics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "343 m/s",
+  "right": true,
+  "pages": 13,
+  "tokens": 936041,
+  "ms": 9469,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_science",
+   "https://en.wikipedia.org/wiki/Physics",
+   "https://en.wikipedia.org/wiki/Acoustics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "343 m/s",
+  "right": true,
+  "pages": 13,
+  "tokens": 986100,
+  "ms": 5015,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Mathematics",
+   "https://en.wikipedia.org/wiki/Analysis_(mathematics)",
+   "https://en.wikipedia.org/wiki/Sound",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ }
+]

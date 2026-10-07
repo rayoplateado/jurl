@@ -112,3 +112,16 @@ Measured the same day, 84 runs each ([before](results/follow-generic-base.json),
 | Generic, final | 80/84 | 24/24 | 6/9 | 9/9 | 15/15 | 17/18 | 9/9 | 33.4M ($1.40) |
 
 Docs moved, so it was run again with both binaries, back to back ([before](results/follow-generic-base-docs2.json), [final](results/follow-generic-final-docs2.json); 5 runs each: [before](results/follow-generic-base-docs3.json), [final](results/follow-generic-final-docs3.json)): 9/9 and 8/9, then 13/15 and 13/15. Every docs miss is Kubernetes, the known one: when the search lands on the Pod API reference instead of the pod lifecycle page, `--precise` picks "NotRequired". Over all its runs that day it was right 8 of 11 times before and 5 of 11 after, but tied 3 of 5 to 3 of 5 when run back to back; GitHub and Cloudflare were right in every run with both. Bicycle → the Titanic: 0/3 before, 2/3 now, both times through `RMS_Titanic`. In `-t` runs of the final version from Paris (4), Bicycle (2) and Pizza (2), no `Wikipedia:`, `Main_Page`, `Special:` or `File:` page was opened, and no trail in the 84 runs goes through one; with only the `<sup>`/image rule, Bicycle had opened `Main_Page` and five `Wikipedia:Contents` pages.
+
+#### Fixes from real use cases
+
+Short list items kept with their list, markdown served as `text/plain` read as markdown, a page's own URL never an image, `-t` and a non-zero exit on every miss. None of them changes what `--follow --precise` asks Jev. Measured against the binary before them the same day, 84 runs each ([before](results/follow-usecase-base.json), [after](results/follow-usecase-fixes.json)):
+
+| | All | Pricing | Docs | Wikipedia | long | heldout | Not on the site | Tokens (all 84 runs) |
+|---|---|---|---|---|---|---|---|---|
+| Before | 81/84 | 24/24 | 8/9 | 9/9 | 15/15 | 16/18 | 9/9 | 33.8M ($1.42) |
+| After | 81/84 | 24/24 | 9/9 | 9/9 | 15/15 | 15/18 | 9/9 | 33.5M ($1.41) |
+
+The new heldout miss was Chess → the speed of sound, answered "340 m/s" from `Air` once; run again 3 times with each binary, back to back, it was right 3 of 3 with both ([before](results/follow-usecase-base-rerun.json), [after](results/follow-usecase-fixes-rerun.json), docs in the same rerun: 7/9 and 8/9, every miss Kubernetes).
+
+On the 10 docs pages ([before](results/jurl-usecase-base.json), [after](results/jurl-usecase-fixes.json)) both scored 9/10 (27/30): nodejs.org answered HTTP 404 to every request that day, curl included. react.dev answers `Accept: text/markdown` with markdown as `text/plain`, which jurl used to read as HTML, every code block collapsed into one line. Read as markdown, the code jurl returns there keeps its lines (79 code lines checked against the page, 0 not on it, against 30 before), and Jev reads the whole page instead of a few long blocks cut short: 31,380 tokens instead of 5,415 for that task.
