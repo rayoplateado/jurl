@@ -304,7 +304,7 @@ impl<'a> Walker<'a> {
 
     fn skipped(&self, el: ElementRef) -> bool {
         let name = el.value().name();
-        SKIP.contains(&name) || (self.skip_header && name == "header") || hidden(el)
+        SKIP.contains(&name) || (self.skip_header && name == "header") || hidden(el) || chrome(el)
     }
 
     /// Generic container: inline runs become paragraphs, block children recurse.
@@ -428,7 +428,7 @@ fn inline_text(el: ElementRef) -> String {
             Node::Element(e) if e.name() == "br" => out.push(BREAK),
             Node::Element(_) => {
                 let c = ElementRef::wrap(c).unwrap();
-                if !hidden(c) {
+                if !hidden(c) && !chrome(c) {
                     let block = !INLINE.contains(&c.value().name());
                     if block {
                         out.push(BREAK);
@@ -475,7 +475,7 @@ fn has_block_desc(el: ElementRef) -> bool {
 fn has_skipped_ancestor(el: ElementRef, skip_header: bool) -> bool {
     el.ancestors().filter_map(ElementRef::wrap).any(|a| {
         let n = a.value().name();
-        SKIP.contains(&n) || (skip_header && n == "header") || hidden(a)
+        SKIP.contains(&n) || (skip_header && n == "header") || hidden(a) || chrome(a)
     })
 }
 
@@ -488,7 +488,7 @@ fn image_skipped(img: ElementRef, skip_header: bool) -> bool {
         .any(|a| a.value().attr("class").is_some_and(is_carousel));
     let skipped_by = |a: ElementRef| {
         let n = a.value().name();
-        SKIP.contains(&n) || (skip_header && n == "header") || (!carousel && hidden(a))
+        SKIP.contains(&n) || (skip_header && n == "header") || chrome(a) || (!carousel && hidden(a))
     };
     (!carousel && hidden(img)) || img.ancestors().filter_map(ElementRef::wrap).any(skipped_by)
 }
@@ -503,6 +503,34 @@ fn is_carousel(class: &str) -> bool {
 /// A React streaming segment: hidden only until its script moves it into place.
 fn segment(el: ElementRef) -> bool {
     el.value().name() == "div" && el.value().id().is_some_and(|id| id.starts_with("S:"))
+}
+
+/// Page chrome that isn't in a `<nav>`/`<aside>`/`<footer>` tag, found the way reader modes find it: by ARIA role,
+/// or by a class or id that is one of these exact words (never a part of one: a restaurant's "menu" stays).
+const CHROME_ROLES: &[&str] = &["navigation", "complementary", "contentinfo", "search", "menu", "menubar"];
+const CHROME_NAMES: &[&str] = &[
+    "navbox",
+    "vertical-navbox",
+    "sidebar",
+    "toc",
+    "vector-toc",
+    "references",
+    "reflist",
+    "mw-references-wrap",
+    "catlinks",
+    "mw-editsection",
+    "mw-jump-link",
+    "breadcrumb",
+    "breadcrumbs",
+    "sistersitebox",
+    "printfooter",
+];
+
+fn chrome(el: ElementRef) -> bool {
+    let v = el.value();
+    v.attr("role").is_some_and(|r| CHROME_ROLES.contains(&r))
+        || v.classes().any(|c| CHROME_NAMES.contains(&c))
+        || v.id().is_some_and(|id| CHROME_NAMES.contains(&id))
 }
 
 fn hidden(el: ElementRef) -> bool {
@@ -726,6 +754,17 @@ mod tests {
         let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
         assert_eq!(texts, ["| Founders | Dylan Field\nEvan Wallace |", "Line one\nline two"]);
         assert_eq!(collapse("  a \n  b  "), "a b");
+    }
+
+    #[test]
+    fn reader_mode_drops_chrome_outside_nav_tags() {
+        let page = r##"<body><div class="vector-toc"><ul><li><a href="#h">History</a></li></ul></div>
+            <h2>History<span class="mw-editsection">[edit]</span></h2><p>Founded in 1890.</p>
+            <div role="navigation" class="navbox"><ul><li><a href="/x">Other city</a></li></ul></div>
+            <div class="reflist"><ol class="references"><li>Smith, J. (2010).</li></ol></div>
+            <div class="menu"><p>Paella 12 €</p></div></body>"##;
+        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(texts, ["History", "Founded in 1890.", "Paella 12 €"]);
     }
 
     #[test]
