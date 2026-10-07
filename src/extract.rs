@@ -301,6 +301,9 @@ impl Walker {
                     if self.skipped(child) {
                         continue;
                     }
+                    if permalink(child) {
+                        continue;
+                    }
                     if INLINE.contains(&child.value().name()) && !has_block_desc(child) {
                         self.buf.push_str(&inline_text(child));
                     } else {
@@ -389,6 +392,7 @@ fn inline_text(el: ElementRef) -> String {
         match c.value() {
             Node::Text(t) => out.push_str(t),
             Node::Element(e) if SKIP.contains(&e.name()) => {}
+            Node::Element(_) if permalink(ElementRef::wrap(c).unwrap()) => {}
             Node::Element(e) if e.name() == "br" => out.push(' '),
             Node::Element(_) => {
                 let c = ElementRef::wrap(c).unwrap();
@@ -407,6 +411,13 @@ fn inline_text(el: ElementRef) -> String {
         }
     }
     out
+}
+
+/// The ¶ / # that docs put next to a heading to link to it: page furniture, not text.
+fn permalink(el: ElementRef) -> bool {
+    el.value().name() == "a"
+        && el.value().attr("href").is_some_and(|h| h.starts_with('#'))
+        && matches!(collapse(&el.text().collect::<String>()).as_str(), "" | "¶" | "#" | "§" | "🔗" | "⚓")
 }
 
 fn has_block_desc(el: ElementRef) -> bool {
@@ -619,6 +630,15 @@ mod tests {
 
     fn base() -> Url {
         Url::parse("https://example.com/post/").unwrap()
+    }
+
+    #[test]
+    fn heading_permalinks_are_not_text() {
+        let page = r##"<body><article><h2>Methods of File Objects<a class="headerlink" href="#methods">¶</a></h2>
+            <p>See <a href="#methods">the methods</a> for more.</p></article></body>"##;
+        let ex = html(page, &base());
+        assert_eq!(ex.blocks[0].text, "Methods of File Objects");
+        assert!(ex.blocks[1].text.contains("the methods"));
     }
 
     #[test]

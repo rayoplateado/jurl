@@ -95,6 +95,19 @@ In The Coal Question, Jevons covered a breadth of concepts on energy depletion �
 
 Out of a page with about 240 blocks, you get the two paragraphs that answer it.
 
+### Just the answer
+
+```console
+$ jurl --precise -q "what is the primary rate limit for authenticated users?" docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+5,000 requests per hour
+
+All of these requests count towards your personal rate limit of 5,000 requests per hour. …
+
+<https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#:~:text=rate%20limit%20of-,5%2C000%20requests%20per%20hour>
+```
+
+The first line is the answer, still in the page's own words: jurl splits the best blocks into candidates (values, names, clauses, sentences, lines of code) and Jev picks the one that is exactly the answer, then, among the shorter ones inside it, the one with nothing extra ("2009", not "2009; 17 years ago"). Then the block it came from, and a link that opens the page with the answer highlighted. If no part of the page is the answer, jurl says so and exits with an error instead of guessing, so a script gets an empty cell, not a wrong one. It never computes: if the page says "$8 a month", it won't tell you the yearly price. On 30 SaaS pricing pages ("What is the monthly price of the cheapest paid plan?") it answered 15, all of them right (Notion's as `Plus*€9.50`, with the plan's name stuck to it on the page), and left the rest empty.
+
 ### Just the code
 
 ````console
@@ -196,6 +209,7 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 | Flag | |
 | --- | --- |
 | `-q, --ask "…"` | Keep what answers the question. Works with every mode |
+| `-p, --precise` | With `-q`: just the answer, in the page's words, then its block and a link to it. Exits with an error when no part of the page is the answer |
 | `-c, --code` | Code blocks only |
 | `-l, --links` | Content links, best first |
 | `-i, --image` | Content images, judged by file name, alt text and caption |
@@ -204,7 +218,7 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 | `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps) |
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
-| `--threshold P` | Minimum probability (default 0.5) |
+| `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
 | `--json` | Machine-readable output, with every probability |
 | `-t, --timing` | Where the time went, on stderr |
 | `jurl init` | Set or replace your API keys |
