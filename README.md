@@ -231,7 +231,7 @@ Ten documentation pages, one question each, and what an agent gets back from eac
 
 | Reader | Exact answer | Code lines not on the page | Median tokens |
 | --- | --- | --- | --- |
-| `jurl -q` | 10/10 | 1 of 60 | 375 |
+| `jurl -q` | 10/10 | 0 of 60 | 375 |
 | Claude Code WebFetch | 10/10 | 33 of 63 | 148 |
 | Exa contents + highlights | 8/10 | 0 of 59 | 351 |
 | Tavily extract | 5/10 | 8 of 36 | 524 |
