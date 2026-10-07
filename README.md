@@ -233,7 +233,7 @@ Ten documentation pages, one question each ([bench/](bench) has the tasks, the s
 | --- | --- | --- | --- | --- |
 | Exact answer | **10/10** | **10/10** | 8/10 | 5/10 |
 | Code lines not on the page | **0 of 60** | 33 of 63 | **0 of 59** | 8 of 36 |
-| Cost per page | **$0.0004** | ~$0.015 | $0.001 | $0.0016 |
+| Cost per 10,000 pages | **$4** | ~$150 | $10 | $16 |
 | Tokens the agent reads | 375 | **148** | 351 | 524 |
 | Time per page | 0.8 s | — | **0.3 s** | 0.5 s |
 | Finds an image by what it shows | **yes** | no | no | no |
