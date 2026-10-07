@@ -34,11 +34,14 @@ const HOP_DECAY: f64 = 0.85;
 const COLD_PAGE: f64 = 0.3;
 /// When the best lead left is weaker than this, the trail has gone cold: stop instead of opening pages blindly.
 const COLD_TRAIL: f64 = 0.02;
+/// On a long search, how much a link's field of knowledge counts next to whether it leads to the answer.
+const FIELD_WEIGHT: f64 = 0.3;
 /// Each step, Jev compares this many of the best leads side by side to pick the next pages.
 const SHORTLIST: usize = 10;
 /// A page found to answer is kept unless a lead left could beat it by this much: a near tie isn't worth more pages.
 const BETTER_BY: f64 = 0.15;
-/// A wiki's own pages ("Wikipedia:Please_clarify", "Special:Search", "Help:Contents"): about the wiki, never the topic.
+/// A wiki's own pages ("Wikipedia:Please_clarify", "Special:Search", "Help:Contents", and the subpages under them
+/// like "Wikipedia:Manual_of_Style/Dates_and_numbers"): about the wiki, never the topic. So is "Main_Page".
 const WIKI_META: &[&str] =
     &["Wikipedia:", "Special:", "Help:", "Talk:", "User:", "User_talk:", "Template:", "File:", "Portal:"];
 const ASSETS: &[&str] = &[
@@ -62,8 +65,7 @@ impl Site {
             && !ASSETS.iter().any(|ext| lower.ends_with(ext))
             && !u
                 .path_segments()
-                .and_then(|mut s| s.next_back())
-                .is_some_and(|last| WIKI_META.iter().any(|m| last.starts_with(m)))
+                .is_some_and(|mut s| s.any(|p| p == "Main_Page" || WIKI_META.iter().any(|m| p.starts_with(m))))
             && u.host_str().is_some_and(|h| {
                 let h = h.trim_start_matches("www.");
                 h == self.root || h.ends_with(&format!(".{}", self.root))
@@ -217,12 +219,17 @@ fn locs(xml: &str) -> Vec<String> {
 }
 
 /// How likely each link is to lead to the answer, in `links` order.
-async fn score_links(ctx: &Ctx<'_>, links: &[Link], what: &str) -> Vec<f64> {
+///
+/// Far from the answer (Tennis → … → the boiling point of mercury) no link "leads to the answer" and those scores are
+/// noise (Birmingham 0.08, Philadelphia 0.07). On a long search (`--follow 10` and up) each link is also asked whether
+/// its page is in the answer's field of knowledge: vulcanized rubber and polyester (0.9) are chemistry, the way to
+/// the elements. That counts for [`FIELD_WEIGHT`] of what the first score leaves.
+async fn score_links(ctx: &Ctx<'_>, links: &[Link], what: &str, field: bool) -> Vec<f64> {
     if links.is_empty() {
         return Vec::new();
     }
     let q = ctx.args.ask.as_deref().unwrap_or_default();
-    let items = links
+    let mut items: Vec<Item> = links
         .iter()
         .map(|l| Item {
             id: format!("l{}", l.i),
@@ -233,8 +240,30 @@ async fn score_links(ctx: &Ctx<'_>, links: &[Link], what: &str) -> Vec<f64> {
             ))),
         })
         .collect();
+    if field {
+        let mut more = Vec::new();
+        for l in links {
+            more.push(Item {
+                id: format!("f{}", l.i),
+                state: serde_json::json!({ "i": l.i, "text": l.text, "path": l.url.path() }),
+                question: Some(noul(format!(
+                    "{what} with i={} is about the same field of knowledge as the answer to this question \
+                     (chemistry, astronomy, literature, medicine…): {q}",
+                    l.i
+                ))),
+            });
+        }
+        items.extend(more);
+    }
     match ctx.judge("links", items, Map::new()).await {
-        Ok(a) => links.iter().map(|l| a.noul(&format!("l{}", l.i)).unwrap_or(0.0)).collect(),
+        Ok(a) => links
+            .iter()
+            .map(|l| {
+                let p = a.noul(&format!("l{}", l.i)).unwrap_or(0.0);
+                let f = if field { a.noul(&format!("f{}", l.i)).unwrap_or(0.0) } else { 0.0 };
+                p + (1.0 - p) * FIELD_WEIGHT * f
+            })
+            .collect(),
         Err(_) => vec![0.0; links.len()],
     }
 }
@@ -295,8 +324,10 @@ async fn visit(args: &Args, cfg: &Config, client: &Client, key: &str, url: &Url,
                 ((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth)
             }
         };
-        let ((answer, warmth), scores) =
-            tokio::join!(answer, score_links(&ctx, &candidates, "Following the link in `links`"));
+        let ((answer, warmth), scores) = tokio::join!(
+            answer,
+            score_links(&ctx, &candidates, "Following the link in `links`", args.follow.unwrap_or(5) >= 10)
+        );
         let links = candidates.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect();
         match answer {
             Some((found, score)) => (Some(found), score, warmth, links),
@@ -387,7 +418,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             app_shell: false,
         };
         let ctx = Ctx::new(args, client, key, &start, &empty);
-        let scores = score_links(&ctx, &links, "The page at the URL in `links`").await;
+        let scores = score_links(&ctx, &links, "The page at the URL in `links`", false).await;
         links.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect::<Vec<_>>()
     };
     let (first, hints, robots) =
@@ -571,6 +602,17 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wikis_own_pages_are_not_followed() {
+        let site = Site::new(&Url::parse("https://en.wikipedia.org/wiki/Bicycle").unwrap());
+        for page in
+            ["Wikipedia:Please_clarify", "Wikipedia:Manual_of_Style/Dates_and_numbers", "Main_Page", "Special:Search"]
+        {
+            assert!(!site.contains(&Url::parse(&format!("https://en.wikipedia.org/wiki/{page}")).unwrap()), "{page}");
+        }
+        assert!(site.contains(&Url::parse("https://en.wikipedia.org/wiki/RMS_Titanic").unwrap()));
+    }
 
     #[test]
     fn same_site_includes_subdomains_not_assets() {

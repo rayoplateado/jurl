@@ -13,8 +13,18 @@
   {"group": "wikipedia", "start": "en.wikipedia.org/wiki/Medicine", "q": "What is the chemical formula of aspirin?", "expect": ["C9H8O4"], "pages": 8},
   {"group": "wikipedia", "start": "en.wikipedia.org/wiki/Paris", "q": "Who designed the Eiffel Tower?", "expect": ["Koechlin", "Nouguier", "Sauvestre", "Gustave Eiffel"], "pages": 6},
   {"group": "wikipedia", "start": "en.wikipedia.org/wiki/Alcohol", "q": "What is the boiling point of ethanol?", "expect": ["78"], "pages": 8},
-  {"group": "wikipedia", "start": "en.wikipedia.org/wiki/Paris", "q": "What is the chemical formula of aspirin?", "expect": ["C9H8O4"], "pages": 15},
+  {"group": "long", "start": "en.wikipedia.org/wiki/Paris", "q": "What is the chemical formula of aspirin?", "expect": ["C9H8O4", "HC9H7O4"], "pages": 15},
   {"group": "trap", "start": "tailscale.com", "q": "What is the phone number for customer support?", "expect": null, "pages": 8},
   {"group": "trap", "start": "linear.app", "q": "What is the name of the CEO's dog?", "expect": null, "pages": 8},
-  {"group": "trap", "start": "raycast.com", "q": "What is the price of the Ultra plan?", "expect": null, "pages": 8}
+  {"group": "trap", "start": "raycast.com", "q": "What is the price of the Ultra plan?", "expect": null, "pages": 8},
+  {"group": "long", "start": "en.wikipedia.org/wiki/Banana", "q": "What is the atomic number of uranium?", "expect": ["92"], "pages": 15},
+  {"group": "long", "start": "en.wikipedia.org/wiki/Jazz", "q": "How many moons does Mars have?", "expect": ["two", "Two", "2"], "pages": 15},
+  {"group": "long", "start": "en.wikipedia.org/wiki/Tennis", "q": "What is the boiling point of mercury?", "expect": ["356", "629"], "pages": 15},
+  {"group": "long", "start": "en.wikipedia.org/wiki/Pizza", "q": "Who wrote Don Quixote?", "expect": ["Cervantes"], "pages": 15},
+  {"group": "heldout", "start": "en.wikipedia.org/wiki/Volcano", "q": "Who painted the Mona Lisa?", "expect": ["Leonardo"], "pages": 15},
+  {"group": "heldout", "start": "en.wikipedia.org/wiki/Chess", "q": "What is the speed of sound in air?", "expect": ["343", "1,235", "767"], "pages": 15},
+  {"group": "heldout", "start": "en.wikipedia.org/wiki/Coffee", "q": "Who composed The Magic Flute?", "expect": ["Mozart"], "pages": 15},
+  {"group": "heldout", "start": "en.wikipedia.org/wiki/Association_football", "q": "What is the half-life of carbon-14?", "expect": ["5,730", "5730", "5700", "5,700"], "pages": 15},
+  {"group": "heldout", "start": "en.wikipedia.org/wiki/Guitar", "q": "What is the largest planet in the Solar System?", "expect": ["Jupiter"], "pages": 15},
+  {"group": "heldout", "start": "en.wikipedia.org/wiki/Bicycle", "q": "In what year did the Titanic sink?", "expect": ["1912"], "pages": 15}
 ]
