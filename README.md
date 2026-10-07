@@ -117,7 +117,7 @@ $10 per user/month
 jurl: found after reading 4 pages: linear.app/ → linear.app/pricing
 ```
 
-With `--follow`, a page that doesn't answer isn't the end. jurl reads the site's own map (`llms.txt`, `sitemap.xml`) while it reads the first page, Jev scores every link by how likely it leads to the answer, then compares the best ten side by side and opens the two it likes most, keeping on from whichever page looks closest, the way people play the Wikipedia game. On a long search (`--follow 10` and up) Jev also asks of each link whether its page is in the answer's field of knowledge: far from the answer, "leads to the answer" is noise (from Tennis: Birmingham, Philadelphia), while the field points the way (vulcanized rubber, polyester: chemistry, then the elements, then mercury). It plays hot and cold: a link counts for as much as its page is close to the question (a docs index with a link straight to the answer counts as close), so a wrong turn is dropped and the search goes back to the page that was getting warmer. A page that answers is ranked by how sure Jev is of the answer and of the page, and jurl stops only when no page left could beat it by much: the pricing page beats both a home-page FAQ line and an old blog post quoting last year's price. It stays on the same site (subdomains included), skips what `robots.txt` disallows, and stops after 5 pages (`--follow 10` for more; longer searches open three pages per step). The path comes last, on stderr, or as `path` in `--json`; `-t` shows how warm each page was.
+With `--follow`, a page that doesn't answer isn't the end. It is `--precise` and `--links -q` in a loop: each page is asked for the answer, and its links are scored by how likely they lead to it. jurl reads the site's own map (`llms.txt`, `sitemap.xml`) while it reads the first page, then compares the best ten links side by side and opens the two it likes most, keeping on from whichever page looks closest, the way people play the Wikipedia game. On a long search (`--follow 10` and up) Jev also asks of each link whether its page is in the answer's field of knowledge: far from the answer, "leads to the answer" is noise (from Tennis: Birmingham, Philadelphia), while the field points the way (vulcanized rubber, polyester: chemistry, then the elements, then mercury). It plays hot and cold: a link counts for as much as its page is close to the question (a docs index with a link straight to the answer counts as close), so a wrong turn is dropped and the search goes back to the page that was getting warmer. A page that answers is ranked by how sure Jev is of the answer and of the page, and jurl stops only when no page left could beat it by much: the pricing page beats both a home-page FAQ line and an old blog post quoting last year's price. It stays on the same site (subdomains included), skips what `robots.txt` disallows, and stops after 5 pages (`--follow 10` for more; longer searches open three pages per step). The path comes last, on stderr, or as `path` in `--json`; `-t` shows how warm each page was.
 
 On [18 searches](bench/follow.json), each run 3 times: 24/24 pricing pages found from the bare domain (3 pages, ~2.5 s, ~$0.003 each), 8/9 answers in docs found from the docs' root, 9/9 short Wikipedia games (Medicine → Aspirin: `C9H8O4`), and 9/9 questions the site doesn't answer left empty. Long games with `--follow 15`, 3 to 5 clicks apart: 15/15 on the games it was tuned on (Paris → Aspirin, Tennis → the boiling point of mercury, Jazz → the moons of Mars) and 16/18 on six it had never seen (Volcano → Mona Lisa, Chess → the speed of sound), ~4.5 s and ~$0.035 each.
 
@@ -139,13 +139,21 @@ $ cargo install ripgrep
 ### Links worth following
 
 ```console
-$ jurl --links -n 3 -q "official installation instructions" github.com/BurntSushi/ripgrep
-https://www.macports.org/ports.php?by=name&substr=ripgrep
-https://packages.gentoo.org/packages/sys-apps/ripgrep
-https://chocolatey.org/packages/ripgrep
+$ jurl --links -n 3 github.com/BurntSushi/ripgrep
+https://beyondgrep.com/feature-comparison/
+https://docs.rs/regex/1/regex/
+https://dandavison.github.io/delta/grep.html
 ```
 
-The ranking puts content first, ahead of `login`, `share` or `privacy policy`. Add `-q` to keep only the links about something specific.
+The ranking puts content first, ahead of `login`, `share` or `privacy policy`.
+
+```console
+$ jurl --links -n 2 -q "What is the monthly price of the cheapest paid plan?" linear.app
+https://linear.app/pricing
+https://linear.app/plan
+```
+
+With `-q`, each link is scored by how likely following it leads to the answer. Menus and footers count too: a nav bar's `Pricing` is often the way to a price. These are the links `--follow` opens.
 
 ### The real images
 
@@ -225,7 +233,7 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 | `--follow [N]` | With `-q`: when the page doesn't answer, follow links on the same site, most promising first, reading up to N pages (default 5) |
 | `-p, --precise` | With `-q`: just the answer, in the page's words, then its block and a link to it. Exits with an error when no part of the page is the answer |
 | `-c, --code` | Code blocks only |
-| `-l, --links` | Content links, best first |
+| `-l, --links` | Content links, best first. With `-q`, the links most likely to lead to the answer, menus included |
 | `-i, --image` | Content images, judged by file name, alt text and caption |
 | `--vision` | Like `--image`, plus Clef looks at the pixels |
 | `-f, --find "…"` | The image that best matches the description |
@@ -338,7 +346,8 @@ cargo build --release && ./target/release/jurl -t <url>
 | --- | --- |
 | `src/main.rs` | Modes, chunking, hedging, output |
 | `src/precise.rs` | `--precise`: candidate spans and the link to them |
-| `src/follow.rs` | `--follow`: site map, link scoring, best-first search |
+| `src/links.rs` | `--links -q` and `--follow`: which links lead to the answer |
+| `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
 | `src/extract.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
