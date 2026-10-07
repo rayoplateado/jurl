@@ -5,6 +5,7 @@ mod fetch;
 mod follow;
 mod lightpanda;
 mod links;
+mod mcp;
 mod precise;
 mod setup;
 mod update;
@@ -34,7 +35,8 @@ use crate::{
 #[derive(Parser)]
 #[command(version)]
 struct Args {
-    /// The page to read, `init` to set up your API keys, or `update` to install the latest jurl
+    /// The page to read, `init` to set up your API keys, `update` to install the latest jurl, or `mcp` to serve
+    /// jurl's tools to an AI agent (MCP over stdio)
     url: String,
     /// Keep what helps answer this question instead of a general summary
     #[arg(short = 'q', long)]
@@ -307,21 +309,38 @@ async fn main() -> ExitCode {
     }
 }
 
+/// What a mode found, both ways: the text a person reads and the JSON a script reads. The CLI prints one of them
+/// (`--json`); `jurl mcp` hands an agent both.
+#[derive(Debug)]
+pub struct Rendered {
+    pub text: String,
+    pub json: Value,
+}
+
 /// The page or site was read fine and has nothing to print: no answer, no image like that, nothing above the
 /// threshold. Exits 1, the way grep does when nothing matches, so a script can tell it from a failure.
 #[derive(Debug)]
-pub struct NotFound(String);
+pub struct NotFound {
+    message: String,
+    /// With --precise, what came closest: `--json` still prints it, with `"answer": null`.
+    closest: Option<Rendered>,
+}
 
 impl std::fmt::Display for NotFound {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
 impl std::error::Error for NotFound {}
 
 pub fn not_found(message: String) -> anyhow::Error {
-    NotFound(message).into()
+    NotFound { message, closest: None }.into()
+}
+
+/// A miss that still has something to show in JSON: the closest candidate.
+pub fn missed(message: String, closest: Rendered) -> anyhow::Error {
+    NotFound { message, closest: Some(closest) }.into()
 }
 
 /// 1 when nothing was found, 2 for every failure (fetching, the API, arguments), as grep does.
@@ -342,6 +361,36 @@ async fn run(mut args: Args) -> Result<()> {
     if args.url == "init" {
         return setup::init(&mut cfg, &client).await;
     }
+    if args.url == "mcp" {
+        return mcp::serve(client).await;
+    }
+    prepare(&mut args)?;
+    let key = setup::typesafe_key(&mut cfg, &client).await?;
+
+    let mut t = Timer::new();
+    let done = page(&args, &cfg, &client, &key, &mut t).await;
+    // A miss costs tokens too: -t reports them either way.
+    if args.timing {
+        t.report();
+    }
+    let shown = match &done {
+        Ok(r) => Some(r),
+        Err(e) => e.chain().find_map(|c| c.downcast_ref::<NotFound>()).and_then(|n| n.closest.as_ref()),
+    };
+    // A miss prints nothing, except in JSON: what came closest, with `"answer": null`.
+    if let Some(r) = shown {
+        let mut out = stdout().lock();
+        if args.json {
+            writeln!(out, "{}", serde_json::to_string_pretty(&r.json)?)?;
+        } else if done.is_ok() {
+            write!(out, "{}", r.text)?;
+        }
+    }
+    done.map(|_| ())
+}
+
+/// The URL and flags made whole and checked: `--find` is a question for `--vision`, a bare domain gets https://.
+fn prepare(args: &mut Args) -> Result<()> {
     if !args.url.contains("://") {
         args.url = format!("https://{}", args.url);
     }
@@ -365,9 +414,12 @@ async fn run(mut args: Args) -> Result<()> {
     if args.follow.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
         bail!("--follow looks for an answer: use it with -q (and --precise or --code), not images or links");
     }
-    let key = setup::typesafe_key(&mut cfg, &client).await?;
+    Ok(())
+}
 
-    let mut t = Timer::new();
+/// The page (or with --follow, the site) read in the mode `args` asks for: what the CLI prints and what `jurl mcp`
+/// answers.
+async fn page(args: &Args, cfg: &Config, client: &Client, key: &str, t: &mut Timer) -> Result<Rendered> {
     // Warm the API connections (TLS handshakes) while the page downloads.
     let mut hosts = vec!["https://api.typesafe.ai/"];
     if args.vision {
@@ -378,12 +430,7 @@ async fn run(mut args: Args) -> Result<()> {
         async move { join_all(hosts.into_iter().map(|h| c.head(h).send())).await }
     });
     let target: url::Url = args.url.parse().with_context(|| format!("bad url {}", args.url))?;
-    let done = read(&args, &cfg, &client, &key, target, warm, &mut t).await;
-    // A miss costs tokens too: -t reports them either way.
-    if args.timing {
-        t.report();
-    }
-    done
+    read(args, cfg, client, key, target, warm, t).await
 }
 
 /// The page (or with --follow, the site) read in the mode asked for.
@@ -395,7 +442,7 @@ async fn read(
     target: url::Url,
     warm: tokio::task::JoinHandle<impl Sized>,
     t: &mut Timer,
-) -> Result<()> {
+) -> Result<Rendered> {
     if args.follow.is_some() {
         let _ = warm.await;
         return follow::run(args, cfg, client, key, target, t).await;
@@ -452,7 +499,7 @@ async fn load(
 }
 
 /// Default mode and --code: pick blocks, print them in page order.
-async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
+async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {
     let args = ctx.args;
     let (scores, kind) = score_blocks(ctx, ex, t).await?;
 
@@ -472,10 +519,17 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
             return Err(not_found(format!("nothing in {} answers that", ctx.url)));
         }
         let pick = precise_pick(ctx, ex, &keep, t).await?;
-        return print_precise(ctx, ex, &pick, None);
+        let rendered = render_precise(ctx, ex, &pick, None);
+        if pick.p < ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD) {
+            let answer = &ex.blocks[pick.block].text[pick.range.clone()];
+            let message =
+                format!("no part of {} is exactly the answer (closest: \"{answer}\", p={:.2})", ctx.url, pick.p);
+            return Err(missed(message, rendered));
+        }
+        return Ok(rendered);
     }
     let keep = top(&scores, args.threshold(), args.limit(default_max));
-    print_blocks(ctx, ex, &scores, &keep, kind, None)
+    render_blocks(ctx, ex, &scores, &keep, kind, None)
 }
 
 /// Jev's probability for each block (None for headings and blocks too short to judge alone), and the page's kind.
@@ -537,15 +591,15 @@ async fn score_blocks(
     Ok((scores, kind))
 }
 
-/// The kept blocks in page order, each with its heading, as markdown or JSON. `path` is how --follow got here.
-fn print_blocks(
+/// The kept blocks in page order, each with its heading, as markdown and JSON. `path` is how --follow got here.
+fn render_blocks(
     ctx: &Ctx<'_>,
     ex: &Extracted,
     scores: &[Option<f64>],
     keep: &HashMap<usize, f64>,
     kind: Option<(String, f64)>,
     path: Option<&[url::Url]>,
-) -> Result<()> {
+) -> Result<Rendered> {
     let args = ctx.args;
     let mut pending_heading = None;
     let mut selected = Vec::new();
@@ -567,40 +621,36 @@ fn print_blocks(
         return Err(not_found(format!("nothing in {} looks like content (try a lower --threshold)", ctx.url)));
     }
 
-    let mut out = stdout().lock();
-    if args.json {
-        let blocks: Vec<_> = selected
-            .iter()
-            .map(|b| {
-                let mut v = serde_json::to_value(b).unwrap();
-                if let Some(p) = scores[b.i] {
-                    v["p"] = json!(p);
-                }
-                v
-            })
-            .collect();
-        let mut doc = json!({
-            "url": ctx.url.as_str(),
-            "title": ex.title,
-            "ask": args.ask,
-            "kind": kind.as_ref().map(|k| json!({ "choice": k.0, "confidence": k.1 })),
-            "blocks": blocks,
-        });
-        if let Some(path) = path {
-            doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
-        }
-        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
-    } else {
-        if !ex.title.is_empty() {
-            writeln!(out, "# {}\n", ex.title)?;
-        }
-        let kind = kind.map(|(k, c)| format!(" · {k} ({c:.2})")).unwrap_or_default();
-        writeln!(out, "<{}>{kind}\n", ctx.url)?;
-        for b in selected {
-            writeln!(out, "{}\n", b.markdown())?;
-        }
+    let blocks: Vec<_> = selected
+        .iter()
+        .map(|b| {
+            let mut v = serde_json::to_value(b).unwrap();
+            if let Some(p) = scores[b.i] {
+                v["p"] = json!(p);
+            }
+            v
+        })
+        .collect();
+    let mut doc = json!({
+        "url": ctx.url.as_str(),
+        "title": ex.title,
+        "ask": args.ask,
+        "kind": kind.as_ref().map(|k| json!({ "choice": k.0, "confidence": k.1 })),
+        "blocks": blocks,
+    });
+    if let Some(path) = path {
+        doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
     }
-    Ok(())
+    let mut text = String::new();
+    if !ex.title.is_empty() {
+        text += &format!("# {}\n\n", ex.title);
+    }
+    let kind = kind.map(|(k, c)| format!(" · {k} ({c:.2})")).unwrap_or_default();
+    text += &format!("<{}>{kind}\n\n", ctx.url);
+    for b in selected {
+        text += &format!("{}\n\n", b.markdown());
+    }
+    Ok(Rendered { text, json: doc })
 }
 
 /// The --precise answer: a byte range of one block's text, and how sure Jev is that it's exactly the answer.
@@ -704,9 +754,9 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>,
     Ok(Pick { block: top[best.block].i, range: best.range.clone(), p })
 }
 
-/// The answer on its own line, then the block it's in and a link to it; JSON says how sure. `path` is how --follow got
-/// here.
-fn print_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url::Url]>) -> Result<()> {
+/// The answer on its own line, then the block it's in and a link to it; JSON says how sure, and below the threshold
+/// has it as `closest` instead of `answer`. `path` is how --follow got here.
+fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url::Url]>) -> Rendered {
     let q = ctx.args.ask.as_deref().unwrap_or_default();
     let threshold = ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD);
     let block = &ex.blocks[pick.block];
@@ -714,45 +764,26 @@ fn print_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url:
     let link = precise::link(ctx.url, &block.text, &pick.range);
     let p = pick.p;
 
-    let mut out = stdout().lock();
-    if ctx.args.json {
-        let mut doc = json!({
-            "url": ctx.url.as_str(),
-            "title": ex.title,
-            "ask": q,
-            "answer": (p >= threshold).then_some(answer),
-            "closest": (p < threshold).then_some(answer),
-            "p": p,
-            "quote": block.text,
-            "block": block.i,
-            "link": link,
-        });
-        if let Some(path) = path {
-            doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
-        }
-        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
-        // The JSON says what came closest, but a miss is still a miss: the same exit code as without --json.
-        if p < threshold && path.is_none() {
-            return Err(not_found(format!(
-                "no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})",
-                ctx.url
-            )));
-        }
-        return Ok(());
+    let mut doc = json!({
+        "url": ctx.url.as_str(),
+        "title": ex.title,
+        "ask": q,
+        "answer": (p >= threshold).then_some(answer),
+        "closest": (p < threshold).then_some(answer),
+        "p": p,
+        "quote": block.text,
+        "block": block.i,
+        "link": link,
+    });
+    if let Some(path) = path {
+        doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
     }
-    if p < threshold {
-        return Err(not_found(format!(
-            "no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})",
-            ctx.url
-        )));
-    }
-    writeln!(out, "{answer}\n\n{}\n\n<{link}>", block.markdown())?;
-    Ok(())
+    Rendered { text: format!("{answer}\n\n{}\n\n<{link}>\n", block.markdown()), json: doc }
 }
 
 /// --links: the links worth following, best first. With -q, the links most likely to lead to the answer: what
 /// --follow opens, menus and footers included (a nav bar's "Pricing" is often the way to a price).
-async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
+async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {
     let (candidates, scores): (Vec<Link>, Vec<Option<f64>>) = if ctx.args.ask.is_some() {
         let candidates = links::candidates(ctx, ex, |_| true);
         if candidates.is_empty() {
@@ -788,30 +819,19 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     }
     kept.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-    let mut out = stdout().lock();
-    if ctx.args.json {
-        let v: Vec<_> = kept
-            .iter()
-            .map(|(i, p)| {
-                let l = &candidates[*i];
-                json!({ "url": l.url.as_str(), "text": l.text, "p": p })
-            })
-            .collect();
-        writeln!(
-            out,
-            "{}",
-            serde_json::to_string_pretty(&json!({ "url": ctx.url.as_str(), "title": ex.title, "links": v }))?
-        )?;
-    } else {
-        for (i, _) in kept {
-            writeln!(out, "{}", candidates[i].url)?;
-        }
-    }
-    Ok(())
+    let v: Vec<_> = kept
+        .iter()
+        .map(|(i, p)| {
+            let l = &candidates[*i];
+            json!({ "url": l.url.as_str(), "text": l.text, "p": p })
+        })
+        .collect();
+    let text = kept.iter().map(|(i, _)| format!("{}\n", candidates[*i].url)).collect();
+    Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "links": v }) })
 }
 
 /// --image / --vision: content images, best first.
-async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> Result<()> {
+async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {
     if ex.images.is_empty() {
         return Err(not_found(format!("no images found in {}", ctx.url)));
     }
@@ -935,23 +955,12 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
     if kept.is_empty() {
         return Err(not_found(format!("no content images in {} (try a lower --threshold)", ctx.url)));
     }
-    let mut out = stdout().lock();
-    if ctx.args.json {
-        let v: Vec<_> = kept
-            .iter()
-            .map(|(i, p)| json!({ "url": i.url.as_str(), "alt": i.alt, "caption": i.caption, "p": p }))
-            .collect();
-        writeln!(
-            out,
-            "{}",
-            serde_json::to_string_pretty(&json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }))?
-        )?;
-    } else {
-        for (i, _) in kept {
-            writeln!(out, "{}", i.url)?;
-        }
-    }
-    Ok(())
+    let v: Vec<_> = kept
+        .iter()
+        .map(|(i, p)| json!({ "url": i.url.as_str(), "alt": i.alt, "caption": i.caption, "p": p }))
+        .collect();
+    let text = kept.iter().map(|(i, _)| format!("{}\n", i.url)).collect();
+    Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }) })
 }
 
 /// Clef on several images at once, each bounded by the vision deadline.
@@ -1067,6 +1076,7 @@ mod tests {
         assert_eq!(exit_code(&not_found("nothing in x answers that".into())), 1);
         // Still nothing found when something along the way adds context.
         assert_eq!(exit_code(&not_found("no image".into()).context("reading x")), 1);
+        assert_eq!(exit_code(&missed("no answer".into(), Rendered { text: String::new(), json: json!({}) })), 1);
         assert_eq!(exit_code(&anyhow!("https://x.com returned HTTP 404 Not Found")), 2);
         assert_eq!(exit_code(&anyhow!("api.typesafe.ai → HTTP 402: no credits")), 2);
     }

@@ -13,12 +13,12 @@ use serde_json::Map;
 use url::Url;
 
 use crate::{
-    Args, Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, Timer,
+    Args, Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, Rendered, Timer,
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Link},
     links::{self, key, overlap},
-    load, precise_pick, print_blocks, print_precise, score_blocks, top,
+    load, missed, precise_pick, render_blocks, render_precise, score_blocks, top,
 };
 
 /// Pages opened at once on each step. Two, so the default 5 pages are two full steps (1 + 2 + 2): answers two links
@@ -341,7 +341,7 @@ async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Option<(Vec<usize>, f64)> 
     Some((order, probs.get("none").copied().unwrap_or(0.0)))
 }
 
-pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: Url, t: &mut Timer) -> Result<()> {
+pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: Url, t: &mut Timer) -> Result<Rendered> {
     let max = args.follow.unwrap_or(5).max(1);
     let threshold = if args.precise { args.threshold.unwrap_or(PRECISE_THRESHOLD) } else { args.threshold() };
     let site = Site::new(&start);
@@ -518,11 +518,9 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     let trail = |path: &[Url]| {
         path.iter().map(|u| u.as_str().trim_start_matches("https://").to_string()).collect::<Vec<_>>().join(" → ")
     };
-    let (v, path, answered) = match found.into_iter().next() {
-        Some((_, v, path)) => (v, path, true),
+    let (v, path, missed_by) = match found.into_iter().next() {
+        Some((_, v, path)) => (v, path, None),
         None => match closest {
-            // JSON says what came closest, as on a single page, and fails like it; text fails with it in the message.
-            Some((_, v, path)) if args.json && args.precise => (v, path, false),
             Some((_, v, path)) => {
                 let what = match &v.found {
                     Some(Found::Precise(pick)) if pick.p >= PRECISE_BLOCK_FLOOR => {
@@ -535,11 +533,13 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
                     }
                     _ => String::new(),
                 };
-                let _ = path;
-                return Err(crate::not_found(format!(
-                    "read {pages} pages of {} and none answers that{what}",
-                    site.root
-                )));
+                let message = format!("read {pages} pages of {} and none answers that{what}", site.root);
+                // JSON says what came closest, as on a single page, and fails like it; text fails with it in the
+                // message.
+                if !(args.json && args.precise) {
+                    return Err(crate::not_found(message));
+                }
+                (v, path, Some(message))
             }
             None if cold => {
                 return Err(crate::not_found(format!(
@@ -551,21 +551,20 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         },
     };
     let ctx = Ctx::new(args, client, key, &v.url, &v.ex);
-    match &v.found {
-        Some(Found::Precise(pick)) => print_precise(&ctx, &v.ex, pick, Some(&path))?,
+    let rendered = match &v.found {
+        Some(Found::Precise(pick)) => render_precise(&ctx, &v.ex, pick, Some(&path)),
         Some(Found::Blocks { scores, keep, kind }) => {
-            print_blocks(&ctx, &v.ex, scores, keep, kind.clone(), Some(&path))?
+            render_blocks(&ctx, &v.ex, scores, keep, kind.clone(), Some(&path))?
         }
         None => unreachable!("found pages always have an answer"),
+    };
+    if let Some(message) = missed_by {
+        return Err(missed(message, rendered));
     }
     if !args.json {
-        let state = if answered { "found" } else { "closest" };
-        eprintln!("jurl: {state} after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
+        eprintln!("jurl: found after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
     }
-    if !answered {
-        return Err(crate::not_found(format!("read {pages} pages of {} and none answers that", site.root)));
-    }
-    Ok(())
+    Ok(rendered)
 }
 
 #[cfg(test)]
