@@ -675,7 +675,7 @@ fn print_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url:
         }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
         // The JSON says what came closest, but a miss is still a miss: the same exit code as without --json.
-        if p < threshold {
+        if p < threshold && path.is_none() {
             bail!("no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})", ctx.url);
         }
         return Ok(());

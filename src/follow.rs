@@ -534,6 +534,9 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         let state = if answered { "found" } else { "closest" };
         eprintln!("jurl: {state} after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
     }
+    if !answered {
+        bail!("read {pages} pages of {} and none answers that", site.root);
+    }
     Ok(())
 }
 
