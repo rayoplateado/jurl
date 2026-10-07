@@ -1,0 +1,285 @@
+[
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": "Leonardo da Vinci",
+  "right": true,
+  "pages": 15,
+  "tokens": 1202354,
+  "ms": 5237,
+  "path": [
+   "https://en.wikipedia.org/wiki/Volcano",
+   "https://en.wikipedia.org/wiki/Smithsonian_Institution",
+   "https://en.wikipedia.org/wiki/Portrait_painting",
+   "https://en.wikipedia.org/wiki/Mona_Lisa"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": "Leonardo",
+  "right": true,
+  "pages": 13,
+  "tokens": 1046072,
+  "ms": 5214,
+  "path": [
+   "https://en.wikipedia.org/wiki/Volcano",
+   "https://en.wikipedia.org/wiki/Smithsonian_Institution",
+   "https://en.wikipedia.org/wiki/Portrait_painting",
+   "https://en.wikipedia.org/wiki/Leonardo_da_Vinci"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": "Leonardo da Vinci",
+  "right": true,
+  "pages": 15,
+  "tokens": 1265335,
+  "ms": 5082,
+  "path": [
+   "https://en.wikipedia.org/wiki/Volcano",
+   "https://en.wikipedia.org/wiki/Smithsonian_Institution",
+   "https://en.wikipedia.org/wiki/Portrait_painting",
+   "https://en.wikipedia.org/wiki/Mona_Lisa"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "343 m/s",
+  "right": true,
+  "pages": 10,
+  "tokens": 800705,
+  "ms": 5185,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_science",
+   "https://en.wikipedia.org/wiki/Fluid_dynamics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "340 m/s",
+  "right": false,
+  "pages": 15,
+  "tokens": 1054207,
+  "ms": 6642,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Mathematics",
+   "https://en.wikipedia.org/wiki/Science",
+   "https://en.wikipedia.org/wiki/Natural_science",
+   "https://en.wikipedia.org/wiki/Atmospheric_science",
+   "https://en.wikipedia.org/wiki/Air"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "343 m/s",
+  "right": true,
+  "pages": 13,
+  "tokens": 938017,
+  "ms": 5919,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_science",
+   "https://en.wikipedia.org/wiki/Physics",
+   "https://en.wikipedia.org/wiki/Acoustics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Wolfgang Amadeus Mozart",
+  "right": true,
+  "pages": 15,
+  "tokens": 1231408,
+  "ms": 4584,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Coffeehouse",
+   "https://en.wikipedia.org/wiki/Vienna"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Wolfgang Amadeus Mozart",
+  "right": true,
+  "pages": 10,
+  "tokens": 824090,
+  "ms": 3552,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Cappuccino",
+   "https://en.wikipedia.org/wiki/Vienna",
+   "https://en.wikipedia.org/wiki/Wolfgang_Amadeus_Mozart"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Wolfgang Amadeus Mozart",
+  "right": true,
+  "pages": 13,
+  "tokens": 1203087,
+  "ms": 3938,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Coffeehouse",
+   "https://en.wikipedia.org/wiki/Vienna",
+   "https://en.wikipedia.org/wiki/Wolfgang_Amadeus_Mozart"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": "5700±30 years",
+  "right": true,
+  "pages": 10,
+  "tokens": 607460,
+  "ms": 3460,
+  "path": [
+   "https://en.wikipedia.org/wiki/Association_football",
+   "https://en.wikipedia.org/wiki/SI",
+   "https://en.wikipedia.org/wiki/Radioactive_decay",
+   "https://en.wikipedia.org/wiki/Carbon-14"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": "5700±30 years",
+  "right": true,
+  "pages": 10,
+  "tokens": 617011,
+  "ms": 3244,
+  "path": [
+   "https://en.wikipedia.org/wiki/Association_football",
+   "https://en.wikipedia.org/wiki/SI",
+   "https://en.wikipedia.org/wiki/Radioactive_decay",
+   "https://en.wikipedia.org/wiki/Carbon-14"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": "5700±30 years",
+  "right": true,
+  "pages": 10,
+  "tokens": 637478,
+  "ms": 3420,
+  "path": [
+   "https://en.wikipedia.org/wiki/Association_football",
+   "https://en.wikipedia.org/wiki/SI",
+   "https://en.wikipedia.org/wiki/Radioactive_decay",
+   "https://en.wikipedia.org/wiki/Carbon-14"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": "Jupiter",
+  "right": true,
+  "pages": 13,
+  "tokens": 972135,
+  "ms": 3910,
+  "path": [
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Brass",
+   "https://en.wikipedia.org/wiki/Astrolabe",
+   "https://en.wikipedia.org/wiki/Classical_planets",
+   "https://en.wikipedia.org/wiki/Jupiter"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": "Jupiter",
+  "right": true,
+  "pages": 13,
+  "tokens": 906761,
+  "ms": 4783,
+  "path": [
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Radio",
+   "https://en.wikipedia.org/wiki/Gamma_rays",
+   "https://en.wikipedia.org/wiki/Cosmic_ray",
+   "https://en.wikipedia.org/wiki/Solar_System"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": "Jupiter",
+  "right": true,
+  "pages": 13,
+  "tokens": 905528,
+  "ms": 4673,
+  "path": [
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Radio",
+   "https://en.wikipedia.org/wiki/X-ray",
+   "https://en.wikipedia.org/wiki/Universe",
+   "https://en.wikipedia.org/wiki/Planet"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 985474,
+  "ms": 4777,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 834079,
+  "ms": 6073,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": "1912",
+  "right": true,
+  "pages": 10,
+  "tokens": 759586,
+  "ms": 3301,
+  "path": [
+   "https://en.wikipedia.org/wiki/Bicycle",
+   "https://en.wikipedia.org/wiki/Steel",
+   "https://en.wikipedia.org/wiki/Ship",
+   "https://en.wikipedia.org/wiki/RMS_Titanic"
+  ]
+ }
+]

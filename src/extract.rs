@@ -59,6 +59,10 @@ pub struct Link {
     pub url: Url,
     pub text: String,
     pub context: String,
+    /// Only ever a footnote mark (inside `<sup>`: "[1]", "[clarification needed]") or an image with no text (on a wiki
+    /// it opens the photo's own page): beside the text, never a way to the topic. A link to the same page in words
+    /// clears it.
+    pub marginal: bool,
 }
 
 pub struct Extracted {
@@ -172,7 +176,7 @@ pub fn html(body: &str, base: &Url) -> Extracted {
             .filter(|c| *c != text)
             .map(|c| c.chars().take(200).collect())
             .unwrap_or_default();
-        push_link(&mut links, base, v.attr("href").unwrap_or(""), text, context);
+        push_link(&mut links, base, v.attr("href").unwrap_or(""), text, context, marginal(a));
     }
 
     let app_shell = doc.select(&sel("script")).next().is_some()
@@ -194,7 +198,7 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         } else {
             text
         };
-        push_link(&mut site_links, base, v.attr("href").unwrap_or(""), text, String::new());
+        push_link(&mut site_links, base, v.attr("href").unwrap_or(""), text, String::new(), marginal(a));
     }
     Extracted { title: collapse(&title), blocks: join_short(w.blocks), images, links, site_links, app_shell }
 }
@@ -324,7 +328,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             } else {
                 collapse(line).chars().take(200).collect()
             };
-            push_link(&mut links, base, href, collapse(text), context);
+            push_link(&mut links, base, href, collapse(text), context, false);
         }
         for (alt, src) in md_images(line) {
             push_image(&mut images, base, src, None, collapse(alt), String::new(), None, None);
@@ -336,10 +340,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
     {
         title = h.text.clone();
     }
-    let site_links = links
-        .iter()
-        .map(|l| Link { i: l.i, url: l.url.clone(), text: l.text.clone(), context: l.context.clone() })
-        .collect();
+    let site_links = links.clone();
     Extracted { title, blocks: join_short(blocks), images, links, site_links, app_shell: false }
 }
 
@@ -687,7 +688,13 @@ fn noise(url: &Url, width: Option<u32>, height: Option<u32>) -> bool {
     WORDS.iter().any(|w| full.contains(w))
 }
 
-fn push_link(out: &mut Vec<Link>, base: &Url, href: &str, text: String, context: String) {
+/// A link in a footnote mark (`<sup>`), or an image with no text: see [`Link::marginal`].
+fn marginal(a: ElementRef) -> bool {
+    let image_only = a.text().all(|t| t.trim().is_empty()) && a.select(&sel("img")).next().is_some();
+    image_only || a.ancestors().filter_map(ElementRef::wrap).any(|e| e.value().name() == "sup")
+}
+
+fn push_link(out: &mut Vec<Link>, base: &Url, href: &str, text: String, context: String, marginal: bool) {
     let href = href.trim();
     if href.is_empty() || href.starts_with('#') {
         return;
@@ -706,9 +713,10 @@ fn push_link(out: &mut Vec<Link>, base: &Url, href: &str, text: String, context:
         if existing.text.is_empty() {
             existing.text = text;
         }
+        existing.marginal &= marginal;
         return;
     }
-    out.push(Link { i: out.len(), url, text, context });
+    out.push(Link { i: out.len(), url, text, context, marginal });
 }
 
 /// `[text](url)` that is not an image.
@@ -901,6 +909,25 @@ mod tests {
         assert_eq!(ex.links.len(), 1);
         assert_eq!(ex.links[0].url.as_str(), "https://example.com/docs");
         assert_eq!(ex.links[0].text, "the docs");
+    }
+
+    #[test]
+    fn footnote_marks_and_image_only_links_are_marginal() {
+        let page = "<body><a href='/'><img alt='Logo' src='/logo.png'></a><article><p>Built in 1889 \
+            <sup><i>[<a href='/wiki/Help:Clarify'>clarification needed</a>]</i></sup> by \
+            <a href='/wiki/Gustave_Eiffel'>Eiffel</a>.</p><a href='/wiki/File:Tower.jpg'><img alt='The tower' \
+            src='/tower.jpg'></a><p><a href='/'>Home</a></p>\
+            </article></body>";
+        let ex = html(page, &base());
+        let marginal = |path: &str| ex.links.iter().find(|l| l.url.path() == path).map(|l| l.marginal);
+        assert_eq!(marginal("/wiki/Help:Clarify"), Some(true));
+        assert_eq!(marginal("/wiki/File:Tower.jpg"), Some(true));
+        assert_eq!(marginal("/wiki/Gustave_Eiffel"), Some(false));
+        // `site_links` carry the mark too: candidates read both lists.
+        let site = |path: &str| ex.site_links.iter().find(|l| l.url.path() == path).map(|l| l.marginal);
+        assert_eq!(site("/wiki/File:Tower.jpg"), Some(true));
+        // The logo is an image, but "Home" links to the same page in words.
+        assert_eq!(site("/"), Some(false));
     }
 
     #[test]

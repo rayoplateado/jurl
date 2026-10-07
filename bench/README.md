@@ -69,7 +69,7 @@ WebFetch only runs inside Claude Code: [results/webfetch.json](results/webfetch.
 | First version | 44/54 | 21/24 | 3/9 | 11/12 | 9/9 | 4 | 7.5M ($0.32) |
 | With the first column | 49/54 | 24/24 | 7/9 | 9/12 | 9/9 | 3 | 8.4M ($0.35) |
 
-What changed: the start page is weighed like any other candidate page (a FAQ line on the home page no longer beats `/pricing`); Jev compares the best leads side by side; a docs index counts as warm when it links to the answer; on pages with more links than get scored, those sharing words with the question get in first (Cloudflare's Workers index lists hundreds); table cells reach `--precise` with their row and column ("30 s (CPU time · Paid)"). Warmth is relative too: far from the answer every page is cold, so a page counts as warmer when its best link looks better than the link that led to it; without that, a long game never left the start page's links (Paris → Aspirin went from 2 in 3 to none; with relative warmth it reached the formula in 5 of 10 runs, the long game is still hit or miss). A wiki's own pages (`Wikipedia:`, `Special:`, `Help:`) aren't followed. A table's first column is a candidate in `--precise` too, labelled by the cell next to it: in Wikipedia's glossary of formulae the formula is the first cell (`HC9H7O4`, the page's own spelling), and without it jurl picked the name next to it. Kubernetes is the one miss that stays: the answer page is found, but `--precise` picks another field on it ("NotRequired").
+What changed: the start page is weighed like any other candidate page (a FAQ line on the home page no longer beats `/pricing`); Jev compares the best leads side by side; a docs index counts as warm when it links to the answer; on pages with more links than get scored, those sharing words with the question get in first (Cloudflare's Workers index lists hundreds); table cells reach `--precise` with their row and column ("30 s (CPU time · Paid)"). Warmth is relative too: far from the answer every page is cold, so a page counts as warmer when its best link looks better than the link that led to it; without that, a long game never left the start page's links (Paris → Aspirin went from 2 in 3 to none; with relative warmth it reached the formula in 5 of 10 runs, the long game is still hit or miss). A wiki's own pages (`Wikipedia:`, `Special:`, `Help:`) aren't followed (by a list of their prefixes then; by generic signals now, see below). A table's first column is a candidate in `--precise` too, labelled by the cell next to it: in Wikipedia's glossary of formulae the formula is the first cell (`HC9H7O4`, the page's own spelling), and without it jurl picked the name next to it. Kubernetes is the one miss that stays: the answer page is found, but `--precise` picks another field on it ("NotRequired").
 
 #### Long games
 
@@ -80,7 +80,7 @@ Five games 3 to 5 clicks apart (`--follow 15`, group `long`) and six more that p
 | Links scored only by "does it lead to the answer?" | 10/15 | 15/18 |
 | Plus "is it in the answer's field of knowledge?" (`--follow 10` and up) | 15/15 | 16/18 |
 
-Far from the answer every link scores ~0.02–0.08 on "leads to the answer", so the pick is noise: from Tennis, jurl opened Berdych, Deutsche Bank, Kiev, then Freddie Mercury. Asked whether each link is in the answer's field, Jev gives vulcanized rubber and polyester 0.9 (chemistry), and the search reaches Mercury (element) in 10 pages. Asking about the question's subject instead (not the answer's field) made Jev judge links by the page they're on: tennis players, jazz musicians. The miss that stays is Bicycle → the Titanic: "what year" pulls toward calendar pages. A wiki's own pages (`Wikipedia:…/…`, `Main_Page`) are never followed.
+Far from the answer every link scores ~0.02–0.08 on "leads to the answer", so the pick is noise: from Tennis, jurl opened Berdych, Deutsche Bank, Kiev, then Freddie Mercury. Asked whether each link is in the answer's field, Jev gives vulcanized rubber and polyester 0.9 (chemistry), and the search reaches Mercury (element) in 10 pages. Asking about the question's subject instead (not the answer's field) made Jev judge links by the page they're on: tennis players, jazz musicians. The miss that stays is Bicycle → the Titanic: "what year" pulls toward calendar pages. A wiki's own pages (`Wikipedia:…/…`, `Main_Page`) are never followed (see the next section for how).
 
 #### `--follow` scores links the way `--links -q` does
 
@@ -92,3 +92,24 @@ Far from the answer every link scores ~0.02–0.08 on "leads to the answer", so 
 | `--links -q` scoring | 79/84 | 24/24 | 9/9 | 9/9 | 15/15 | 13/18 | 9/9 | 34.3M ($1.44) |
 
 The two groups that moved were run again with both binaries (0.1.10, then after): docs 8/9 and 8/9, heldout 15/18 and 16/18. On Wikipedia (heldout) Jev is asked exactly what it was asked before, so the gap there can only be noise. Coffee → The Magic Flute missed twice in the full run and never in the rerun; Bicycle → the Titanic still misses (1 right in 6 runs after, 0 in 6 before).
+
+#### A site's own pages, without a list of them
+
+Up to here `--follow` never opened a wiki's own pages by a list of MediaWiki prefixes (`Wikipedia:`, `Special:`, `Main_Page`…). Every site has such pages, so the list is gone, replaced by three things any page shows:
+
+- A link inside a footnote mark (`<sup>`: "[clarification needed]", "[when?]") or with only an image (a photo's own `File:` page) isn't a candidate for `--links -q` or `--follow`. That's where `Wikipedia:Please_clarify` and `Wikipedia:Manual_of_Style/Dates_and_numbers` came from.
+- A site's menus and footers (links outside the page's text) are scored on the first page they're on, not again on every page. On a page far from the question, "Main page", "Contents" and "Search" outscored everything in its text: Bicycle → American Automobile Association → `Main_Page` → `Wikipedia:Contents`.
+- On a long search (`--follow 10` and up) menu links count for 30% of their score. From Pizza, the start page's own menu ("Search" 0.19, "Contents" 0.18, "Main page" 0.14) beat every link in the article; with the menus scored once but not discounted, Pizza → Don Quixote went to `Wikipedia:Contents` and missed once in three.
+
+Telling Jev in the question that "a page about the site itself (help, editing, policies, search, accounts…) does neither" didn't work: on the American Automobile Association page `Special:Search` went from 0.18 to 0.31 and `Main_Page` from 0.16 to 0.29, every score rose about twice, and on linear.app "signup" went from 0.15 to 0.53. The question is unchanged.
+
+Measured the same day ([before](results/follow-generic-base.json), [first version](results/follow-generic-first.json): `<sup>`/image links and menus scored once, no discount; [long](results/follow-generic-long.json) and [heldout](results/follow-generic-heldout.json) with the discount):
+
+| | All | Pricing | Docs | Wikipedia | long | heldout | Not on the site |
+|---|---|---|---|---|---|---|---|
+| Prefix list (before) | 80/84 | 24/24 | 8/9 | 9/9 | 15/15 | 15/18 | 9/9 |
+| Generic, no discount | 76/84 | 24/24 | 7/9 | 9/9 | 14/15 | 13/18 | 9/9 |
+| Generic, with the discount | | | | | 15/15 | 15/18 | |
+
+The discount only applies from `--follow 10`, so pricing, docs, Wikipedia and the traps (5 to 8 pages) run as in the second row. Not measured yet: a full run of the final version (the account ran out of credits); the long and heldout runs above treated links with no text at all as marginal too (on Wikipedia, only a photo's empty "enlarge" link), which the final version narrowed to image-only links. Bicycle → the Titanic: 0/3 before, 1/3 with the discount (through Steel → Ship → RMS Titanic). In `-t` runs from Paris (6) and Bicycle (3) with menus scored once, no `Wikipedia:`, `Main_Page`, `Special:` or `File:` page was opened (with `<sup>`/image links alone, Bicycle opened `Main_Page` and five `Wikipedia:Contents` pages); with the discount, no trail in the long and heldout runs goes through one. Pizza wasn't checked with `-t` after the discount.
+

@@ -27,15 +27,16 @@ pub fn key(u: &Url) -> String {
 }
 
 /// The links worth asking about, at most [`MAX_LINKS`]: the page's own links first (on Wikipedia, "France" and
-/// "Medicine"), then menus and footers ("Pricing"), each page once and not the page itself. `keep` narrows them
-/// (`--follow` stays on the site).
+/// "Medicine"), then menus and footers ("Pricing"), each page once and not the page itself. Footnote marks and
+/// image-only links are left out ([`Link::marginal`]): they open "[clarification needed]" or a
+/// photo's own page, never the topic. `keep` narrows them (`--follow` stays on the site).
 pub fn candidates(ctx: &Ctx<'_>, ex: &Extracted, keep: impl Fn(&Url) -> bool) -> Vec<Link> {
     let mut seen = HashSet::from([key(ctx.url)]);
     let all: Vec<Link> = ex
         .links
         .iter()
         .chain(&ex.site_links)
-        .filter(|l| keep(&l.url) && seen.insert(key(&l.url)))
+        .filter(|l| !l.marginal && keep(&l.url) && seen.insert(key(&l.url)))
         .enumerate()
         .map(|(i, l)| Link { i, ..l.clone() })
         .collect();
@@ -135,6 +136,7 @@ mod tests {
             url: Url::parse(&format!("https://x.com{path}")).unwrap(),
             text: String::new(),
             context: String::new(),
+            marginal: false,
         };
         let mut links: Vec<Link> = (0..MAX_LINKS + 50).map(|i| link(i, &format!("/page/{i}"))).collect();
         links.push(link(MAX_LINKS + 50, "/workers/platform/limits/"));
