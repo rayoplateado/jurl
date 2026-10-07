@@ -6,22 +6,8 @@
   "answer": "$10 per user/month",
   "right": true,
   "pages": 3,
-  "tokens": 56184,
-  "ms": 2663,
-  "path": [
-   "https://linear.app/",
-   "https://linear.app/pricing"
-  ]
- },
- {
-  "start": "linear.app",
-  "q": "What is the monthly price of the cheapest paid plan?",
-  "group": "pricing",
-  "answer": "$10 per user/month",
-  "right": true,
-  "pages": 3,
-  "tokens": 57100,
-  "ms": 2894,
+  "tokens": 56334,
+  "ms": 2763,
   "path": [
    "https://linear.app/",
    "https://linear.app/pricing"
@@ -35,7 +21,21 @@
   "right": true,
   "pages": 3,
   "tokens": 56537,
-  "ms": 2714,
+  "ms": 2646,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/pricing"
+  ]
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10 per user/month",
+  "right": true,
+  "pages": 3,
+  "tokens": 57127,
+  "ms": 2400,
   "path": [
    "https://linear.app/",
    "https://linear.app/pricing"
@@ -48,8 +48,8 @@
   "answer": "$18",
   "right": true,
   "pages": 3,
-  "tokens": 60813,
-  "ms": 2198,
+  "tokens": 60993,
+  "ms": 2280,
   "path": [
    "https://loom.com/",
    "https://www.loom.com/pricing"
@@ -62,8 +62,8 @@
   "answer": "$18",
   "right": true,
   "pages": 3,
-  "tokens": 66016,
-  "ms": 2292,
+  "tokens": 60805,
+  "ms": 2279,
   "path": [
    "https://loom.com/",
    "https://www.loom.com/pricing"
@@ -76,8 +76,8 @@
   "answer": "$18",
   "right": true,
   "pages": 3,
-  "tokens": 65992,
-  "ms": 2266,
+  "tokens": 60897,
+  "ms": 2340,
   "path": [
    "https://loom.com/",
    "https://www.loom.com/pricing"
@@ -90,8 +90,8 @@
   "answer": "$10",
   "right": true,
   "pages": 3,
-  "tokens": 64463,
-  "ms": 2024,
+  "tokens": 64347,
+  "ms": 2356,
   "path": [
    "https://calendly.com/",
    "https://calendly.com/pricing"
@@ -104,8 +104,8 @@
   "answer": "$10",
   "right": true,
   "pages": 3,
-  "tokens": 64402,
-  "ms": 2313,
+  "tokens": 64457,
+  "ms": 2433,
   "path": [
    "https://calendly.com/",
    "https://calendly.com/pricing"
@@ -118,8 +118,8 @@
   "answer": "$10",
   "right": true,
   "pages": 3,
-  "tokens": 64357,
-  "ms": 2082,
+  "tokens": 64419,
+  "ms": 2260,
   "path": [
    "https://calendly.com/",
    "https://calendly.com/pricing"
@@ -129,11 +129,11 @@
   "start": "cal.com",
   "q": "What is the monthly price of the cheapest paid plan?",
   "group": "pricing",
-  "answer": "$12\nper month/user",
+  "answer": "$12",
   "right": true,
   "pages": 3,
-  "tokens": 87428,
-  "ms": 2926,
+  "tokens": 86931,
+  "ms": 2412,
   "path": [
    "https://cal.com/",
    "https://cal.com/pricing"
@@ -146,8 +146,8 @@
   "answer": "$12",
   "right": true,
   "pages": 3,
-  "tokens": 86934,
-  "ms": 2253,
+  "tokens": 86970,
+  "ms": 2684,
   "path": [
    "https://cal.com/",
    "https://cal.com/pricing"
@@ -160,8 +160,8 @@
   "answer": "$12",
   "right": true,
   "pages": 3,
-  "tokens": 86958,
-  "ms": 2609,
+  "tokens": 86935,
+  "ms": 2320,
   "path": [
    "https://cal.com/",
    "https://cal.com/pricing"
@@ -174,8 +174,8 @@
   "answer": "$8 per user, per month",
   "right": true,
   "pages": 3,
-  "tokens": 82954,
-  "ms": 2160,
+  "tokens": 82964,
+  "ms": 2337,
   "path": [
    "https://tailscale.com/",
    "https://tailscale.com/pricing"
@@ -188,8 +188,8 @@
   "answer": "$8 per user, per month",
   "right": true,
   "pages": 3,
-  "tokens": 82954,
-  "ms": 2308,
+  "tokens": 82974,
+  "ms": 2464,
   "path": [
    "https://tailscale.com/",
    "https://tailscale.com/pricing"
@@ -202,8 +202,8 @@
   "answer": "$8 per user, per month",
   "right": true,
   "pages": 3,
-  "tokens": 82966,
-  "ms": 2067,
+  "tokens": 82353,
+  "ms": 2299,
   "path": [
    "https://tailscale.com/",
    "https://tailscale.com/pricing"
@@ -216,8 +216,8 @@
   "answer": "$20/month",
   "right": true,
   "pages": 5,
-  "tokens": 95514,
-  "ms": 2999,
+  "tokens": 95506,
+  "ms": 5111,
   "path": [
    "https://vercel.com/",
    "https://vercel.com/docs/plans/pro-plan"
@@ -230,8 +230,8 @@
   "answer": "$20/month",
   "right": true,
   "pages": 5,
-  "tokens": 94069,
-  "ms": 3064,
+  "tokens": 92866,
+  "ms": 3600,
   "path": [
    "https://vercel.com/",
    "https://vercel.com/docs/plans/pro-plan"
@@ -244,8 +244,8 @@
   "answer": "$20/month",
   "right": true,
   "pages": 5,
-  "tokens": 95523,
-  "ms": 2936,
+  "tokens": 91651,
+  "ms": 3788,
   "path": [
    "https://vercel.com/",
    "https://vercel.com/docs/plans/pro-plan"
@@ -258,12 +258,23 @@
   "answer": "$10",
   "right": true,
   "pages": 3,
-  "tokens": 49854,
-  "ms": 2947,
+  "tokens": 48262,
+  "ms": 2562,
   "path": [
-   "https://www.raycast.com/",
+   "https://raycast.com/",
    "https://www.raycast.com/pricing"
   ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 1116,
+  "path": []
  },
  {
   "start": "raycast.com",
@@ -272,22 +283,8 @@
   "answer": "$10",
   "right": true,
   "pages": 3,
-  "tokens": 48523,
-  "ms": 2457,
-  "path": [
-   "https://www.raycast.com/",
-   "https://www.raycast.com/pricing"
-  ]
- },
- {
-  "start": "raycast.com",
-  "q": "What is the monthly price of the cheapest paid plan?",
-  "group": "pricing",
-  "answer": "$10",
-  "right": true,
-  "pages": 3,
-  "tokens": 49942,
-  "ms": 3014,
+  "tokens": 48525,
+  "ms": 2632,
   "path": [
    "https://raycast.com/",
    "https://www.raycast.com/pricing"
@@ -300,8 +297,8 @@
   "answer": "€9.50",
   "right": true,
   "pages": 3,
-  "tokens": 89036,
-  "ms": 3031,
+  "tokens": 88877,
+  "ms": 3095,
   "path": [
    "https://notion.com/",
    "https://www.notion.com/pricing"
@@ -314,8 +311,8 @@
   "answer": "€9.50",
   "right": true,
   "pages": 3,
-  "tokens": 89012,
-  "ms": 2996,
+  "tokens": 89020,
+  "ms": 2962,
   "path": [
    "https://notion.com/",
    "https://www.notion.com/pricing"
@@ -328,8 +325,8 @@
   "answer": "€9.50",
   "right": true,
   "pages": 3,
-  "tokens": 88869,
-  "ms": 2814,
+  "tokens": 89034,
+  "ms": 3085,
   "path": [
    "https://notion.com/",
    "https://www.notion.com/pricing"
@@ -342,8 +339,8 @@
   "answer": "5,000 requests per hour",
   "right": true,
   "pages": 5,
-  "tokens": 109166,
-  "ms": 2865,
+  "tokens": 109815,
+  "ms": 5664,
   "path": [
    "https://docs.github.com/en",
    "https://docs.github.com/en/rest",
@@ -357,8 +354,8 @@
   "answer": "5,000 requests per hour",
   "right": true,
   "pages": 5,
-  "tokens": 109091,
-  "ms": 2934,
+  "tokens": 109272,
+  "ms": 5601,
   "path": [
    "https://docs.github.com/en",
    "https://docs.github.com/en/rest",
@@ -372,8 +369,8 @@
   "answer": "5,000 requests per hour",
   "right": true,
   "pages": 5,
-  "tokens": 109085,
-  "ms": 2839,
+  "tokens": 109171,
+  "ms": 5282,
   "path": [
    "https://docs.github.com/en",
    "https://docs.github.com/en/rest",
@@ -384,26 +381,11 @@
   "start": "developers.cloudflare.com",
   "q": "What is the CPU time limit for Workers on the paid plan?",
   "group": "docs",
-  "answer": "5 min (default: 30 seconds)",
+  "answer": "5 min",
   "right": true,
   "pages": 5,
-  "tokens": 102946,
-  "ms": 3297,
-  "path": [
-   "https://developers.cloudflare.com/",
-   "https://developers.cloudflare.com/workers/platform/limits/",
-   "https://developers.cloudflare.com/workers/platform/limits/index.md"
-  ]
- },
- {
-  "start": "developers.cloudflare.com",
-  "q": "What is the CPU time limit for Workers on the paid plan?",
-  "group": "docs",
-  "answer": "5 min (default: 30 seconds)",
-  "right": true,
-  "pages": 5,
-  "tokens": 100678,
-  "ms": 3206,
+  "tokens": 105269,
+  "ms": 3282,
   "path": [
    "https://developers.cloudflare.com/",
    "https://developers.cloudflare.com/workers/platform/limits/"
@@ -413,11 +395,26 @@
   "start": "developers.cloudflare.com",
   "q": "What is the CPU time limit for Workers on the paid plan?",
   "group": "docs",
+  "answer": "5 min",
+  "right": true,
+  "pages": 5,
+  "tokens": 104672,
+  "ms": 3184,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/",
+   "https://developers.cloudflare.com/workers/platform/limits/index.md"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
   "answer": "5 min (default: 30 seconds)",
   "right": true,
   "pages": 5,
-  "tokens": 102917,
-  "ms": 3592,
+  "tokens": 103832,
+  "ms": 3595,
   "path": [
    "https://developers.cloudflare.com/",
    "https://developers.cloudflare.com/workers/platform/limits/",
@@ -430,9 +427,9 @@
   "group": "docs",
   "answer": "NotRequired",
   "right": false,
-  "pages": 3,
-  "tokens": 207494,
-  "ms": 2013,
+  "pages": 5,
+  "tokens": 337786,
+  "ms": 4202,
   "path": [
    "https://kubernetes.io/docs/home/",
    "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
@@ -442,14 +439,14 @@
   "start": "kubernetes.io/docs/home/",
   "q": "What is the default restart policy of a Pod?",
   "group": "docs",
-  "answer": "Always",
-  "right": true,
-  "pages": 5,
-  "tokens": 336635,
-  "ms": 3157,
+  "answer": "NotRequired",
+  "right": false,
+  "pages": 3,
+  "tokens": 207504,
+  "ms": 3416,
   "path": [
    "https://kubernetes.io/docs/home/",
-   "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+   "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
   ]
  },
  {
@@ -460,7 +457,7 @@
   "right": false,
   "pages": 3,
   "tokens": 207494,
-  "ms": 3276,
+  "ms": 3455,
   "path": [
    "https://kubernetes.io/docs/home/",
    "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
@@ -473,8 +470,8 @@
   "answer": "C9H8O4",
   "right": true,
   "pages": 3,
-  "tokens": 167722,
-  "ms": 2312,
+  "tokens": 167658,
+  "ms": 2468,
   "path": [
    "https://en.wikipedia.org/wiki/Medicine",
    "https://en.wikipedia.org/wiki/Aspirin"
@@ -487,8 +484,8 @@
   "answer": "C9H8O4",
   "right": true,
   "pages": 3,
-  "tokens": 167712,
-  "ms": 2274,
+  "tokens": 167654,
+  "ms": 2876,
   "path": [
    "https://en.wikipedia.org/wiki/Medicine",
    "https://en.wikipedia.org/wiki/Aspirin"
@@ -501,8 +498,8 @@
   "answer": "C9H8O4",
   "right": true,
   "pages": 3,
-  "tokens": 167714,
-  "ms": 2304,
+  "tokens": 167658,
+  "ms": 2662,
   "path": [
    "https://en.wikipedia.org/wiki/Medicine",
    "https://en.wikipedia.org/wiki/Aspirin"
@@ -515,8 +512,8 @@
   "answer": "Maurice Koechlin and Emile Nouguier",
   "right": true,
   "pages": 5,
-  "tokens": 271438,
-  "ms": 3328,
+  "tokens": 269501,
+  "ms": 3832,
   "path": [
    "https://en.wikipedia.org/wiki/Paris",
    "https://en.wikipedia.org/wiki/Exposition_Universelle_(1889)",
@@ -530,8 +527,8 @@
   "answer": "Maurice Koechlin and Emile Nouguier",
   "right": true,
   "pages": 5,
-  "tokens": 271384,
-  "ms": 3296,
+  "tokens": 269481,
+  "ms": 3244,
   "path": [
    "https://en.wikipedia.org/wiki/Paris",
    "https://en.wikipedia.org/wiki/Exposition_Universelle_(1889)",
@@ -545,8 +542,8 @@
   "answer": "Maurice Koechlin and Emile Nouguier",
   "right": true,
   "pages": 5,
-  "tokens": 271414,
-  "ms": 3241,
+  "tokens": 257738,
+  "ms": 3333,
   "path": [
    "https://en.wikipedia.org/wiki/Paris",
    "https://en.wikipedia.org/wiki/Exposition_Universelle_(1889)",
@@ -560,7 +557,35 @@
   "answer": "78.23 ± 0.09[3] °C (172.81 ± 0.16 °F; 351.38 ± 0.09 K)",
   "right": true,
   "pages": 3,
-  "tokens": 119828,
+  "tokens": 118468,
+  "ms": 2191,
+  "path": [
+   "https://en.wikipedia.org/wiki/Alcohol",
+   "https://en.wikipedia.org/wiki/Ethanol"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Alcohol",
+  "q": "What is the boiling point of ethanol?",
+  "group": "wikipedia",
+  "answer": "78.23 ± 0.09[3] °C (172.81 ± 0.16 °F; 351.38 ± 0.09 K)",
+  "right": true,
+  "pages": 3,
+  "tokens": 118443,
+  "ms": 2067,
+  "path": [
+   "https://en.wikipedia.org/wiki/Alcohol",
+   "https://en.wikipedia.org/wiki/Ethanol"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Alcohol",
+  "q": "What is the boiling point of ethanol?",
+  "group": "wikipedia",
+  "answer": "78.23 ± 0.09[3] °C (172.81 ± 0.16 °F; 351.38 ± 0.09 K)",
+  "right": true,
+  "pages": 3,
+  "tokens": 118443,
   "ms": 2071,
   "path": [
    "https://en.wikipedia.org/wiki/Alcohol",
@@ -568,67 +593,81 @@
   ]
  },
  {
-  "start": "en.wikipedia.org/wiki/Alcohol",
-  "q": "What is the boiling point of ethanol?",
-  "group": "wikipedia",
-  "answer": "78.23 ± 0.09[3] °C (172.81 ± 0.16 °F; 351.38 ± 0.09 K)",
-  "right": true,
-  "pages": 3,
-  "tokens": 119828,
-  "ms": 2061,
-  "path": [
-   "https://en.wikipedia.org/wiki/Alcohol",
-   "https://en.wikipedia.org/wiki/Ethanol"
-  ]
- },
- {
-  "start": "en.wikipedia.org/wiki/Alcohol",
-  "q": "What is the boiling point of ethanol?",
-  "group": "wikipedia",
-  "answer": "78.23 ± 0.09[3] °C (172.81 ± 0.16 °F; 351.38 ± 0.09 K)",
-  "right": true,
-  "pages": 3,
-  "tokens": 119834,
-  "ms": 2043,
-  "path": [
-   "https://en.wikipedia.org/wiki/Alcohol",
-   "https://en.wikipedia.org/wiki/Ethanol"
-  ]
- },
- {
   "start": "en.wikipedia.org/wiki/Paris",
   "q": "What is the chemical formula of aspirin?",
   "group": "wikipedia",
-  "answer": null,
-  "right": false,
+  "answer": "C9H8O4",
+  "right": true,
   "pages": 15,
-  "tokens": 851971,
-  "ms": 3697,
-  "path": []
- },
- {
-  "start": "en.wikipedia.org/wiki/Paris",
-  "q": "What is the chemical formula of aspirin?",
-  "group": "wikipedia",
-  "answer": null,
-  "right": false,
-  "pages": 15,
-  "tokens": 867809,
-  "ms": 4485,
+  "tokens": 781315,
+  "ms": 4697,
   "path": [
    "https://en.wikipedia.org/wiki/Paris",
-   "https://en.wikipedia.org/wiki/Napoleon_Bonaparte"
+   "https://en.wikipedia.org/wiki/Science_and_technology_in_France",
+   "https://en.wikipedia.org/wiki/Albert_Einstein",
+   "https://en.wikipedia.org/wiki/Nobel_Prize_in_Chemistry",
+   "https://en.wikipedia.org/wiki/Glossary_of_chemical_formulae",
+   "https://en.wikipedia.org/wiki/Aspirin"
   ]
  },
  {
   "start": "en.wikipedia.org/wiki/Paris",
   "q": "What is the chemical formula of aspirin?",
   "group": "wikipedia",
-  "answer": null,
-  "right": false,
+  "answer": "C9H8O4",
+  "right": true,
   "pages": 15,
-  "tokens": 861457,
-  "ms": 4032,
+  "tokens": 863038,
+  "ms": 4479,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/France",
+   "https://en.wikipedia.org/wiki/Science_and_technology_in_France",
+   "https://en.wikipedia.org/wiki/Science_and_technology_in_the_United_States",
+   "https://en.wikipedia.org/wiki/Heart_disease",
+   "https://en.wikipedia.org/wiki/Aspirin"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "wikipedia",
+  "answer": "C9H8O4",
+  "right": true,
+  "pages": 13,
+  "tokens": 721971,
+  "ms": 4389,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/University_of_Paris",
+   "https://en.wikipedia.org/wiki/Chemist",
+   "https://en.wikipedia.org/wiki/Glossary_of_chemical_formulae",
+   "https://en.wikipedia.org/wiki/Aspirin"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 73693,
+  "ms": 4303,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/docs/support"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 77481,
+  "ms": 3958,
   "path": []
  },
  {
@@ -638,7 +677,7 @@
   "answer": null,
   "right": true,
   "pages": 8,
-  "tokens": 73481,
+  "tokens": 73188,
   "ms": 4110,
   "path": [
    "https://tailscale.com/",
@@ -646,42 +685,14 @@
   ]
  },
  {
-  "start": "tailscale.com",
-  "q": "What is the phone number for customer support?",
-  "group": "trap",
-  "answer": null,
-  "right": true,
-  "pages": 8,
-  "tokens": 73695,
-  "ms": 3838,
-  "path": [
-   "https://tailscale.com/",
-   "https://tailscale.com/docs/support"
-  ]
- },
- {
-  "start": "tailscale.com",
-  "q": "What is the phone number for customer support?",
-  "group": "trap",
-  "answer": null,
-  "right": true,
-  "pages": 8,
-  "tokens": 73042,
-  "ms": 3546,
-  "path": [
-   "https://tailscale.com/",
-   "https://tailscale.com/docs"
-  ]
- },
- {
   "start": "linear.app",
   "q": "What is the name of the CEO's dog?",
   "group": "trap",
   "answer": null,
   "right": true,
   "pages": 8,
-  "tokens": 114531,
-  "ms": 4284,
+  "tokens": 115560,
+  "ms": 4506,
   "path": []
  },
  {
@@ -691,8 +702,8 @@
   "answer": null,
   "right": true,
   "pages": 8,
-  "tokens": 116541,
-  "ms": 4406,
+  "tokens": 109854,
+  "ms": 4789,
   "path": []
  },
  {
@@ -702,8 +713,8 @@
   "answer": null,
   "right": true,
   "pages": 8,
-  "tokens": 116522,
-  "ms": 4525,
+  "tokens": 109399,
+  "ms": 4264,
   "path": []
  },
  {
@@ -713,8 +724,8 @@
   "answer": null,
   "right": true,
   "pages": 8,
-  "tokens": 100169,
-  "ms": 4583,
+  "tokens": 97542,
+  "ms": 4841,
   "path": [
    "https://www.raycast.com/",
    "https://www.raycast.com/pricing"
@@ -727,8 +738,8 @@
   "answer": null,
   "right": true,
   "pages": 8,
-  "tokens": 99410,
-  "ms": 4826,
+  "tokens": 101908,
+  "ms": 5331,
   "path": [
    "https://www.raycast.com/",
    "https://www.raycast.com/pricing"
@@ -741,8 +752,8 @@
   "answer": null,
   "right": true,
   "pages": 8,
-  "tokens": 97448,
-  "ms": 4719,
+  "tokens": 103859,
+  "ms": 5519,
   "path": [
    "https://www.raycast.com/",
    "https://www.raycast.com/pricing"

@@ -38,6 +38,9 @@ const COLD_TRAIL: f64 = 0.02;
 const SHORTLIST: usize = 10;
 /// A page found to answer is kept unless a lead left could beat it by this much: a near tie isn't worth more pages.
 const BETTER_BY: f64 = 0.15;
+/// A wiki's own pages ("Wikipedia:Please_clarify", "Special:Search", "Help:Contents"): about the wiki, never the topic.
+const WIKI_META: &[&str] =
+    &["Wikipedia:", "Special:", "Help:", "Talk:", "User:", "User_talk:", "Template:", "File:", "Portal:"];
 const ASSETS: &[&str] = &[
     ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".zip", ".gz", ".xml", ".json", ".css", ".js", ".mp4",
     ".mp3", ".dmg", ".exe", ".tar", ".ico",
@@ -57,6 +60,10 @@ impl Site {
         let lower = u.path().to_lowercase();
         matches!(u.scheme(), "http" | "https")
             && !ASSETS.iter().any(|ext| lower.ends_with(ext))
+            && !u
+                .path_segments()
+                .and_then(|mut s| s.next_back())
+                .is_some_and(|last| WIKI_META.iter().any(|m| last.starts_with(m)))
             && u.host_str().is_some_and(|h| {
                 let h = h.trim_start_matches("www.");
                 h == self.root || h.ends_with(&format!(".{}", self.root))
@@ -308,6 +315,8 @@ struct Lead {
     url: Url,
     text: String,
     score: f64,
+    /// The link's own score, before hops and heat.
+    p: f64,
     path: Vec<Url>,
 }
 
@@ -404,31 +413,44 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     // can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
     // What each page was like, for -t: how warm, how sure of an answer.
     let mut log: Vec<(Url, f64, f64)> = Vec::new();
-    let mut take =
-        |v: Visit, lead: f64, path: Vec<Url>, leads: &mut Vec<Lead>, found: &mut Vec<(f64, Visit, Vec<Url>)>| {
-            log.push((v.url.clone(), v.warmth, v.score));
-            // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
-            // the search goes back to the leads of a page that was getting warmer.
-            // The page you started from is never cold: its links are all there is to go on.
-            // A hub page (a docs index, a category) says nothing itself but links straight to the answer: it's as warm
-            // as its best link.
-            let best_link = v.links.iter().map(|l| l.2).fold(0.0, f64::max);
-            let heat = if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link) };
-            let decay = HOP_DECAY.powi(path.len() as i32 - 1);
-            for (url, text, p) in &v.links {
-                leads.push(Lead { url: url.clone(), text: text.clone(), score: p * decay * heat, path: path.clone() });
-            }
-            let rank = v.score * lead;
-            if v.found.is_some() && v.score >= threshold {
-                found.push((rank, v, path));
-            } else if v.found.is_some() && closest.as_ref().is_none_or(|(r, _, _)| rank > *r) {
-                closest = Some((rank, v, path));
-            }
-        };
+    let mut take = |v: Visit,
+                    lead: f64,
+                    lead_p: f64,
+                    path: Vec<Url>,
+                    leads: &mut Vec<Lead>,
+                    found: &mut Vec<(f64, Visit, Vec<Url>)>| {
+        log.push((v.url.clone(), v.warmth, v.score));
+        // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
+        // the search goes back to the leads of a page that was getting warmer.
+        // The page you started from is never cold: its links are all there is to go on.
+        // A hub page (a docs index, a category) says nothing itself but links straight to the answer: it's as warm
+        // as its best link. And warmth is relative: far from the answer (Paris → … → Aspirin) every page is cold,
+        // but one whose best link looks better than the link that led here is getting warmer.
+        let best_link = v.links.iter().map(|l| l.2).fold(0.0, f64::max);
+        let warmer = (best_link / lead_p.max(0.05)).min(1.0);
+        let heat =
+            if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link).max(warmer) };
+        let decay = HOP_DECAY.powi(path.len() as i32 - 1);
+        for (url, text, p) in &v.links {
+            leads.push(Lead {
+                url: url.clone(),
+                text: text.clone(),
+                score: p * decay * heat,
+                p: *p,
+                path: path.clone(),
+            });
+        }
+        let rank = v.score * lead;
+        if v.found.is_some() && v.score >= threshold {
+            found.push((rank, v, path));
+        } else if v.found.is_some() && closest.as_ref().is_none_or(|(r, _, _)| rank > *r) {
+            closest = Some((rank, v, path));
+        }
+    };
     let first_path = vec![first.url.clone()];
-    take(first, start_fit, first_path, &mut leads, &mut found);
+    take(first, start_fit, 1.0, first_path, &mut leads, &mut found);
     for (url, text, p) in hints {
-        leads.push(Lead { url, text, score: p, path: vec![start.clone()] });
+        leads.push(Lead { url, text, score: p, p, path: vec![start.clone()] });
     }
 
     let empty = Extracted {
@@ -486,7 +508,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
                     visited.insert(self::key(&v.url));
                     let mut path = lead.path.clone();
                     path.push(v.url.clone());
-                    take(v, lead.score, path, &mut leads, &mut found);
+                    take(v, lead.score, lead.p, path, &mut leads, &mut found);
                 }
                 Err(e) if args.timing => eprintln!("jurl: skipped {}: {e:#}", lead.url),
                 Err(_) => {}
