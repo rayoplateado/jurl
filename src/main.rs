@@ -5,6 +5,7 @@ mod fetch;
 mod lightpanda;
 mod precise;
 mod setup;
+mod update;
 
 use std::{
     collections::HashMap,
@@ -31,7 +32,7 @@ use crate::{
 #[derive(Parser)]
 #[command(version)]
 struct Args {
-    /// The page to read, or `init` to set up your API keys
+    /// The page to read, `init` to set up your API keys, or `update` to install the latest jurl
     url: String,
     /// Keep what helps answer this question instead of a general summary
     #[arg(short = 'q', long)]
@@ -237,7 +238,19 @@ impl Ctx<'_> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args = Args::parse();
+    let args = match Args::try_parse() {
+        Ok(args) => args,
+        Err(e) => {
+            let _ = e.print();
+            // A flag this jurl doesn't know may be one a newer jurl does.
+            if e.kind() == clap::error::ErrorKind::UnknownArgument
+                && let Some(hint) = update::hint().await
+            {
+                eprintln!("\n{hint}");
+            }
+            return ExitCode::from(e.exit_code() as u8);
+        }
+    };
     match run(args).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -254,6 +267,9 @@ async fn run(mut args: Args) -> Result<()> {
         .timeout(Duration::from_secs(20))
         .pool_idle_timeout(Duration::from_secs(30))
         .build()?;
+    if args.url == "update" {
+        return update::run().await;
+    }
     if args.url == "init" {
         return setup::init(&mut cfg, &client).await;
     }
