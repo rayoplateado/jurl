@@ -89,6 +89,17 @@ fn prose_spans(text: &str) -> Vec<Range<usize>> {
             .map(|(i, _)| i)
             .filter(|&i| i > 0 && tok_text[..i].chars().any(char::is_alphabetic));
         let starts = [Some(tokens[start].start), inner.map(|i| tok.start + i)];
+        // And a value glued to the label after it ("$8Per user") also ends where the value ends.
+        let value_end = tok_text
+            .char_indices()
+            .skip_while(|&(_, c)| !c.is_ascii_digit())
+            .find(|&(_, c)| c.is_uppercase())
+            .map(|(i, _)| tok.start + i);
+        if let Some(end) = value_end {
+            for from in starts.into_iter().flatten().filter(|&f| f < end) {
+                out.push(from..end);
+            }
+        }
         for from in starts.into_iter().flatten() {
             for len in 1..=4 {
                 let Some(end) = tokens.get(t + len - 1) else { break };
@@ -395,6 +406,12 @@ mod tests {
         let small = block(Kind::Para, "Daniel Ek is the CEO.");
         let spans = candidates(&[&big, &small]);
         assert!(spans.iter().any(|s| s.block == 1 && small.text[s.range.clone()] == *"Daniel Ek"), "{spans:?}");
+    }
+
+    #[test]
+    fn value_glued_to_the_label_after_it() {
+        let t = texts(&block(Kind::Para, "Standard\n$8Per user, per month"));
+        assert!(t.contains(&"$8".to_string()), "{t:?}");
     }
 
     #[test]

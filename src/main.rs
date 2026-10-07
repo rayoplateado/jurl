@@ -358,7 +358,7 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     let is_candidate = |b: &Block| match b.kind {
         Kind::Heading => false,
         Kind::Code => !b.text.trim().is_empty(),
-        _ => !args.code && b.text.chars().count() >= 25,
+        _ => !args.code && b.text.chars().count() >= extract::SHORT_BLOCK_CHARS,
     };
     if !ex.blocks.iter().any(is_candidate) {
         if args.code {

@@ -179,7 +179,48 @@ pub fn html(body: &str, base: &Url) -> Extracted {
                 .select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]"))
                 .next()
                 .is_some());
-    Extracted { title: collapse(&title), blocks: w.blocks, images, links, app_shell }
+    Extracted { title: collapse(&title), blocks: join_short(w.blocks), images, links, app_shell }
+}
+
+/// Below this many characters a block says too little to be judged on its own ("Basic", "$10", "per user/month").
+pub const SHORT_BLOCK_CHARS: usize = 25;
+/// A run of joined short blocks stops growing here.
+const JOINED_MAX_CHARS: usize = 400;
+
+/// Consecutive short paragraphs and list items become one block, a line each, as the page shows them: a pricing
+/// card built from bare `<div>`s is then one block that says "Basic / $10 / per user/month" instead of pieces too
+/// short to judge. Headings, code, tables and quotes are never joined.
+fn join_short(blocks: Vec<Block>) -> Vec<Block> {
+    // A short heading with a figure in it ("### $12") is a value set big, not a section title.
+    let value = |b: &Block| b.kind == Kind::Heading && b.text.chars().any(|c| c.is_ascii_digit());
+    let short = |b: &Block| {
+        (matches!(b.kind, Kind::Para | Kind::Item) || value(b)) && b.text.chars().count() < SHORT_BLOCK_CHARS
+    };
+    let mut out: Vec<Block> = Vec::with_capacity(blocks.len());
+    let mut run: Vec<Block> = Vec::new();
+    let flush = |run: &mut Vec<Block>, out: &mut Vec<Block>| match run.len() {
+        0 => {}
+        1 => out.push(run.pop().unwrap()),
+        _ => {
+            let text = run.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
+            out.push(Block { i: 0, kind: Kind::Para, level: None, lang: None, text });
+            run.clear();
+        }
+    };
+    for b in blocks {
+        let joined: usize = run.iter().map(|r| r.text.chars().count() + 1).sum();
+        if short(&b) && joined + b.text.chars().count() <= JOINED_MAX_CHARS {
+            run.push(b);
+        } else {
+            flush(&mut run, &mut out);
+            if short(&b) { run.push(b) } else { out.push(b) }
+        }
+    }
+    flush(&mut run, &mut out);
+    for (i, b) in out.iter_mut().enumerate() {
+        b.i = i;
+    }
+    out
 }
 
 /// Server already sent markdown (`Accept: text/markdown`). Split on blank lines,
@@ -278,7 +319,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
     {
         title = h.text.clone();
     }
-    Extracted { title, blocks, images, links, app_shell: false }
+    Extracted { title, blocks: join_short(blocks), images, links, app_shell: false }
 }
 
 struct Walker<'a> {
@@ -744,7 +785,7 @@ mod tests {
             <div hidden id="S:0"><div><div>Monthly</div><div>Pro $10 / month</div></div></div>
             <script>$RC("B:0","S:0")</script></body>"#;
         let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
-        assert_eq!(texts, ["Pricing", "Monthly", "Pro $10 / month", "FAQ"]);
+        assert_eq!(texts, ["Pricing", "Monthly\nPro $10 / month\nFAQ"]);
     }
 
     #[test]
@@ -764,7 +805,30 @@ mod tests {
             <div class="reflist"><ol class="references"><li>Smith, J. (2010).</li></ol></div>
             <div class="menu"><p>Paella 12 €</p></div></body>"##;
         let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
-        assert_eq!(texts, ["History", "Founded in 1890.", "Paella 12 €"]);
+        assert_eq!(texts, ["History", "Founded in 1890.\nPaella 12 €"]);
+    }
+
+    #[test]
+    fn a_price_set_as_a_heading_joins_its_card() {
+        let ex = markdown("### Teams\n\nYEARLY\n\n### $12\n\nper user/month\n\nSave 25%\n", &base());
+        let texts: Vec<_> = ex.blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(texts, ["Teams", "YEARLY\n$12\nper user/month\nSave 25%"]);
+    }
+
+    #[test]
+    fn short_pieces_of_a_card_are_one_block() {
+        let page = r#"<body><h2>Pricing</h2><div><div>Basic</div><div>$10</div><div>per user/month</div></div>
+            <p>Everything in Free, plus unlimited teams and private projects for everyone.</p><div>Ok</div></body>"#;
+        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(
+            texts,
+            [
+                "Pricing",
+                "Basic\n$10\nper user/month",
+                "Everything in Free, plus unlimited teams and private projects for everyone.",
+                "Ok"
+            ]
+        );
     }
 
     #[test]
