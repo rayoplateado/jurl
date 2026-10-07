@@ -501,8 +501,44 @@ async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64
         spans.iter().enumerate().map(|(k, s)| (s, probs.get(&format!("s{k}")).copied().unwrap_or(0.0))).collect();
     let key = |(s, p): &(&precise::Span, f64)| ((-p * 100.0).round() as i64, s.range.len());
     scored.sort_by_key(key);
-    let (best, p) = scored[0];
+    let (mut best, p) = scored[0];
     let threshold = ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD);
+
+    // The winner can carry more than the answer ("2009; 17 years ago"). When shorter candidates sit inside it,
+    // ask once more, among just those and the winner, which one is the answer with nothing extra.
+    let inside: Vec<&precise::Span> = spans
+        .iter()
+        .filter(|s| s.block == best.block && s.range != best.range)
+        .filter(|s| s.range.start >= best.range.start && s.range.end <= best.range.end)
+        .collect();
+    if p >= threshold && !inside.is_empty() {
+        let options: Vec<&precise::Span> = std::iter::once(best).chain(inside).collect();
+        let mut criteria = Map::new();
+        for (k, s) in options.iter().enumerate() {
+            criteria.insert(format!("o{k}"), json!(&top[s.block].text[s.range.clone()]));
+        }
+        let tighter = choice(
+            &format!(
+                "All of these say the answer to this question. Which one is exactly the answer, without any \
+                 extra words around it? {q}"
+            ),
+            Value::Object(criteria),
+        );
+        let context = vec![Item {
+            id: "ctx".to_string(),
+            state: json!({ "block": top[best.block].i, "text": top[best.block].text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
+            question: None,
+        }];
+        let b = ctx.judge("blocks", context, Map::from_iter([("tighter".to_string(), tighter)])).await?;
+        t.lap(b.label());
+        if let Some((k, c)) = b.choice("tighter")
+            && c >= 0.5
+            && let Some(i) = k.strip_prefix('o').and_then(|i| i.parse::<usize>().ok())
+            && let Some(s) = options.get(i)
+        {
+            best = s;
+        }
+    }
     let block = top[best.block];
     let answer = &block.text[best.range.clone()];
     let link = precise::link(ctx.url, &block.text, &best.range);
