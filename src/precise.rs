@@ -69,13 +69,23 @@ fn prose_spans(text: &str) -> Vec<Range<usize>> {
             continue;
         }
         let start = if t > 0 && CURRENCY.contains(&&text[tokens[t - 1].clone()]) { t - 1 } else { t };
-        for len in 1..=4 {
-            let Some(end) = tokens.get(start + len - 1) else { break };
-            // "10 million included per" says less than "10 million": a run can't end on a little word.
-            if len > 1 && DANGLING.contains(&text[end.clone()].to_lowercase().trim_end_matches([',', '.']).trim()) {
-                continue;
+        // A value glued to a label by the markup ("Pro$10", "Plus*€9.50") also runs from where the value starts.
+        let tok_text = &text[tok.clone()];
+        let inner = tok_text
+            .char_indices()
+            .find(|&(_, c)| c.is_ascii_digit() || "$€£¥".contains(c))
+            .map(|(i, _)| i)
+            .filter(|&i| i > 0 && tok_text[..i].chars().any(char::is_alphabetic));
+        let starts = [Some(tokens[start].start), inner.map(|i| tok.start + i)];
+        for from in starts.into_iter().flatten() {
+            for len in 1..=4 {
+                let Some(end) = tokens.get(t + len - 1) else { break };
+                // "10 million included per" says less than "10 million": a run can't end on a little word.
+                if len > 1 && DANGLING.contains(&text[end.clone()].to_lowercase().trim_end_matches([',', '.']).trim()) {
+                    continue;
+                }
+                out.push(from..end.end);
             }
-            out.push(tokens[start].start..end.end);
         }
     }
 
@@ -258,6 +268,13 @@ mod tests {
     fn currency_before_the_number() {
         let t = texts(&block(Kind::Para, "Business costs US$ 14 a month."));
         assert!(t.contains(&"US$ 14".to_string()), "{t:?}");
+    }
+
+    #[test]
+    fn values_glued_to_a_label() {
+        let t = texts(&block(Kind::Para, "Monthly Subscription Free Pro$10 / month Plus*€9.50"));
+        assert!(t.contains(&"$10 / month".to_string()), "{t:?}");
+        assert!(t.contains(&"€9.50".to_string()), "{t:?}");
     }
 
     #[test]

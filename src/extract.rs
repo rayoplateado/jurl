@@ -1,6 +1,8 @@
 //! HTML/markdown → candidate blocks and images. Every emitted string is text that
 //! exists in the page; nothing here rewrites content beyond whitespace collapsing.
 
+use std::collections::HashMap;
+
 use scraper::{ElementRef, Html, Node, Selector};
 use serde::Serialize;
 use url::Url;
@@ -104,7 +106,13 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         .unwrap_or_else(|| doc.root_element());
     let in_body = root.value().name() == "body";
 
-    let mut w = Walker { blocks: Vec::new(), skip_header: in_body, buf: String::new() };
+    // React streams late content (a Suspense boundary) as `<div hidden id="S:n">` at the end of the body, and a
+    // script moves it into `<template id="B:n">`, where it belongs. Read it there.
+    let segments: HashMap<String, ElementRef> = doc
+        .select(&sel("div[hidden][id^='S:']"))
+        .filter_map(|e| Some((e.value().id()?.strip_prefix("S:")?.to_string(), e)))
+        .collect();
+    let mut w = Walker { blocks: Vec::new(), skip_header: in_body, buf: String::new(), segments };
     w.container(root);
     w.flush();
 
@@ -273,13 +281,14 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
     Extracted { title, blocks, images, links, app_shell: false }
 }
 
-struct Walker {
+struct Walker<'a> {
     blocks: Vec<Block>,
     skip_header: bool,
     buf: String,
+    segments: HashMap<String, ElementRef<'a>>,
 }
 
-impl Walker {
+impl<'a> Walker<'a> {
     fn push(&mut self, kind: Kind, level: Option<u8>, lang: Option<String>, text: String) {
         if text.trim().is_empty() {
             return;
@@ -299,13 +308,19 @@ impl Walker {
     }
 
     /// Generic container: inline runs become paragraphs, block children recurse.
-    fn container(&mut self, el: ElementRef) {
+    fn container(&mut self, el: ElementRef<'a>) {
         for child in el.children() {
             match child.value() {
                 Node::Text(t) => self.buf.push_str(t),
                 Node::Element(_) => {
                     let child = ElementRef::wrap(child).unwrap();
-                    if self.skipped(child) {
+                    if let Some(seg) = self.segment(child) {
+                        self.flush();
+                        self.container(seg);
+                        self.flush();
+                        continue;
+                    }
+                    if self.skipped(child) || segment(child) {
                         continue;
                     }
                     if permalink(child) {
@@ -323,7 +338,13 @@ impl Walker {
         }
     }
 
-    fn element(&mut self, el: ElementRef) {
+    /// The streamed content that belongs where this `<template id="B:n">` is.
+    fn segment(&self, el: ElementRef) -> Option<ElementRef<'a>> {
+        let id = el.value().id()?.strip_prefix("B:")?;
+        (el.value().name() == "template").then(|| self.segments.get(id).copied()).flatten()
+    }
+
+    fn element(&mut self, el: ElementRef<'a>) {
         let name = el.value().name();
         match name {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
@@ -475,9 +496,14 @@ fn is_carousel(class: &str) -> bool {
     CAROUSEL.iter().any(|w| c.contains(w))
 }
 
+/// A React streaming segment: hidden only until its script moves it into place.
+fn segment(el: ElementRef) -> bool {
+    el.value().name() == "div" && el.value().id().is_some_and(|id| id.starts_with("S:"))
+}
+
 fn hidden(el: ElementRef) -> bool {
     let v = el.value();
-    v.attr("hidden").is_some()
+    (v.attr("hidden").is_some() && !segment(el))
         || v.attr("aria-hidden") == Some("true")
         || v.attr("style").is_some_and(|s| s.replace(' ', "").contains("display:none"))
 }
@@ -663,6 +689,15 @@ mod tests {
             <p>A third paragraph about Val's builds and skills, long enough to matter.</p></div></body>"#;
         let ex = html(page, &base());
         assert!(ex.blocks.iter().any(|b| b.text.contains("Rune Knight")), "{:?}", ex.blocks);
+    }
+
+    #[test]
+    fn react_streamed_content_is_read_where_it_goes() {
+        let page = r#"<body><h1>Pricing</h1><template id="B:0"></template><p>FAQ</p>
+            <div hidden id="S:0"><div><div>Monthly</div><div>Pro $10 / month</div></div></div>
+            <script>$RC("B:0","S:0")</script></body>"#;
+        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(texts, ["Pricing", "Monthly", "Pro $10 / month", "FAQ"]);
     }
 
     #[test]
