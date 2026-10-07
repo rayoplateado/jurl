@@ -517,7 +517,18 @@ async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64
         spans.iter().enumerate().map(|(k, s)| (s, probs.get(&format!("s{k}")).copied().unwrap_or(0.0))).collect();
     let key = |(s, p): &(&precise::Span, f64)| ((-p * 100.0).round() as i64, s.range.len());
     scored.sort_by_key(key);
-    let (mut best, p) = scored[0];
+    let (mut best, own) = scored[0];
+    // "$8", "$8 per user" and "$8 per user, per month" are one answer with more or less around it, and they split
+    // the vote. How sure jurl is that the answer is there counts them together: the winner plus every span that
+    // holds it or sits inside it.
+    let nested = |s: &precise::Span| {
+        s.block == best.block
+            && s.range != best.range
+            && ((s.range.start <= best.range.start && s.range.end >= best.range.end)
+                || (s.range.start >= best.range.start && s.range.end <= best.range.end))
+    };
+    let p = (own + scored.iter().filter(|(s, _)| nested(s)).map(|(_, p)| p).sum::<f64>()).min(1.0);
+    let p = (p * 100.0).round() / 100.0;
     let threshold = ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD);
 
     // The winner can carry more than the answer ("2009; 17 years ago"). When shorter candidates sit inside it,
