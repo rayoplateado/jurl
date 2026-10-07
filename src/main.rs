@@ -64,9 +64,9 @@ struct Args {
     /// No max: keep everything that passes the threshold
     #[arg(short, long)]
     all: bool,
-    /// Minimum probability to keep a result
-    #[arg(long, default_value_t = 0.5)]
-    threshold: f64,
+    /// Minimum probability to keep a result [default: 0.5, or 0.4 for the --precise answer]
+    #[arg(long)]
+    threshold: Option<f64>,
     #[arg(long)]
     json: bool,
     /// Per-phase timings on stderr
@@ -75,6 +75,10 @@ struct Args {
 }
 
 impl Args {
+    fn threshold(&self) -> f64 {
+        self.threshold.unwrap_or(0.5)
+    }
+
     fn limit(&self, default: usize) -> usize {
         if self.all { usize::MAX } else { self.max.unwrap_or(default) }
     }
@@ -88,6 +92,11 @@ impl Args {
     }
 }
 
+/// The answer's share of one choice over every span and "none". On 30 pricing pages every answer at or above
+/// this was right; the wrong ones scored 0.37 or less.
+const PRECISE_THRESHOLD: f64 = 0.4;
+/// Blocks below this aren't searched for an answer at all.
+const PRECISE_BLOCK_FLOOR: f64 = 0.1;
 /// One Jev request stays well under the ~64k token budget.
 const MAX_STATE_CHARS: usize = 60_000;
 const MAX_QUESTIONS: usize = 120;
@@ -388,7 +397,16 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     } else {
         12
     };
-    let keep = top(&scores, args.threshold, args.limit(default_max));
+    // --precise looks inside the best few blocks even when none of them answers on its own: whether a span of
+    // them is the answer is decided next, at the span's own threshold.
+    if args.precise {
+        let keep = top(&scores, PRECISE_BLOCK_FLOOR, 3);
+        if keep.is_empty() {
+            bail!("nothing in {} answers that", ctx.url);
+        }
+        return precise_answer(ctx, ex, &keep, t).await;
+    }
+    let keep = top(&scores, args.threshold(), args.limit(default_max));
     let mut pending_heading = None;
     let mut selected = Vec::new();
     for b in &ex.blocks {
@@ -406,10 +424,6 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
             bail!("nothing in {} answers that (try a lower --threshold)", ctx.url);
         }
         bail!("nothing in {} looks like content (try a lower --threshold)", ctx.url);
-    }
-
-    if args.precise {
-        return precise_answer(ctx, ex, &keep, t).await;
     }
 
     let mut out = stdout().lock();
@@ -456,8 +470,9 @@ async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64
         bail!("nothing in {} answers that exactly", ctx.url);
     }
 
-    // The blocks ride along as context; each span gets the question.
-    let mut items: Vec<Item> = top
+    // One choice over every span, plus "none": Jev weighs the spans against each other, so the one that is
+    // exactly the answer beats the sentence around it, and "none" wins when the page doesn't say it.
+    let items: Vec<Item> = top
         .iter()
         .map(|b| Item {
             id: format!("ctx{}", b.i),
@@ -465,23 +480,29 @@ async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64
             question: None,
         })
         .collect();
-    items.extend(spans.iter().enumerate().map(|(k, s)| Item {
-        id: format!("s{k}"),
-        state: json!({ "i": k, "block": top[s.block].i, "span": &top[s.block].text[s.range.clone()] }),
-        question: Some(noul(format!(
-            "The span in `candidates` with i={k} is exactly the answer to this question, with nothing missing \
-             and nothing extra: {q}"
-        ))),
-    }));
-    let a = ctx.judge("candidates", items, Map::new()).await?;
+    let mut criteria = Map::new();
+    for (k, s) in spans.iter().enumerate() {
+        criteria.insert(format!("s{k}"), json!(&top[s.block].text[s.range.clone()]));
+    }
+    criteria.insert("none".to_string(), json!("None of these is exactly the answer"));
+    let pick = choice(
+        &format!(
+            "Which of these spans from the blocks is exactly the answer to this question, with nothing missing \
+             and nothing extra? {q}"
+        ),
+        Value::Object(criteria),
+    );
+    let a = ctx.judge("blocks", items, Map::from_iter([("pick".to_string(), pick)])).await?;
     t.lap(a.label());
 
-    // Best score wins; on a tie (to two decimals) the shorter span, which says the same with less.
+    // Most likely span wins; on a tie (to two decimals) the shorter one, which says the same with less.
+    let probs = a.probabilities("pick").context("jev returned no answer")?;
     let mut scored: Vec<(&precise::Span, f64)> =
-        spans.iter().enumerate().map(|(k, s)| (s, a.noul(&format!("s{k}")).unwrap_or(0.0))).collect();
+        spans.iter().enumerate().map(|(k, s)| (s, probs.get(&format!("s{k}")).copied().unwrap_or(0.0))).collect();
     let key = |(s, p): &(&precise::Span, f64)| ((-p * 100.0).round() as i64, s.range.len());
     scored.sort_by_key(key);
     let (best, p) = scored[0];
+    let threshold = ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD);
     let block = top[best.block];
     let answer = &block.text[best.range.clone()];
     let link = precise::link(ctx.url, &block.text, &best.range);
@@ -492,8 +513,8 @@ async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64
             "url": ctx.url.as_str(),
             "title": ex.title,
             "ask": q,
-            "answer": (p >= ctx.args.threshold).then_some(answer),
-            "closest": (p < ctx.args.threshold).then_some(answer),
+            "answer": (p >= threshold).then_some(answer),
+            "closest": (p < threshold).then_some(answer),
             "p": p,
             "quote": block.text,
             "block": block.i,
@@ -502,7 +523,7 @@ async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
         return Ok(());
     }
-    if p < ctx.args.threshold {
+    if p < threshold {
         bail!("no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})", ctx.url);
     }
     writeln!(out, "{answer}\n\n{}\n\n<{link}>", block.markdown())?;
@@ -530,7 +551,7 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     let a = ctx.judge("links", items, Map::new()).await?;
     t.lap(a.label());
     let scores: Vec<Option<f64>> = ex.links.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
-    let mut kept: Vec<_> = top(&scores, ctx.args.threshold, ctx.args.limit(20)).into_iter().collect();
+    let mut kept: Vec<_> = top(&scores, ctx.args.threshold(), ctx.args.limit(20)).into_iter().collect();
     if kept.is_empty() {
         bail!("no links worth following in {} (try a lower --threshold)", ctx.url);
     }
@@ -665,7 +686,7 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
     let best = scored.first().map(|(i, p)| (i.url.clone(), *p));
     let kept: Vec<_> = scored
         .into_iter()
-        .filter(|(_, p)| *p >= ctx.args.threshold)
+        .filter(|(_, p)| *p >= ctx.args.threshold())
         .take(ctx.args.limit(if query.is_some() { 1 } else { usize::MAX }))
         .collect();
     if kept.is_empty()

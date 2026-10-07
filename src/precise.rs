@@ -17,6 +17,8 @@ const MAX_CANDIDATES: usize = 100;
 const MAX_SPAN_CHARS: usize = 400;
 /// Lowercase words a name or title can have inside it ("The Coal Question", "Bank of England").
 const CONNECTORS: &[&str] = &["of", "the", "and", "for", "de", "del", "la", "von", "van", "&"];
+const DANGLING: &[&str] =
+    &["per", "of", "the", "and", "or", "to", "a", "an", "in", "for", "with", "at", "by", "from", "on"];
 const CURRENCY: &[&str] = &["$", "€", "£", "¥", "US$", "USD", "EUR", "GBP"];
 
 /// Candidate spans from `blocks`, best block first. Every span is a substring of its block's text.
@@ -68,9 +70,12 @@ fn prose_spans(text: &str) -> Vec<Range<usize>> {
         }
         let start = if t > 0 && CURRENCY.contains(&&text[tokens[t - 1].clone()]) { t - 1 } else { t };
         for len in 1..=4 {
-            if let Some(end) = tokens.get(start + len - 1) {
-                out.push(tokens[start].start..end.end);
+            let Some(end) = tokens.get(start + len - 1) else { break };
+            // "10 million included per" says less than "10 million": a run can't end on a little word.
+            if len > 1 && DANGLING.contains(&text[end.clone()].to_lowercase().trim_end_matches([',', '.']).trim()) {
+                continue;
             }
+            out.push(tokens[start].start..end.end);
         }
     }
 
@@ -158,11 +163,22 @@ fn trim(text: &str, r: Range<usize>) -> Option<Range<usize>> {
 /// browser finds the right occurrence.
 pub fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
     let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
-    let before = words(&text[..range.start]);
-    let after = words(&text[range.end..]);
+    // Context is up to three words next to the answer, as the browser shows them: markdown emphasis is
+    // dropped, and a word that is only markup (a table's `|`) ends the context there.
+    let context = |words: &mut dyn Iterator<Item = &str>| {
+        words
+            .map(|w| w.trim_matches(['*', '_', '`']))
+            .take_while(|w| w.chars().any(char::is_alphanumeric))
+            .take(3)
+            .map(String::from)
+            .collect::<Vec<_>>()
+    };
+    let mut before = context(&mut text[..range.start].split_whitespace().rev());
+    before.reverse();
+    let after = context(&mut text[range.end..].split_whitespace());
     let span = words(&text[range.clone()]);
-    let prefix = before[before.len().saturating_sub(3)..].join(" ");
-    let suffix = after[..after.len().min(3)].join(" ");
+    let prefix = before.join(" ");
+    let suffix = after.join(" ");
     let body = if span.len() > 10 {
         format!("{},{}", enc(&span[..5].join(" ")), enc(&span[span.len() - 5..].join(" ")))
     } else {
@@ -227,6 +243,13 @@ mod tests {
     }
 
     #[test]
+    fn runs_dont_end_on_little_words() {
+        let t = texts(&block(Kind::Para, "Includes 10 million requests per month."));
+        assert!(t.contains(&"10 million requests".to_string()), "{t:?}");
+        assert!(!t.iter().any(|s| s.ends_with(" per")), "{t:?}");
+    }
+
+    #[test]
     fn currency_before_the_number() {
         let t = texts(&block(Kind::Para, "Business costs US$ 14 a month."));
         assert!(t.contains(&"US$ 14".to_string()), "{t:?}");
@@ -236,6 +259,15 @@ mod tests {
     fn code_lines() {
         let t = texts(&block(Kind::Code, "$ brew install ripgrep\n$ cargo install ripgrep\n"));
         assert!(t.contains(&"$ brew install ripgrep".to_string()), "{t:?}");
+    }
+
+    #[test]
+    fn link_context_stops_at_markup() {
+        let url = url::Url::parse("https://example.com/pricing").unwrap();
+        let text = "| **Standard** | 10 million included per month |";
+        let start = text.find("10 million").unwrap();
+        let l = link(&url, text, &(start..start + 10));
+        assert_eq!(l, "https://example.com/pricing#:~:text=10%20million,-included%20per%20month");
     }
 
     #[test]
