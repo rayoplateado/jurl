@@ -46,7 +46,9 @@ impl Install {
                 "sh",
                 vec![
                     "-c".into(),
-                    format!("curl --proto '=https' --tlsv1.2 -LsSf {REPO}/releases/latest/download/jurl-installer.sh | sh"),
+                    format!(
+                        "curl --proto '=https' --tlsv1.2 -LsSf {REPO}/releases/latest/download/jurl-installer.sh | sh"
+                    ),
                 ],
             ),
         }
@@ -55,7 +57,11 @@ impl Install {
 
 /// The latest release's version, from where GitHub's /releases/latest redirects to (no API, no rate limit).
 pub async fn latest(timeout: Duration) -> Result<String> {
-    let client = Client::builder().redirect(Policy::none()).timeout(timeout).user_agent(concat!("jurl/", env!("CARGO_PKG_VERSION"))).build()?;
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .timeout(timeout)
+        .user_agent(concat!("jurl/", env!("CARGO_PKG_VERSION")))
+        .build()?;
     let res = client.get(format!("{REPO}/releases/latest")).send().await?;
     let to = res.headers().get("location").and_then(|l| l.to_str().ok()).context("no latest release")?;
     let tag = to.rsplit('/').next().unwrap_or_default();
@@ -71,7 +77,8 @@ pub fn newer(a: &str, b: &str) -> bool {
 /// A line to add to an "unexpected argument" error when a newer jurl is out, which may know the flag.
 pub async fn hint() -> Option<String> {
     let latest = latest(Duration::from_secs(3)).await.ok()?;
-    newer(&latest, CURRENT).then(|| format!("you have jurl {CURRENT} and {latest} is out, which may have it: run `jurl update`"))
+    newer(&latest, CURRENT)
+        .then(|| format!("you have jurl {CURRENT} and {latest} is out, which may have it: run `jurl update`"))
 }
 
 pub async fn run() -> Result<()> {
@@ -80,11 +87,15 @@ pub async fn run() -> Result<()> {
         eprintln!("jurl {CURRENT} is the latest.");
         return Ok(());
     }
-    let exe = std::env::current_exe().and_then(|p| p.canonicalize()).context("couldn't find where jurl is installed")?;
+    let exe =
+        std::env::current_exe().and_then(|p| p.canonicalize()).context("couldn't find where jurl is installed")?;
     let install = Install::detect(&exe);
     let (program, args) = install.command();
     eprintln!("jurl {CURRENT} → {latest}");
-    eprintln!("$ {program} {}", args.iter().map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a.clone() }).collect::<Vec<_>>().join(" "));
+    eprintln!(
+        "$ {program} {}",
+        args.iter().map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a.clone() }).collect::<Vec<_>>().join(" ")
+    );
     let status = Command::new(program).args(&args).status().with_context(|| format!("couldn't run {program}"))?;
     if !status.success() {
         bail!("the update didn't finish ({status})");
@@ -108,7 +119,10 @@ mod tests {
     #[test]
     fn install_method_from_path() {
         assert_eq!(Install::detect(Path::new("/opt/homebrew/Cellar/jurl/0.1.4/bin/jurl")), Install::Homebrew);
-        assert_eq!(Install::detect(Path::new("/home/linuxbrew/.linuxbrew/Cellar/jurl/0.1.4/bin/jurl")), Install::Homebrew);
+        assert_eq!(
+            Install::detect(Path::new("/home/linuxbrew/.linuxbrew/Cellar/jurl/0.1.4/bin/jurl")),
+            Install::Homebrew
+        );
         assert_eq!(Install::detect(Path::new("/Users/me/.cargo/bin/jurl")), Install::Cargo);
         assert_eq!(Install::detect(Path::new("/Users/me/.local/bin/jurl")), Install::Installer);
         assert_eq!(Install::detect(Path::new(r"C:\Users\me\.cargo\bin\jurl.exe")), Install::Cargo);

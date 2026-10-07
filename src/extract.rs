@@ -414,6 +414,10 @@ impl<'a> Walker<'a> {
     }
 }
 
+/// Where inline text crosses a block boundary (`<li>`s in a table cell, a `<br>`): `collapse` makes it a
+/// newline, as the page shows it, so "Dylan Field" and "Evan Wallace" don't read as one name.
+const BREAK: char = '\u{1F}';
+
 fn inline_text(el: ElementRef) -> String {
     let mut out = String::new();
     for c in el.children() {
@@ -421,17 +425,17 @@ fn inline_text(el: ElementRef) -> String {
             Node::Text(t) => out.push_str(t),
             Node::Element(e) if SKIP.contains(&e.name()) => {}
             Node::Element(_) if permalink(ElementRef::wrap(c).unwrap()) => {}
-            Node::Element(e) if e.name() == "br" => out.push(' '),
+            Node::Element(e) if e.name() == "br" => out.push(BREAK),
             Node::Element(_) => {
                 let c = ElementRef::wrap(c).unwrap();
                 if !hidden(c) {
                     let block = !INLINE.contains(&c.value().name());
                     if block {
-                        out.push(' ');
+                        out.push(BREAK);
                     }
                     out.push_str(&inline_text(c));
                     if block {
-                        out.push(' ');
+                        out.push(BREAK);
                     }
                 }
             }
@@ -669,8 +673,23 @@ fn first_text(doc: &Html, s: &str) -> Option<String> {
     doc.select(&sel(s)).next().map(|e| e.text().collect::<String>()).filter(|s| !s.trim().is_empty())
 }
 
+/// Runs of whitespace become one space, or one newline where they hold a block boundary.
 pub fn collapse(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut out = String::with_capacity(s.len());
+    let mut gap: Option<bool> = None; // Some(has a break) while inside a run of whitespace
+    for c in s.chars() {
+        if c.is_whitespace() || c == BREAK {
+            gap = Some(gap.unwrap_or(false) || c == BREAK);
+        } else {
+            if let Some(brk) = gap.take()
+                && !out.is_empty()
+            {
+                out.push(if brk { '\n' } else { ' ' });
+            }
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -698,6 +717,15 @@ mod tests {
             <script>$RC("B:0","S:0")</script></body>"#;
         let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
         assert_eq!(texts, ["Pricing", "Monthly", "Pro $10 / month", "FAQ"]);
+    }
+
+    #[test]
+    fn list_items_in_a_cell_keep_their_lines() {
+        let page = r#"<body><table><tr><th>Founders</th><td><ul><li><a>Dylan Field</a></li><li><a>Evan Wallace</a></li></ul></td></tr></table>
+            <p>Line one<br>line   two</p></body>"#;
+        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(texts, ["| Founders | Dylan Field\nEvan Wallace |", "Line one\nline two"]);
+        assert_eq!(collapse("  a \n  b  "), "a b");
     }
 
     #[test]
