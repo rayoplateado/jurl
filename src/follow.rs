@@ -1,7 +1,8 @@
 //! `--follow`: when the page doesn't answer, look for the answer elsewhere on the same site, the way people play the
-//! Wikipedia game. Jev scores every link by how likely it leads to the answer, jurl opens the best few at once, and
-//! keeps going from whichever page looks closest, backtracking when a trail goes cold. The site's own map
-//! (`llms.txt`, `sitemap.xml`) is read alongside the first page: it often names the right page outright.
+//! Wikipedia game. It is `--precise` (or `-q`) and `--links -q` in a loop: each page is asked for the answer and its
+//! links are scored by how likely they lead to it, jurl opens the best few at once, and keeps going from whichever
+//! page looks closest, backtracking when a trail goes cold (hot and cold). The site's own map (`llms.txt`,
+//! `sitemap.xml`) is read alongside the first page: it often names the right page outright.
 
 use std::collections::HashSet;
 
@@ -14,8 +15,8 @@ use url::Url;
 use crate::{
     Args, Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, Timer,
     config::Config,
-    decide::noul,
     extract::{self, Extracted, Link},
+    links::{self, key, overlap},
     load, precise_pick, print_blocks, print_precise, score_blocks, top,
 };
 
@@ -24,8 +25,7 @@ use crate::{
 const PARALLEL: usize = 2;
 /// A long search (`--follow 10` and up) goes wider: a long trail needs more than one or two guesses per step.
 const PARALLEL_LONG: usize = 3;
-/// Links scored per page, and URLs from the site map: cheap to score (~45 tokens each).
-const MAX_LINKS: usize = 250;
+/// URLs from the site map scored, like a page's links (at most [`links::MAX_LINKS`]).
 const MAX_HINTS: usize = 300;
 /// A link's score is discounted per hop, so a good lead near the start beats a slightly better one deep down.
 const HOP_DECAY: f64 = 0.85;
@@ -34,8 +34,6 @@ const HOP_DECAY: f64 = 0.85;
 const COLD_PAGE: f64 = 0.3;
 /// When the best lead left is weaker than this, the trail has gone cold: stop instead of opening pages blindly.
 const COLD_TRAIL: f64 = 0.02;
-/// On a long search, how much a link's field of knowledge counts next to whether it leads to the answer.
-const FIELD_WEIGHT: f64 = 0.3;
 /// Each step, Jev compares this many of the best leads side by side to pick the next pages.
 const SHORTLIST: usize = 10;
 /// A page found to answer is kept unless a lead left could beat it by this much: a near tie isn't worth more pages.
@@ -71,13 +69,6 @@ impl Site {
                 h == self.root || h.ends_with(&format!(".{}", self.root))
             })
     }
-}
-
-/// The same page however it was linked: no fragment, no trailing slash.
-fn key(u: &Url) -> String {
-    let mut u = u.clone();
-    u.set_fragment(None);
-    u.as_str().trim_end_matches('/').to_string()
 }
 
 /// `robots.txt` for every crawler (`User-agent: *`): the paths jurl won't open. Patterns with wildcards are left out
@@ -184,31 +175,6 @@ async fn site_map(client: &Client, start: &Url, site: &Site) -> Vec<Link> {
     out
 }
 
-/// How many of the question's words a link shares (by their first five letters: "limit" finds `/limits/`). Only used to
-/// choose which links get scored when a page has more than [`MAX_LINKS`]; Jev does the scoring.
-fn overlap(question: &str, link: &Link) -> usize {
-    const STOP: &[&str] =
-        &["what", "which", "where", "when", "does", "with", "that", "this", "from", "have", "the", "for", "and", "how"];
-    let stem = |w: &str| w.chars().take(5).collect::<String>();
-    let words = |s: &str| -> Vec<String> {
-        s.split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() >= 3).map(|w| w.to_lowercase()).collect()
-    };
-    let link_words: HashSet<String> =
-        words(&format!("{} {}", link.text, link.url.path())).iter().map(|w| stem(w)).collect();
-    words(question).iter().filter(|w| !STOP.contains(&w.as_str())).filter(|w| link_words.contains(&stem(w))).count()
-}
-
-/// The links worth scoring, at most [`MAX_LINKS`]: those that share words with the question first, then in page order.
-fn shortlist_links(question: &str, links: Vec<Link>) -> Vec<Link> {
-    let mut links = links;
-    if links.len() > MAX_LINKS {
-        let mut ranked: Vec<(usize, Link)> = links.into_iter().map(|l| (overlap(question, &l), l)).collect();
-        ranked.sort_by_key(|(o, l)| (std::cmp::Reverse(*o), l.i));
-        links = ranked.into_iter().take(MAX_LINKS).map(|(_, l)| l).collect();
-    }
-    links.into_iter().enumerate().map(|(i, l)| Link { i, ..l }).collect()
-}
-
 /// Every `<loc>…</loc>` in a sitemap.
 fn locs(xml: &str) -> Vec<String> {
     xml.split("<loc>")
@@ -216,56 +182,6 @@ fn locs(xml: &str) -> Vec<String> {
         .filter_map(|s| s.split("</loc>").next())
         .map(|s| s.trim().replace("&amp;", "&"))
         .collect()
-}
-
-/// How likely each link is to lead to the answer, in `links` order.
-///
-/// Far from the answer (Tennis → … → the boiling point of mercury) no link "leads to the answer" and those scores are
-/// noise (Birmingham 0.08, Philadelphia 0.07). On a long search (`--follow 10` and up) each link is also asked whether
-/// its page is in the answer's field of knowledge: vulcanized rubber and polyester (0.9) are chemistry, the way to
-/// the elements. That counts for [`FIELD_WEIGHT`] of what the first score leaves.
-async fn score_links(ctx: &Ctx<'_>, links: &[Link], what: &str, field: bool) -> Vec<f64> {
-    if links.is_empty() {
-        return Vec::new();
-    }
-    let q = ctx.args.ask.as_deref().unwrap_or_default();
-    let mut items: Vec<Item> = links
-        .iter()
-        .map(|l| Item {
-            id: format!("l{}", l.i),
-            state: serde_json::json!({ "i": l.i, "text": l.text, "context": l.context, "path": l.url.path() }),
-            question: Some(noul(format!(
-                "{what} with i={} is the page that answers this question, or leads to it: {q}",
-                l.i
-            ))),
-        })
-        .collect();
-    if field {
-        let mut more = Vec::new();
-        for l in links {
-            more.push(Item {
-                id: format!("f{}", l.i),
-                state: serde_json::json!({ "i": l.i, "text": l.text, "path": l.url.path() }),
-                question: Some(noul(format!(
-                    "{what} with i={} is about the same field of knowledge as the answer to this question \
-                     (chemistry, astronomy, literature, medicine…): {q}",
-                    l.i
-                ))),
-            });
-        }
-        items.extend(more);
-    }
-    match ctx.judge("links", items, Map::new()).await {
-        Ok(a) => links
-            .iter()
-            .map(|l| {
-                let p = a.noul(&format!("l{}", l.i)).unwrap_or(0.0);
-                let f = if field { a.noul(&format!("f{}", l.i)).unwrap_or(0.0) } else { 0.0 };
-                p + (1.0 - p) * FIELD_WEIGHT * f
-            })
-            .collect(),
-        Err(_) => vec![0.0; links.len()],
-    }
 }
 
 /// What a page said about the question.
@@ -291,17 +207,9 @@ async fn visit(args: &Args, cfg: &Config, client: &Client, key: &str, url: &Url,
     let (url, ex) = load(args, cfg, client, url, &mut t).await?;
     let (found, score, warmth, links) = {
         let ctx = Ctx::new(args, client, key, &url, &ex);
-        let mut seen = HashSet::new();
-        // The article's own links first (on Wikipedia, "France" and "Medicine"), then menus and footers ("Pricing").
-        let all: Vec<Link> = ex
-            .links
-            .iter()
-            .chain(&ex.site_links)
-            .filter(|l| site.contains(&l.url) && key_differs(&l.url, &url) && seen.insert(self::key(&l.url)))
-            .enumerate()
-            .map(|(i, l)| Link { i, url: l.url.clone(), text: l.text.clone(), context: l.context.clone() })
-            .collect();
-        let candidates = shortlist_links(args.ask.as_deref().unwrap_or_default(), all);
+        // The links `--links -q` would score, menus and footers included, as long as they stay on the site.
+        let candidates = links::candidates(&ctx, &ex, |u| site.contains(u));
+        // The answer the way `-q` finds it (score_blocks), and with --precise, the way --precise picks it.
         let answer = async {
             let mut t = Timer::new();
             let Ok((scores, kind)) = score_blocks(&ctx, &ex, &mut t).await else { return (None, 0.0) };
@@ -324,10 +232,10 @@ async fn visit(args: &Args, cfg: &Config, client: &Client, key: &str, url: &Url,
                 ((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth)
             }
         };
-        let ((answer, warmth), scores) = tokio::join!(
-            answer,
-            score_links(&ctx, &candidates, "Following the link in `links`", args.follow.unwrap_or(5) >= 10)
-        );
+        // `--links -q` on the same page, at the same time; a long search also asks for the answer's field.
+        let leads = links::score(&ctx, &candidates, "Following the link in `links`", args.follow.unwrap_or(5) >= 10);
+        let ((answer, warmth), scores) = tokio::join!(answer, leads);
+        let scores = scores.unwrap_or_else(|_| vec![0.0; candidates.len()]);
         let links = candidates.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect();
         match answer {
             Some((found, score)) => (Some(found), score, warmth, links),
@@ -335,10 +243,6 @@ async fn visit(args: &Args, cfg: &Config, client: &Client, key: &str, url: &Url,
         }
     };
     Ok(Visit { url, ex, found, score, warmth, links })
-}
-
-fn key_differs(a: &Url, b: &Url) -> bool {
-    key(a) != key(b)
 }
 
 /// A page waiting to be opened, and how jurl would get there.
@@ -418,7 +322,9 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             app_shell: false,
         };
         let ctx = Ctx::new(args, client, key, &start, &empty);
-        let scores = score_links(&ctx, &links, "The page at the URL in `links`", false).await;
+        let scores = links::score(&ctx, &links, "The page at the URL in `links`", false)
+            .await
+            .unwrap_or_else(|_| vec![0.0; links.len()]);
         links.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect::<Vec<_>>()
     };
     let (first, hints, robots) =
@@ -634,25 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn question_words_pick_which_links_get_scored() {
-        let link = |i: usize, path: &str| Link {
-            i,
-            url: Url::parse(&format!("https://x.com{path}")).unwrap(),
-            text: String::new(),
-            context: String::new(),
-        };
-        let mut links: Vec<Link> = (0..MAX_LINKS + 50).map(|i| link(i, &format!("/page/{i}"))).collect();
-        links.push(link(MAX_LINKS + 50, "/workers/platform/limits/"));
-        let kept = shortlist_links("What is the CPU time limit for Workers?", links);
-        assert_eq!(kept.len(), MAX_LINKS);
-        assert_eq!(kept[0].url.path(), "/workers/platform/limits/");
-        assert_eq!(kept[0].i, 0);
-    }
-
-    #[test]
     fn sitemap_locs() {
         let xml = "<urlset><url><loc>https://x.com/a?b=1&amp;c=2</loc></url><url><loc> https://x.com/pricing </loc></url></urlset>";
         assert_eq!(locs(xml), ["https://x.com/a?b=1&c=2", "https://x.com/pricing"]);
-        assert_eq!(key(&Url::parse("https://x.com/pricing/#plans").unwrap()), "https://x.com/pricing");
     }
 }

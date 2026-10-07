@@ -4,6 +4,7 @@ mod extract;
 mod fetch;
 mod follow;
 mod lightpanda;
+mod links;
 mod precise;
 mod setup;
 mod update;
@@ -25,7 +26,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     config::Config,
     decide::{Answers, choice, noul},
-    extract::{Block, Extracted, Image, Kind},
+    extract::{Block, Extracted, Image, Kind, Link},
 };
 
 /// curl, but it reads the page for you. Jev picks what matters; Clef looks at
@@ -672,27 +673,38 @@ fn print_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url:
     Ok(())
 }
 
-/// --links: the links worth following, best first.
+/// --links: the links worth following, best first. With -q, the links most likely to lead to the answer: what
+/// --follow opens, menus and footers included (a nav bar's "Pricing" is often the way to a price).
 async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
-    if ex.links.is_empty() {
-        bail!("no links found in {}", ctx.url);
-    }
-    let items = ex
-        .links
-        .iter()
-        .map(|l| Item {
-            id: format!("l{}", l.i),
-            state: json!({ "i": l.i, "text": l.text, "context": l.context, "host": l.url.host_str() }),
-            question: Some(ctx.args.question(
-                &format!("The link in `links` with i={}", l.i),
-                "points to something a reader of this page would want to follow — referenced articles, sources, \
-                 docs, downloads or related content — not site navigation, login, social sharing, legal pages or ads.",
-            )),
-        })
-        .collect();
-    let a = ctx.judge("links", items, Map::new()).await?;
-    t.lap(a.label());
-    let scores: Vec<Option<f64>> = ex.links.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
+    let (candidates, scores): (Vec<Link>, Vec<Option<f64>>) = if ctx.args.ask.is_some() {
+        let candidates = links::candidates(ctx, ex, |_| true);
+        if candidates.is_empty() {
+            bail!("no links found in {}", ctx.url);
+        }
+        let scores = links::score(ctx, &candidates, "Following the link in `links`", false).await?;
+        t.lap(format!("{} links", candidates.len()));
+        (candidates, scores.into_iter().map(Some).collect())
+    } else {
+        if ex.links.is_empty() {
+            bail!("no links found in {}", ctx.url);
+        }
+        let items = ex
+            .links
+            .iter()
+            .map(|l| Item {
+                id: format!("l{}", l.i),
+                state: json!({ "i": l.i, "text": l.text, "context": l.context, "host": l.url.host_str() }),
+                question: Some(ctx.args.question(
+                    &format!("The link in `links` with i={}", l.i),
+                    "points to something a reader of this page would want to follow — referenced articles, sources, \
+                     docs, downloads or related content — not site navigation, login, social sharing, legal pages or ads.",
+                )),
+            })
+            .collect();
+        let a = ctx.judge("links", items, Map::new()).await?;
+        t.lap(a.label());
+        (ex.links.clone(), ex.links.iter().map(|l| a.noul(&format!("l{}", l.i))).collect())
+    };
     let mut kept: Vec<_> = top(&scores, ctx.args.threshold(), ctx.args.limit(20)).into_iter().collect();
     if kept.is_empty() {
         bail!("no links worth following in {} (try a lower --threshold)", ctx.url);
@@ -704,7 +716,7 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
         let v: Vec<_> = kept
             .iter()
             .map(|(i, p)| {
-                let l = &ex.links[*i];
+                let l = &candidates[*i];
                 json!({ "url": l.url.as_str(), "text": l.text, "p": p })
             })
             .collect();
@@ -715,7 +727,7 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
         )?;
     } else {
         for (i, _) in kept {
-            writeln!(out, "{}", ex.links[i].url)?;
+            writeln!(out, "{}", candidates[i].url)?;
         }
     }
     Ok(())

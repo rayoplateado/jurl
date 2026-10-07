@@ -81,3 +81,14 @@ Five games 3 to 5 clicks apart (`--follow 15`, group `long`) and six more that p
 | Plus "is it in the answer's field of knowledge?" (`--follow 10` and up) | 15/15 | 16/18 |
 
 Far from the answer every link scores ~0.02–0.08 on "leads to the answer", so the pick is noise: from Tennis, jurl opened Berdych, Deutsche Bank, Kiev, then Freddie Mercury. Asked whether each link is in the answer's field, Jev gives vulcanized rubber and polyester 0.9 (chemistry), and the search reaches Mercury (element) in 10 pages. Asking about the question's subject instead (not the answer's field) made Jev judge links by the page they're on: tennis players, jazz musicians. The miss that stays is Bicycle → the Titanic: "what year" pulls toward calendar pages. A wiki's own pages (`Wikipedia:…/…`, `Main_Page`) are never followed.
+
+#### `--follow` scores links the way `--links -q` does
+
+`--follow` is now `--precise` and `--links -q` in a loop: both use one function to score links (`src/links.rs`). On the follow path, what Jev is asked didn't change, except that a link to another host (a subdomain, or `www.` when the page has none) now says its host. Measured against 0.1.10 the same day, all 84 runs each ([0.1.10](results/follow-0.1.10.json), [after](results/follow-links-q.json)):
+
+| | All | Pricing | Docs | Wikipedia | long | heldout | Not on the site | Tokens (all 84 runs) |
+|---|---|---|---|---|---|---|---|---|
+| 0.1.10 | 79/84 | 24/24 | 7/9 | 9/9 | 15/15 | 15/18 | 9/9 | 32.4M ($1.36) |
+| `--links -q` scoring | 79/84 | 24/24 | 9/9 | 9/9 | 15/15 | 13/18 | 9/9 | 34.3M ($1.44) |
+
+The two groups that moved were run again with both binaries (0.1.10, then after): docs 8/9 and 8/9, heldout 15/18 and 16/18. On Wikipedia (heldout) Jev is asked exactly what it was asked before, so the gap there can only be noise. Coffee → The Magic Flute missed twice in the full run and never in the rerun; Bicycle → the Titanic still misses (1 right in 6 runs after, 0 in 6 before).
