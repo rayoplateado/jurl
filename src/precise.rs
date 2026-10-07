@@ -156,7 +156,12 @@ fn trim(text: &str, r: Range<usize>) -> Option<Range<usize>> {
     if kept.is_empty() {
         return None;
     }
-    Some(r.start + lead..r.start + lead + kept.len())
+    // A span that opens a parenthesis keeps the one that closes it: "330 metres (1,083 ft)".
+    let mut len = kept.len();
+    if kept.matches('(').count() > kept.matches(')').count() && rest[len..].starts_with(')') {
+        len += 1;
+    }
+    Some(r.start + lead..r.start + lead + len)
 }
 
 /// A link that opens the page highlighting the answer, with a few words either side as context so the
@@ -164,11 +169,11 @@ fn trim(text: &str, r: Range<usize>) -> Option<Range<usize>> {
 pub fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
     let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
     // Context is up to three words next to the answer, as the browser shows them: markdown emphasis is
-    // dropped, and a word that is only markup (a table's `|`) ends the context there.
+    // dropped, and a word that is markup (a table's `|`, an HTML tag, a link) ends the context there.
     let context = |words: &mut dyn Iterator<Item = &str>| {
         words
             .map(|w| w.trim_matches(['*', '_', '`']))
-            .take_while(|w| w.chars().any(char::is_alphanumeric))
+            .take_while(|w| w.chars().any(char::is_alphanumeric) && !w.contains(['<', '[', ']', '|']))
             .take(3)
             .map(String::from)
             .collect::<Vec<_>>()
@@ -259,6 +264,12 @@ mod tests {
     fn code_lines() {
         let t = texts(&block(Kind::Code, "$ brew install ripgrep\n$ cargo install ripgrep\n"));
         assert!(t.contains(&"$ brew install ripgrep".to_string()), "{t:?}");
+    }
+
+    #[test]
+    fn parentheses_stay_balanced() {
+        let t = texts(&block(Kind::Para, "The tower is 330 metres (1,083 ft) tall."));
+        assert!(t.contains(&"330 metres (1,083 ft)".to_string()), "{t:?}");
     }
 
     #[test]
