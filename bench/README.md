@@ -115,7 +115,7 @@ Docs moved, so it was run again with both binaries, back to back ([before](resul
 
 #### Fixes from real use cases
 
-Short list items kept with their list, markdown served as `text/plain` read as markdown, a page's own URL never an image, `-t` and a non-zero exit on every miss. None of them changes what `--follow --precise` asks Jev. Measured against the binary before them the same day, 84 runs each ([before](results/follow-usecase-base.json), [after](results/follow-usecase-fixes.json)):
+Short list items kept with their list, markdown served as `text/plain` read as markdown, a page's own URL never an image, `-t` and a non-zero exit on every miss. None of them changes what `--follow --precise` asks Jev, except on a page served as `text/plain`, now read as markdown (`llms.txt` already was). Measured against the binary before them the same day, 84 runs each ([before](results/follow-usecase-base.json), [after](results/follow-usecase-fixes.json)):
 
 | | All | Pricing | Docs | Wikipedia | long | heldout | Not on the site | Tokens (all 84 runs) |
 |---|---|---|---|---|---|---|---|---|

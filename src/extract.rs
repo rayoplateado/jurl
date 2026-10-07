@@ -227,7 +227,9 @@ fn join_short(blocks: Vec<Block>) -> Vec<Block> {
         1 => out.push(run.pop().unwrap()),
         _ => {
             let text = run.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
-            out.push(Block { i: 0, kind: Kind::Para, level: None, lang: None, text, list: None });
+            // Items of one list joined are still part of that list ("1 egg" and "Salt" next to each other).
+            let list = run[0].list.filter(|l| run.iter().all(|b| b.kind == Kind::Item && b.list == Some(*l)));
+            out.push(Block { i: 0, kind: Kind::Para, level: None, lang: None, text, list });
             run.clear();
         }
     };
@@ -250,7 +252,7 @@ fn join_short(blocks: Vec<Block>) -> Vec<Block> {
 /// List items too short to be judged alone ("1 teaspoon baking soda") that sit next to a kept item of the same
 /// list: a list is read whole, so they go wherever their neighbours go. Without them a recipe loses its salt.
 pub fn short_items_of_kept_lists(blocks: &[Block], kept: impl Fn(usize) -> bool) -> HashSet<usize> {
-    let short = |b: &Block| b.kind == Kind::Item && b.list.is_some() && b.text.chars().count() < SHORT_BLOCK_CHARS;
+    let short = |b: &Block| b.list.is_some() && b.text.chars().count() < SHORT_BLOCK_CHARS;
     let mut out = HashSet::new();
     // Grows from each kept item outwards, so a run of short items between two kept ones comes along whole.
     loop {
@@ -1017,6 +1019,14 @@ mod tests {
         // Another list's short item stays out, and nothing comes along when no item of the list is kept.
         assert!(!items.contains(&pin));
         assert!(short_items_of_kept_lists(&ex.blocks, |_| false).is_empty());
+
+        // Two tiny items next to each other are joined into one block, still too short to judge: it goes too.
+        let page = "<article><ul><li>2 and 1/4 cups (281g) all-purpose flour</li><li>1 egg</li><li>Salt</li>\
+            <li>3/4 cup (170g) unsalted butter, melted</li></ul></article>";
+        let ex = html(page, &base());
+        let joined = ex.blocks.iter().position(|b| b.text == "1 egg\nSalt").unwrap();
+        let flour = ex.blocks.iter().position(|b| b.text.starts_with("2 and")).unwrap();
+        assert!(short_items_of_kept_lists(&ex.blocks, |i| i == flour).contains(&joined));
     }
 
     #[test]
