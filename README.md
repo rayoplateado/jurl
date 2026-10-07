@@ -58,7 +58,7 @@ curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-in
 
 Then run it. The first time, jurl asks for a [TypeSafe API key](https://console.typesafe.ai), checks it and saves it. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
 
-To use `--vision` and `--find`, run `jurl init` and add a Cloudflare Workers AI token.
+To use `--vision` and `--find`, run `jurl init` and add a Cloudflare Workers AI token. To get a newer jurl, run `jurl update`: it updates the same way you installed it (Homebrew, the installer or cargo).
 
 ## What you can do
 
@@ -222,6 +222,7 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 | `--json` | Machine-readable output, with every probability |
 | `-t, --timing` | Where the time went, on stderr |
 | `jurl init` | Set or replace your API keys |
+| `jurl update` | Install the latest jurl, the same way this one was installed |
 
 Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`.
 
@@ -322,10 +323,12 @@ cargo build --release && ./target/release/jurl -t <url>
 | File | What's in it |
 | --- | --- |
 | `src/main.rs` | Modes, chunking, hedging, output |
+| `src/precise.rs` | `--precise`: candidate spans and the link to them |
 | `src/extract.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
 | `src/setup.rs` · `src/config.rs` | First-run key prompt, `jurl init`, key storage |
+| `src/update.rs` | `jurl update` |
 
 Releases are built by [cargo-dist](https://opensource.axo.dev/cargo-dist/) when a `v*` tag is pushed.
 
