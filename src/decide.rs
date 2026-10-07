@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use reqwest::{Client, StatusCode};
 use serde_json::{Map, Value, json};
 
@@ -83,11 +83,33 @@ fn parse(v: &Value) -> Answers {
     Answers { answers, input_tokens, requests: 1 }
 }
 
+/// Jev or Clef couldn't be asked (a bad key, no credits, the API down): never mistaken for a page with nothing on it.
+#[derive(Debug)]
+pub struct ApiError(String);
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+pub fn is_api_error(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.is::<ApiError>())
+}
+
 /// POST with a short backoff on 429/529, honouring `Retry-After`.
 async fn post(client: &Client, url: &str, bearer: &str, body: &Value) -> Result<Value> {
     let mut attempt = 0;
     loop {
-        let res = client.post(url).bearer_auth(bearer).json(body).send().await?;
+        let res = client
+            .post(url)
+            .bearer_auth(bearer)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| ApiError(format!("{url}: {e}")))?;
         let status = res.status();
         if status.is_success() {
             return Ok(res.json().await?);
@@ -104,6 +126,6 @@ async fn post(client: &Client, url: &str, bearer: &str, body: &Value) -> Result<
             continue;
         }
         let text = res.text().await.unwrap_or_default();
-        bail!("{url} → HTTP {status}: {}", text.chars().take(400).collect::<String>());
+        return Err(ApiError(format!("{url} → HTTP {status}: {}", text.chars().take(400).collect::<String>())).into());
     }
 }

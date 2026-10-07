@@ -187,7 +187,7 @@ $ jurl --find "a carnival parade" en.wikipedia.org/wiki/Cologne
 jurl: no image in https://en.wikipedia.org/wiki/Cologne looks like "a carnival parade" (closest: …, p=0.02)
 ```
 
-The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer. With `--json` (`--precise`, with or without `--follow`) a miss that has a closest candidate still prints its JSON, `"answer": null` plus what came `closest`, and exits 1 all the same: a script that wants the closest passage reads stdout before checking the exit code. `-t` prints its timings and tokens on a miss too, so a miss can be costed.
+The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer: 1 when the page has nothing that answers, 2 when something failed (see [Exit codes](#exit-codes)). With `--json` (`--precise`, with or without `--follow`) a miss that has a closest candidate still prints its JSON, `"answer": null` plus what came `closest`, and exits 1 all the same: a script that wants the closest passage reads stdout before checking the exit code. `-t` prints its timings and tokens on a miss too, so a miss can be costed.
 
 Images are picked from `<img>` tags (`src`, `srcset` and the usual lazy-loading attributes) and the page's `og:image`. SVG images aren't candidates: they're mostly icons and logos, and Clef only reads raster images, so a post whose diagrams are all SVG (Stripe's engineering blog) has nothing to find.
 
@@ -233,7 +233,7 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 | --- | --- |
 | `-q, --ask "…"` | Keep what answers the question. Works with every mode |
 | `--follow [N]` | With `-q`: when the page doesn't answer, follow links on the same site, most promising first, reading up to N pages (default 5) |
-| `-p, --precise` | With `-q`: just the answer, in the page's words, then its block and a link to it. Exits with an error when no part of the page is the answer |
+| `-p, --precise` | With `-q`: just the answer, in the page's words, then its block and a link to it. Exits 1 when no part of the page is the answer |
 | `-c, --code` | Code blocks only |
 | `-l, --links` | Content links, best first. With `-q`, the links most likely to lead to the answer, menus included |
 | `-i, --image` | Content images, judged by file name, alt text and caption |
@@ -251,6 +251,18 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`.
 
 `--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
+
+### Exit codes
+
+As with grep, a script can tell "not there" from "something broke":
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Something was printed: an answer, blocks, links or images |
+| 1 | The page (or the site, with `--follow`) was read and has nothing that answers: no exact answer, no image that looks like that, nothing above `--threshold`. With `--json`, the JSON is still printed (`"answer": null` and what came `closest`) |
+| 2 | An error: the page couldn't be read (HTTP error, timeout, a block page, no readable text), the API couldn't be asked (a bad key, no credits), or the arguments are wrong |
+
+Before 0.1.11 every failure exited 1, and a `--json` miss exited 0.
 
 ## Speed and cost
 
