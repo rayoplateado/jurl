@@ -1,0 +1,534 @@
+//! `jurl mcp`: jurl as a tool for AI agents, over the Model Context Protocol on stdio. The client starts `jurl mcp`
+//! and sends one JSON-RPC message per line on stdin; the answers go back one per line on stdout, so nothing else may
+//! write there (jurl's own notes go to stderr, as always).
+//!
+//! This is the small part of MCP a local tool server needs: `initialize`, `ping`, `tools/list` and `tools/call`.
+//! Each tool is a jurl command line, parsed and run by the same code as the CLI, so a tool answers exactly what
+//! `jurl` would print. A miss ("the page doesn't say") is a normal result, as exit code 1 is; a failure (the page
+//! couldn't be read, a bad key, no credits) is a tool error, as exit code 2 is.
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use futures::{StreamExt, stream::FuturesUnordered};
+use reqwest::Client;
+use serde_json::{Map, Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+use crate::{Args, NotFound, Rendered, Timer, config::Config};
+
+/// The protocol versions that start with `initialize`, newest first. 2026-07-28 replaced the handshake with
+/// `server/discover`; clients on it fall back to `initialize` when that method isn't found, as it isn't here.
+const VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+/// `answer` with `follow: true` reads this many pages, like `--follow`.
+const FOLLOW_PAGES: u64 = 5;
+/// A cap on `follow`, so one call can't read a whole site: a long search (15 pages) costs about $0.035.
+const FOLLOW_MAX: u64 = 20;
+const MAX_RESULTS: u64 = 50;
+
+const VERBATIM: &str = "Everything returned is copied from the page, verbatim, with its links: jurl never writes, \
+                        summarizes or guesses. When the page doesn't have it, the result says so (\"Not found\").";
+
+/// The tools, as `tools/list` shows them. Their input schemas are also what each call's arguments are checked against.
+fn tools() -> Value {
+    let url = json!({
+        "type": "string",
+        "minLength": 1,
+        "description": "The page: a URL, or a domain and path like docs.github.com/en/rest (https:// is added)."
+    });
+    let max = |default: &str| {
+        json!({
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_RESULTS,
+            "description": format!("How many results at most (default: {default}).")
+        })
+    };
+    let read_only = json!({ "readOnlyHint": true, "openWorldHint": true });
+    json!([
+        {
+            "name": "read_page",
+            "title": "Read a page",
+            "description": format!(
+                "Read a web page: its title, what kind of page it is, and the blocks that carry it (paragraphs, list \
+                 items, code, tables) under their headings, in reading order. Navigation, cookie banners, sign-up \
+                 prompts and footers are left out. With `question`, only the blocks that help answer the question. \
+                 Pages that need JavaScript are rendered. {VERBATIM}"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": url,
+                    "question": { "type": "string", "minLength": 1, "description": "Keep only what helps answer this question." },
+                    "max": max("12 blocks, 5 with ask"),
+                },
+                "required": ["url"],
+                "additionalProperties": false,
+            },
+            "annotations": read_only,
+        },
+        {
+            "name": "answer",
+            "title": "Answer a question from a page",
+            "description": format!(
+                "The exact answer to a question, in the page's own words: a short span copied from the page (a \
+                 price, a number, a name, a date, a command), then the block it came from and a link that opens the \
+                 page with the answer highlighted. It never computes or infers: if the page says \"$8 a month\", it \
+                 won't give a yearly price. With `follow`, when the page doesn't answer, jurl searches the same site \
+                 (subdomains included), opening the links most likely to lead to the answer, and says which pages it \
+                 went through. Start from a site's front door (linear.app) to ask about the company behind it. \
+                 {VERBATIM}"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": url,
+                    "question": { "type": "string", "minLength": 1, "description": "The question." },
+                    "follow": {
+                        "anyOf": [
+                            { "type": "boolean" },
+                            { "type": "integer", "minimum": 1, "maximum": FOLLOW_MAX },
+                        ],
+                        "description": format!(
+                            "Search the same site when the page doesn't answer: true reads up to {FOLLOW_PAGES} \
+                             pages, a number sets how many (10 or more for answers several clicks away)."
+                        ),
+                    },
+                },
+                "required": ["url", "question"],
+                "additionalProperties": false,
+            },
+            "annotations": read_only,
+        },
+        {
+            "name": "find_links",
+            "title": "Find links worth following",
+            "description": format!(
+                "The links on a page worth following, best first, one URL per line. Without `question`: content links \
+                 (sources, docs, related articles), not navigation, login, sharing or legal pages. With `question`: the \
+                 links most likely to lead to the answer, menus included (a nav bar's Pricing, for a price). \
+                 {VERBATIM}"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": url,
+                    "question": { "type": "string", "minLength": 1, "description": "Rank the links by how likely they lead to the answer to this." },
+                    "max": max("20"),
+                },
+                "required": ["url"],
+                "additionalProperties": false,
+            },
+            "annotations": read_only,
+        },
+        {
+            "name": "find_code",
+            "title": "Find code on a page",
+            "description": format!(
+                "The code blocks on a page (examples, commands, snippets), each under its heading, exactly as \
+                 written. With `question`, only the code that helps answer it (\"how do I install it on macOS?\"). \
+                 {VERBATIM}"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": url,
+                    "question": { "type": "string", "minLength": 1, "description": "Keep only the code that helps answer this." },
+                    "max": max("8"),
+                },
+                "required": ["url"],
+                "additionalProperties": false,
+            },
+            "annotations": read_only,
+        },
+        {
+            "name": "find_image",
+            "title": "Find images on a page",
+            "description": format!(
+                "Image URLs from a page, best first. With `description`, the image that shows it (\"a cathedral\"): \
+                 a vision model looks at the pixels of every candidate, and when none looks like that the result says \
+                 so instead of returning the least bad one. Without it, the page's content images (photos, charts, \
+                 diagrams, screenshots), not logos, icons or avatars, judged by file name, alt text and caption; \
+                 `vision` has the pixels checked too. `description` and `vision` need a Cloudflare Workers AI token \
+                 (`jurl init`). {VERBATIM}"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": url,
+                    "description": { "type": "string", "minLength": 1, "description": "What the image shows." },
+                    "vision": { "type": "boolean", "description": "Without `description`: also look at the pixels (slower)." },
+                    "max": max("1 with description, every content image without"),
+                },
+                "required": ["url"],
+                "additionalProperties": false,
+            },
+            "annotations": read_only,
+        },
+    ])
+}
+
+/// The jurl command line a tool call stands for, after checking its arguments against the tool's schema.
+fn command(name: &str, args: &Value) -> Result<Vec<String>, String> {
+    let tools = tools();
+    let tool =
+        tools.as_array().unwrap().iter().find(|t| t["name"] == name).ok_or_else(|| format!("unknown tool {name}"))?;
+    let schema = &tool["inputSchema"];
+    let args = match args {
+        Value::Null => &Map::new(),
+        Value::Object(a) => a,
+        _ => return Err("arguments must be an object".into()),
+    };
+    check(schema, args)?;
+
+    let str = |k: &str| args.get(k).and_then(Value::as_str).map(String::from);
+    let mut argv = vec!["jurl".to_string()];
+    match name {
+        "answer" => argv.push("--precise".into()),
+        "find_links" => argv.push("--links".into()),
+        "find_code" => argv.push("--code".into()),
+        "find_image" => match str("description") {
+            Some(what) => argv.push(format!("--find={what}")),
+            None if args.get("vision") == Some(&Value::Bool(true)) => argv.push("--vision".into()),
+            None => argv.push("--image".into()),
+        },
+        _ => {}
+    }
+    // `--ask=…`, so a question that starts with "-" is still the question.
+    if let Some(q) = str("question") {
+        argv.push(format!("--ask={q}"));
+    }
+    if let Some(n) = args.get("max").and_then(Value::as_u64) {
+        argv.extend(["-n".into(), n.to_string()]);
+    }
+    match args.get("follow") {
+        Some(Value::Bool(true)) => argv.extend(["--follow".into(), FOLLOW_PAGES.to_string()]),
+        Some(Value::Number(n)) => argv.extend(["--follow".into(), n.to_string()]),
+        _ => {}
+    }
+    // After `--`, a url starting with "-" is still a url.
+    argv.extend(["--".into(), str("url").unwrap_or_default()]);
+    Ok(argv)
+}
+
+/// The part of JSON Schema the tools use: an object's required and allowed keys, and each value's type and bounds.
+fn check(schema: &Value, args: &Map<String, Value>) -> Result<(), String> {
+    let props = schema["properties"].as_object().unwrap();
+    // Unknown keys first: a model that wrote `query` for `question` learns the right name, not just that one is missing.
+    for (key, value) in args {
+        let prop = props.get(key).ok_or_else(|| {
+            let known: Vec<_> = props.keys().map(|k| format!("`{k}`")).collect();
+            format!("unknown argument `{key}` (this tool takes {})", known.join(", "))
+        })?;
+        if !fits(prop, value) {
+            return Err(format!("`{key}`: {}", prop["description"].as_str().unwrap_or("wrong type")));
+        }
+    }
+    for key in schema["required"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        if !args.contains_key(key) {
+            return Err(format!("missing `{key}`"));
+        }
+    }
+    Ok(())
+}
+
+fn fits(schema: &Value, v: &Value) -> bool {
+    if let Some(any) = schema["anyOf"].as_array() {
+        return any.iter().any(|s| fits(s, v));
+    }
+    let within =
+        |n: f64| schema["minimum"].as_f64().is_none_or(|m| n >= m) && schema["maximum"].as_f64().is_none_or(|m| n <= m);
+    match schema["type"].as_str() {
+        Some("string") => {
+            v.as_str().is_some_and(|s| s.trim().chars().count() as u64 >= schema["minLength"].as_u64().unwrap_or(0))
+        }
+        Some("integer") => v.as_u64().is_some_and(|n| within(n as f64)),
+        Some("boolean") => v.is_boolean(),
+        _ => false,
+    }
+}
+
+/// What to do with one line from the client.
+enum Reply {
+    /// Send this now (or nothing, for a notification).
+    Now(Option<Value>),
+    /// A tool call: run this jurl command line, then answer request `id`.
+    Run { id: Value, argv: Vec<String> },
+}
+
+fn handle(line: &str) -> Reply {
+    let msg: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => return Reply::Now(Some(error(Value::Null, -32700, &format!("parse error: {e}")))),
+    };
+    let Some(method) = msg.get("method").and_then(Value::as_str) else {
+        // A response to a request we never send, or junk: nothing to answer.
+        return Reply::Now(None);
+    };
+    // Notifications (`notifications/initialized`, `notifications/cancelled`…) have no id and get no reply.
+    let Some(id) = msg.get("id").cloned() else { return Reply::Now(None) };
+    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    let result = match method {
+        "initialize" => {
+            let asked = params["protocolVersion"].as_str().unwrap_or_default();
+            let version = VERSIONS.iter().find(|v| **v == asked).unwrap_or(&VERSIONS[0]);
+            json!({
+                "protocolVersion": version,
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "jurl", "title": "jurl", "version": env!("CARGO_PKG_VERSION") },
+                "instructions": "jurl reads web pages for you and returns their own words, verbatim, with links. \
+                    Use `answer` for one fact (add `follow` when the page might not have it), `read_page` for what a \
+                    page says, `find_links` to know where to go next, `find_code` for commands and examples, \
+                    `find_image` for pictures. A \"Not found\" result means the page doesn't say it: rather than ask \
+                    the same page again, add `follow` or try another page.",
+            })
+        }
+        "ping" => json!({}),
+        "tools/list" => json!({ "tools": tools() }),
+        "tools/call" => {
+            let name = params["name"].as_str().unwrap_or_default();
+            if !tools().as_array().unwrap().iter().any(|t| t["name"] == name) {
+                return Reply::Now(Some(error(id, -32602, &format!("unknown tool: {name}"))));
+            }
+            // Bad arguments are the model's to fix, so they come back as a tool error it can read.
+            return match command(name, &params["arguments"]) {
+                Ok(argv) => Reply::Run { id, argv },
+                Err(e) => Reply::Now(Some(response(id, tool_error(&format!("{name}: {e}"))))),
+            };
+        }
+        _ => return Reply::Now(Some(error(id, -32601, &format!("method not found: {method}")))),
+    };
+    Reply::Now(Some(response(id, result)))
+}
+
+fn response(id: Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+fn error(id: Value, code: i64, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+
+fn tool_error(message: &str) -> Value {
+    json!({ "content": [{ "type": "text", "text": message }], "isError": true })
+}
+
+/// Run one jurl command line and turn what it found into a tool result.
+async fn run(client: &Client, argv: &[String]) -> Value {
+    let found = async {
+        let mut args = Args::try_parse_from(argv).map_err(|e| anyhow::anyhow!("{}", e.to_string().trim()))?;
+        crate::prepare(&mut args)?;
+        // Read per call, so keys added with `jurl init` while the agent runs are picked up. Never prompts: stdin
+        // is the protocol.
+        let cfg = Config::load();
+        let key = crate::setup::saved_key(&cfg)?;
+        crate::page(&args, &cfg, client, &key, &mut Timer::new()).await
+    }
+    .await;
+    match found {
+        // Text only, no `structuredContent`: clients that get both (Claude Code) hand the model the JSON, with every
+        // probability in it, instead of the text the CLI prints. The text is what the model needs, in fewer tokens.
+        Ok(r) => json!({ "content": [{ "type": "text", "text": text(&r) }] }),
+        // The page was read and doesn't say it: a plain result, so the model takes it as the answer.
+        Err(e) if e.chain().any(|c| c.is::<NotFound>()) => {
+            json!({ "content": [{ "type": "text", "text": format!("Not found: {e:#}") }] })
+        }
+        Err(e) => tool_error(&format!("jurl: {e:#}")),
+    }
+}
+
+/// What the CLI prints, plus the pages a `follow` search went through (the CLI says that on stderr).
+fn text(r: &Rendered) -> String {
+    let mut text = r.text.trim_end().to_string();
+    if let Some(path) = r.json["path"].as_array().filter(|p| p.len() > 1) {
+        let trail: Vec<_> = path.iter().filter_map(Value::as_str).collect();
+        text.push_str(&format!("\n\nFound by following {}", trail.join(" → ")));
+    }
+    text
+}
+
+/// Serve until the client closes stdin. Tool calls run side by side: an agent may ask about several pages at once.
+pub async fn serve(client: Client) -> Result<()> {
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut stdout = tokio::io::stdout();
+    let mut calls = FuturesUnordered::new();
+    loop {
+        let reply = tokio::select! {
+            line = lines.next_line() => match line.context("reading stdin")? {
+                Some(line) if line.trim().is_empty() => continue,
+                Some(line) => match handle(&line) {
+                    Reply::Now(reply) => reply,
+                    Reply::Run { id, argv } => {
+                        let client = &client;
+                        calls.push(async move { response(id, run(client, &argv).await) });
+                        continue;
+                    }
+                },
+                None => return Ok(()),
+            },
+            Some(reply) = calls.next(), if !calls.is_empty() => Some(reply),
+        };
+        if let Some(reply) = reply {
+            let mut line = serde_json::to_vec(&reply)?;
+            line.push(b'\n');
+            stdout.write_all(&line).await?;
+            stdout.flush().await?;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reply(msg: Value) -> Option<Value> {
+        handle_raw(&msg.to_string())
+    }
+
+    fn handle_raw(line: &str) -> Option<Value> {
+        match handle(line) {
+            Reply::Now(r) => r,
+            Reply::Run { argv, .. } => panic!("unexpected run: {argv:?}"),
+        }
+    }
+
+    fn call(name: &str, arguments: Value) -> Reply {
+        let msg = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+        handle(&msg.to_string())
+    }
+
+    #[test]
+    fn initialize_agrees_on_a_version() {
+        let init = |v: &str| {
+            reply(json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": v, "capabilities": {}, "clientInfo": { "name": "t", "version": "0" } } }))
+                .unwrap()
+        };
+        let r = init("2025-06-18");
+        assert_eq!(r["id"], 1);
+        assert_eq!(r["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(r["result"]["serverInfo"]["name"], "jurl");
+        assert!(r["result"]["capabilities"]["tools"].is_object());
+        // A version we don't speak gets our newest; the client decides whether to go on.
+        assert_eq!(init("2099-01-01")["result"]["protocolVersion"], VERSIONS[0]);
+    }
+
+    #[test]
+    fn notifications_get_no_reply_and_unknown_methods_an_error() {
+        assert!(reply(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).is_none());
+        assert_eq!(reply(json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" })).unwrap()["result"], json!({}));
+        // Newer clients try `server/discover` first and fall back to `initialize` on "method not found".
+        let r = reply(json!({ "jsonrpc": "2.0", "id": "d", "method": "server/discover" })).unwrap();
+        assert_eq!(r["error"]["code"], -32601);
+        assert_eq!(r["id"], "d");
+        assert!(reply(json!({ "jsonrpc": "2.0", "id": 4, "result": {} })).is_none());
+        assert_eq!(handle_raw("{not json").unwrap()["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn tools_list_has_every_tool_with_an_object_schema() {
+        let r = reply(json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" })).unwrap();
+        let tools = r["result"]["tools"].as_array().unwrap();
+        let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["read_page", "answer", "find_links", "find_code", "find_image"]);
+        for t in tools {
+            let s = &t["inputSchema"];
+            assert_eq!(s["type"], "object", "{}", t["name"]);
+            assert!(t["description"].as_str().unwrap().contains("verbatim"), "{}", t["name"]);
+            let props = s["properties"].as_object().unwrap();
+            for req in s["required"].as_array().unwrap() {
+                assert!(props.contains_key(req.as_str().unwrap()), "{} requires an unknown {req}", t["name"]);
+            }
+            for (k, p) in props {
+                assert!(p["type"].is_string() || p["anyOf"].is_array(), "{}.{k} has no type", t["name"]);
+                assert!(p["description"].is_string(), "{}.{k} has no description", t["name"]);
+            }
+        }
+    }
+
+    #[test]
+    fn tool_calls_become_jurl_command_lines() {
+        let argv = |name: &str, a: Value| match call(name, a) {
+            Reply::Run { id, argv } => {
+                assert_eq!(id, 7);
+                argv[1..].join(" ")
+            }
+            Reply::Now(r) => panic!("{r:?}"),
+        };
+        assert_eq!(argv("read_page", json!({ "url": "example.com" })), "-- example.com");
+        assert_eq!(
+            argv("read_page", json!({ "url": "x.com", "question": "why?", "max": 3 })),
+            "--ask=why? -n 3 -- x.com"
+        );
+        assert_eq!(argv("answer", json!({ "url": "x.com", "question": "price?" })), "--precise --ask=price? -- x.com");
+        assert_eq!(
+            argv("answer", json!({ "url": "x.com", "question": "price?", "follow": true })),
+            "--precise --ask=price? --follow 5 -- x.com"
+        );
+        assert_eq!(
+            argv("answer", json!({ "url": "x.com", "question": "price?", "follow": 12 })),
+            "--precise --ask=price? --follow 12 -- x.com"
+        );
+        assert_eq!(
+            argv("answer", json!({ "url": "x.com", "question": "p?", "follow": false })),
+            "--precise --ask=p? -- x.com"
+        );
+        assert_eq!(argv("find_links", json!({ "url": "x.com" })), "--links -- x.com");
+        assert_eq!(
+            argv("find_code", json!({ "url": "x.com", "question": "install" })),
+            "--code --ask=install -- x.com"
+        );
+        assert_eq!(argv("find_image", json!({ "url": "x.com", "description": "a cat" })), "--find=a cat -- x.com");
+        assert_eq!(argv("find_image", json!({ "url": "x.com", "vision": true })), "--vision -- x.com");
+        assert_eq!(argv("find_image", json!({ "url": "x.com" })), "--image -- x.com");
+    }
+
+    #[test]
+    fn every_command_line_is_one_the_cli_accepts() {
+        for (name, a) in [
+            ("read_page", json!({ "url": "-x.com", "question": "--why", "max": 50 })),
+            ("answer", json!({ "url": "x.com", "question": "price?", "follow": 20 })),
+            ("find_links", json!({ "url": "x.com", "question": "a" })),
+            ("find_code", json!({ "url": "x.com" })),
+            ("find_image", json!({ "url": "x.com", "description": "a cat", "max": 2 })),
+            ("find_image", json!({ "url": "x.com", "vision": true })),
+        ] {
+            let Reply::Run { argv, .. } = call(name, a) else { panic!("{name}") };
+            let mut args = Args::try_parse_from(&argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+            crate::prepare(&mut args).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        }
+    }
+
+    #[test]
+    fn bad_arguments_are_tool_errors_and_unknown_tools_protocol_errors() {
+        let error_text = |name: &str, a: Value| match call(name, a) {
+            Reply::Now(Some(r)) => {
+                assert_eq!(r["result"]["isError"], true, "{r}");
+                r["result"]["content"][0]["text"].as_str().unwrap().to_string()
+            }
+            _ => panic!("{name} ran"),
+        };
+        assert!(error_text("answer", json!({ "url": "x.com" })).contains("missing `question`"));
+        assert!(error_text("read_page", json!({})).contains("missing `url`"));
+        assert!(error_text("read_page", json!({ "url": "" })).contains("`url`"));
+        assert!(error_text("read_page", json!({ "url": "x.com", "max": 0 })).contains("`max`"));
+        assert!(error_text("read_page", json!({ "url": "x.com", "max": "3" })).contains("`max`"));
+        assert!(error_text("answer", json!({ "url": "x.com", "question": "q", "follow": 500 })).contains("`follow`"));
+        assert!(error_text("find_links", json!({ "url": "x.com", "query": "q" })).contains("unknown argument `query`"));
+        assert!(error_text("find_code", json!("x.com")).contains("must be an object"));
+
+        let Reply::Now(Some(r)) = call("summarize", json!({ "url": "x.com" })) else { panic!() };
+        assert_eq!(r["error"]["code"], -32602);
+        assert_eq!(r["id"], 7);
+    }
+
+    #[test]
+    fn a_follow_search_says_where_it_went() {
+        let r = Rendered {
+            text: "$10 per user/month\n\n…\n".into(),
+            json: json!({ "path": ["https://linear.app/", "https://linear.app/pricing"] }),
+        };
+        assert_eq!(
+            text(&r),
+            "$10 per user/month\n\n…\n\nFound by following https://linear.app/ → https://linear.app/pricing"
+        );
+    }
+}

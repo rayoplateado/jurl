@@ -227,6 +227,36 @@ jurl -f "a chart or graph" -n 10 blog.cloudflare.com/markdown-for-agents/ | xarg
 jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] | select(.p > 0.8) | .text'
 ```
 
+## Use it from an agent (MCP)
+
+`jurl mcp` gives any MCP client (Claude Code, Claude Desktop, Cursor…) jurl as a set of web tools, over stdio. The agent gets the page's own words with their links, and a plain "Not found" when the page doesn't say it.
+
+```sh
+claude mcp add jurl -- jurl mcp
+```
+
+Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`) take the same entry. If the app can't find `jurl`, use the full path that `which jurl` prints:
+
+```json
+{
+  "mcpServers": {
+    "jurl": { "command": "jurl", "args": ["mcp"] }
+  }
+}
+```
+
+| Tool | Like | Returns |
+| --- | --- | --- |
+| `answer` | `--precise -q` (`follow`: `--follow`) | The exact answer, the block it's in and a link that highlights it |
+| `read_page` | `jurl`, `-q` | The blocks that carry the page, or that answer `question` |
+| `find_links` | `--links` | The links worth following, or most likely to lead to the answer |
+| `find_code` | `--code` | Code blocks, as written |
+| `find_image` | `--find`, `--image`, `--vision` | Image URLs: the one that shows `description`, or the content images |
+
+Ask your agent for the cheapest paid plan on linear.app and it calls `answer` with `{"url": "linear.app", "question": "What is the monthly price of the cheapest paid plan?", "follow": true}`. It gets back `$10 per user/month`, the block, the link, and `Found by following https://linear.app/ → https://linear.app/pricing`.
+
+The tools run the same code as the CLI, with the same keys (`jurl init` or the environment variables). A miss is a normal result that starts with `Not found:`, as exit code 1 is. A failure (a page that can't be read, a bad key, no credits) is a tool error, as exit code 2 is.
+
 ## Reference
 
 | Flag | |
@@ -247,6 +277,7 @@ jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] |
 | `-t, --timing` | Where the time went, on stderr |
 | `jurl init` | Set or replace your API keys |
 | `jurl update` | Install the latest jurl, the same way this one was installed |
+| `jurl mcp` | Serve jurl's tools to an AI agent over MCP (see [above](#use-it-from-an-agent-mcp)) |
 
 Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`.
 
@@ -367,6 +398,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
 | `src/setup.rs` · `src/config.rs` | First-run key prompt, `jurl init`, key storage |
 | `src/update.rs` | `jurl update` |
+| `src/mcp.rs` | `jurl mcp`: the tools, their schemas, JSON-RPC over stdio |
 
 Releases are built by [cargo-dist](https://opensource.axo.dev/cargo-dist/) when a `v*` tag is pushed.
 
