@@ -55,7 +55,7 @@ struct Args {
     #[arg(short, long)]
     code: bool,
     /// With -q: print just the answer, in the page's own words, then the block it's in and a link to it.
-    /// Exits with an error when no part of the page is exactly the answer
+    /// Exits 1 when no part of the page is exactly the answer (2 on errors)
     #[arg(short, long)]
     precise: bool,
     /// With -q: when the page doesn't answer, follow its links within the same site, most promising first,
@@ -267,9 +267,31 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("jurl: {e:#}");
-            ExitCode::FAILURE
+            ExitCode::from(exit_code(&e))
         }
     }
+}
+
+/// The page or site was read fine and has nothing to print: no answer, no image like that, nothing above the
+/// threshold. Exits 1, the way grep does when nothing matches, so a script can tell it from a failure.
+#[derive(Debug)]
+pub struct NotFound(String);
+
+impl std::fmt::Display for NotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotFound {}
+
+pub fn not_found(message: String) -> anyhow::Error {
+    NotFound(message).into()
+}
+
+/// 1 when nothing was found, 2 for every failure (fetching, the API, arguments), as grep does.
+fn exit_code(e: &anyhow::Error) -> u8 {
+    if e.chain().any(|c| c.is::<NotFound>()) { 1 } else { 2 }
 }
 
 async fn run(mut args: Args) -> Result<()> {
@@ -321,30 +343,39 @@ async fn run(mut args: Args) -> Result<()> {
         async move { join_all(hosts.into_iter().map(|h| c.head(h).send())).await }
     });
     let target: url::Url = args.url.parse().with_context(|| format!("bad url {}", args.url))?;
-    if args.follow.is_some() {
-        let _ = warm.await;
-        follow::run(&args, &cfg, &client, &key, target, &mut t).await?;
-        if args.timing {
-            t.report();
-        }
-        return Ok(());
-    }
-
-    let (url, ex) = load(&args, &cfg, &client, &target, &mut t).await?;
-    let _ = warm.await;
-
-    let ctx = Ctx::new(&args, &client, &key, &url, &ex);
-    if args.image || args.vision {
-        images(&ctx, &cfg, &ex, &mut t).await?;
-    } else if args.links {
-        links(&ctx, &ex, &mut t).await?;
-    } else {
-        blocks(&ctx, &ex, &mut t).await?;
-    }
+    let done = read(&args, &cfg, &client, &key, target, warm, &mut t).await;
+    // A miss costs tokens too: -t reports them either way.
     if args.timing {
         t.report();
     }
-    Ok(())
+    done
+}
+
+/// The page (or with --follow, the site) read in the mode asked for.
+async fn read(
+    args: &Args,
+    cfg: &Config,
+    client: &Client,
+    key: &str,
+    target: url::Url,
+    warm: tokio::task::JoinHandle<impl Sized>,
+    t: &mut Timer,
+) -> Result<()> {
+    if args.follow.is_some() {
+        let _ = warm.await;
+        return follow::run(args, cfg, client, key, target, t).await;
+    }
+    let (url, ex) = load(args, cfg, client, &target, t).await?;
+    let _ = warm.await;
+
+    let ctx = Ctx::new(args, client, key, &url, &ex);
+    if args.image || args.vision {
+        images(&ctx, cfg, &ex, t).await
+    } else if args.links {
+        links(&ctx, &ex, t).await
+    } else {
+        blocks(&ctx, &ex, t).await
+    }
 }
 
 /// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images.
@@ -403,7 +434,7 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     if args.precise {
         let keep = top(&scores, PRECISE_BLOCK_FLOOR, 3);
         if keep.is_empty() {
-            bail!("nothing in {} answers that", ctx.url);
+            return Err(not_found(format!("nothing in {} answers that", ctx.url)));
         }
         let pick = precise_pick(ctx, ex, &keep, t).await?;
         return print_precise(ctx, ex, &pick, None);
@@ -426,7 +457,7 @@ async fn score_blocks(
     };
     if !ex.blocks.iter().any(is_candidate) {
         if args.code {
-            bail!("no code blocks in {}", ctx.url);
+            return Err(not_found(format!("no code blocks in {}", ctx.url)));
         }
         if args.render {
             bail!("no readable content in {}", ctx.url);
@@ -483,10 +514,11 @@ fn print_blocks(
     let args = ctx.args;
     let mut pending_heading = None;
     let mut selected = Vec::new();
+    let items = extract::short_items_of_kept_lists(&ex.blocks, |i| keep.contains_key(&i));
     for b in &ex.blocks {
         if b.kind == Kind::Heading {
             pending_heading = Some(b);
-        } else if keep.contains_key(&b.i) {
+        } else if keep.contains_key(&b.i) || items.contains(&b.i) {
             if let Some(h) = pending_heading.take() {
                 selected.push(h);
             }
@@ -495,9 +527,9 @@ fn print_blocks(
     }
     if selected.is_empty() {
         if args.ask.is_some() {
-            bail!("nothing in {} answers that (try a lower --threshold)", ctx.url);
+            return Err(not_found(format!("nothing in {} answers that (try a lower --threshold)", ctx.url)));
         }
-        bail!("nothing in {} looks like content (try a lower --threshold)", ctx.url);
+        return Err(not_found(format!("nothing in {} looks like content (try a lower --threshold)", ctx.url)));
     }
 
     let mut out = stdout().lock();
@@ -551,7 +583,7 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>,
     let top: Vec<&Block> = ranked.iter().take(3).map(|(i, _)| &ex.blocks[**i]).collect();
     let spans = precise::candidates(&top);
     if spans.is_empty() {
-        bail!("nothing in {} answers that exactly", ctx.url);
+        return Err(not_found(format!("nothing in {} answers that exactly", ctx.url)));
     }
 
     // One choice over every span, plus "none": Jev weighs the spans against each other, so the one that is
@@ -664,10 +696,20 @@ fn print_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url:
             doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
         }
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+        // The JSON says what came closest, but a miss is still a miss: the same exit code as without --json.
+        if p < threshold && path.is_none() {
+            return Err(not_found(format!(
+                "no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})",
+                ctx.url
+            )));
+        }
         return Ok(());
     }
     if p < threshold {
-        bail!("no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})", ctx.url);
+        return Err(not_found(format!(
+            "no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})",
+            ctx.url
+        )));
     }
     writeln!(out, "{answer}\n\n{}\n\n<{link}>", block.markdown())?;
     Ok(())
@@ -679,14 +721,14 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     let (candidates, scores): (Vec<Link>, Vec<Option<f64>>) = if ctx.args.ask.is_some() {
         let candidates = links::candidates(ctx, ex, |_| true);
         if candidates.is_empty() {
-            bail!("no links found in {}", ctx.url);
+            return Err(not_found(format!("no links found in {}", ctx.url)));
         }
         let scores = links::score(ctx, &candidates, "Following the link in `links`", false).await?;
         t.lap(format!("{} links", candidates.len()));
         (candidates, scores.into_iter().map(Some).collect())
     } else {
         if ex.links.is_empty() {
-            bail!("no links found in {}", ctx.url);
+            return Err(not_found(format!("no links found in {}", ctx.url)));
         }
         let items = ex
             .links
@@ -707,7 +749,7 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
     };
     let mut kept: Vec<_> = top(&scores, ctx.args.threshold(), ctx.args.limit(20)).into_iter().collect();
     if kept.is_empty() {
-        bail!("no links worth following in {} (try a lower --threshold)", ctx.url);
+        return Err(not_found(format!("no links worth following in {} (try a lower --threshold)", ctx.url)));
     }
     kept.sort_by(|a, b| b.1.total_cmp(&a.1));
 
@@ -736,7 +778,7 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
 /// --image / --vision: content images, best first.
 async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> Result<()> {
     if ex.images.is_empty() {
-        bail!("no images found in {}", ctx.url);
+        return Err(not_found(format!("no images found in {}", ctx.url)));
     }
     let clef_keys = if ctx.args.vision {
         let account = cfg
@@ -843,13 +885,20 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         .filter(|(_, p)| *p >= ctx.args.threshold())
         .take(ctx.args.limit(if query.is_some() { 1 } else { usize::MAX }))
         .collect();
+    // Clef failing on every image (a bad token, no credits) is an error, not "nothing looks like that".
+    if kept.is_empty()
+        && !looks.is_empty()
+        && let Some(e) = looks.values().try_fold(None, |_, r| r.as_ref().err().map(Some)).flatten()
+    {
+        bail!("Clef couldn't look at any image in {}: {e:#}", ctx.url);
+    }
     if kept.is_empty()
         && let (Some(q), Some((url, p))) = (query, best)
     {
-        bail!("no image in {} looks like \"{q}\" (closest: {url}, p={p:.2})", ctx.url);
+        return Err(not_found(format!("no image in {} looks like \"{q}\" (closest: {url}, p={p:.2})", ctx.url)));
     }
     if kept.is_empty() {
-        bail!("no content images in {} (try a lower --threshold)", ctx.url);
+        return Err(not_found(format!("no content images in {} (try a lower --threshold)", ctx.url)));
     }
     let mut out = stdout().lock();
     if ctx.args.json {
@@ -958,4 +1007,18 @@ async fn thumbnail(client: &Client, url: &url::Url) -> Result<String> {
         Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(jpg)))
     })
     .await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exit_codes_tell_nothing_found_from_failures() {
+        assert_eq!(exit_code(&not_found("nothing in x answers that".into())), 1);
+        // Still nothing found when something along the way adds context.
+        assert_eq!(exit_code(&not_found("no image".into()).context("reading x")), 1);
+        assert_eq!(exit_code(&anyhow!("https://x.com returned HTTP 404 Not Found")), 2);
+        assert_eq!(exit_code(&anyhow!("api.typesafe.ai → HTTP 402: no credits")), 2);
+    }
 }

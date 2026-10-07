@@ -28,10 +28,16 @@ pub async fn fetch(client: &Client, url: &str) -> Result<Page> {
         }
     }
     let final_url = res.url().clone();
-    let is_markdown =
-        res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|ct| ct.contains("markdown"));
+    let ct = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
     let body = res.text().await?;
+    let is_markdown = served_markdown(&ct, &body);
     Ok(Page { url: final_url, body, is_markdown })
+}
+
+/// Some sites answer `Accept: text/markdown` with markdown served as text/plain. Read as HTML, its fenced code
+/// collapses into one line; plain text read as markdown loses nothing.
+fn served_markdown(content_type: &str, body: &str) -> bool {
+    content_type.contains("markdown") || (content_type.starts_with("text/plain") && !body.trim_start().starts_with('<'))
 }
 
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.
@@ -75,4 +81,17 @@ pub async fn render(bin: &Path, url: &Url) -> Result<Page> {
 pub async fn fetch_bytes(client: &Client, url: &Url) -> Result<Vec<u8>> {
     let res = client.get(url.as_str()).send().await?.error_for_status()?;
     Ok(res.bytes().await?.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markdown_served_as_plain_text_is_markdown() {
+        assert!(served_markdown("text/markdown; charset=utf-8", "# Hi"));
+        assert!(served_markdown("text/plain; charset=utf-8", "---\ntitle: useEffect\n---\n\n```js\nx\n```"));
+        assert!(!served_markdown("text/plain", "<!DOCTYPE html><html></html>"));
+        assert!(!served_markdown("text/html; charset=utf-8", "# not markdown"));
+    }
 }

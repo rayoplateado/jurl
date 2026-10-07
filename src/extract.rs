@@ -1,7 +1,7 @@
 //! HTML/markdown → candidate blocks and images. Every emitted string is text that
 //! exists in the page; nothing here rewrites content beyond whitespace collapsing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use scraper::{ElementRef, Html, Node, Selector};
 use serde::Serialize;
@@ -27,6 +27,9 @@ pub struct Block {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
     pub text: String,
+    /// Which `<ul>`/`<ol>` a list item belongs to, numbered in page order.
+    #[serde(skip)]
+    pub list: Option<usize>,
 }
 
 impl Block {
@@ -118,7 +121,7 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         .select(&sel("div[hidden][id^='S:']"))
         .filter_map(|e| Some((e.value().id()?.strip_prefix("S:")?.to_string(), e)))
         .collect();
-    let mut w = Walker { blocks: Vec::new(), skip_header: in_body, buf: String::new(), segments };
+    let mut w = Walker { blocks: Vec::new(), skip_header: in_body, buf: String::new(), segments, list: None, lists: 0 };
     w.container(root);
     w.flush();
 
@@ -224,7 +227,9 @@ fn join_short(blocks: Vec<Block>) -> Vec<Block> {
         1 => out.push(run.pop().unwrap()),
         _ => {
             let text = run.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
-            out.push(Block { i: 0, kind: Kind::Para, level: None, lang: None, text });
+            // Items of one list joined are still part of that list ("1 egg" and "Salt" next to each other).
+            let list = run[0].list.filter(|l| run.iter().all(|b| b.kind == Kind::Item && b.list == Some(*l)));
+            out.push(Block { i: 0, kind: Kind::Para, level: None, lang: None, text, list });
             run.clear();
         }
     };
@@ -242,6 +247,29 @@ fn join_short(blocks: Vec<Block>) -> Vec<Block> {
         b.i = i;
     }
     out
+}
+
+/// List items too short to be judged alone ("1 teaspoon baking soda") that sit next to a kept item of the same
+/// list: a list is read whole, so they go wherever their neighbours go. Without them a recipe loses its salt.
+pub fn short_items_of_kept_lists(blocks: &[Block], kept: impl Fn(usize) -> bool) -> HashSet<usize> {
+    let short = |b: &Block| b.list.is_some() && b.text.chars().count() < SHORT_BLOCK_CHARS;
+    let mut out = HashSet::new();
+    // Grows from each kept item outwards, so a run of short items between two kept ones comes along whole.
+    loop {
+        let before = out.len();
+        for (i, b) in blocks.iter().enumerate() {
+            if !short(b) || out.contains(&i) {
+                continue;
+            }
+            let neighbour = |j: usize| blocks.get(j).is_some_and(|n| n.list == b.list && (kept(j) || out.contains(&j)));
+            if (i > 0 && neighbour(i - 1)) || neighbour(i + 1) {
+                out.insert(i);
+            }
+        }
+        if out.len() == before {
+            return out;
+        }
+    }
 }
 
 /// Server already sent markdown (`Accept: text/markdown`). Split on blank lines,
@@ -275,6 +303,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
                 level: None,
                 lang: Some(lang).filter(|l| !l.is_empty()),
                 text: body,
+                list: None,
             });
             return;
         } else if text.starts_with('>') {
@@ -283,7 +312,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         } else {
             (Kind::Para, None, text)
         };
-        blocks.push(Block { i, kind, level, lang: None, text });
+        blocks.push(Block { i, kind, level, lang: None, text, list: None });
     };
 
     // YAML frontmatter: take the title, don't treat it as content.
@@ -349,6 +378,9 @@ struct Walker<'a> {
     skip_header: bool,
     buf: String,
     segments: HashMap<String, ElementRef<'a>>,
+    /// The list being walked, and how many lists came before it.
+    list: Option<usize>,
+    lists: usize,
 }
 
 impl<'a> Walker<'a> {
@@ -357,7 +389,8 @@ impl<'a> Walker<'a> {
             return;
         }
         let i = self.blocks.len();
-        self.blocks.push(Block { i, kind, level, lang, text });
+        let list = (kind == Kind::Item).then_some(self.list).flatten();
+        self.blocks.push(Block { i, kind, level, lang, text, list });
     }
 
     fn flush(&mut self) {
@@ -451,8 +484,15 @@ impl<'a> Walker<'a> {
                 }
                 self.push(Kind::Item, None, None, collapse(&own));
                 for n in nested {
-                    self.container(n);
+                    self.element(n);
                 }
+            }
+            "ul" | "ol" => {
+                let outer = self.list.replace(self.lists);
+                self.lists += 1;
+                self.container(el);
+                self.flush();
+                self.list = outer;
             }
             // Tables holding tables are layout, not data.
             "table" if el.descendants().filter_map(ElementRef::wrap).skip(1).any(|d| d.value().name() == "table") => {
@@ -658,6 +698,12 @@ fn push_image(
     }
     let Ok(url) = base.join(src) else { return };
     if !matches!(url.scheme(), "http" | "https") || noise(&url, width, height) {
+        return;
+    }
+    // A src that resolves to the page itself ("?q=80" in an og:image left without its path) is the page, not a
+    // picture of anything.
+    let bare = |u: &Url| u.as_str().split(['?', '#']).next().unwrap_or_default().to_string();
+    if bare(&url) == bare(base) {
         return;
     }
     if let Some(existing) = out.iter_mut().find(|i| i.url == url) {
@@ -951,6 +997,58 @@ mod tests {
         let urls: Vec<&str> = ex.images.iter().map(|i| i.url.as_str()).collect();
         assert!(urls.contains(&"https://example.com/amatriciana.jpg"), "{urls:?}");
         assert!(!urls.contains(&"https://example.com/tracker-banner.jpg"), "{urls:?}");
+    }
+
+    #[test]
+    fn short_list_items_go_with_their_list() {
+        let page = "<article><p>Some introduction that is long enough to be judged on its own.</p><ul>\
+            <li>2 and 1/4 cups (281g) all-purpose flour</li><li>1 teaspoon baking soda</li>\
+            <li>1 and 1/2 teaspoons cornstarch*</li><li>1/2 teaspoon salt</li>\
+            <li>3/4 cup (170g) unsalted butter, melted</li></ul><ul><li>Pin it</li></ul></article>";
+        let ex = html(page, &base());
+        let at = |t: &str| ex.blocks.iter().position(|b| b.text == t).unwrap();
+        let (soda, salt, pin) = (at("1 teaspoon baking soda"), at("1/2 teaspoon salt"), at("Pin it"));
+        let flour = at("2 and 1/4 cups (281g) all-purpose flour");
+        let kept = |i| {
+            i == flour
+                || i == at("1 and 1/2 teaspoons cornstarch*")
+                || i == at("3/4 cup (170g) unsalted butter, melted")
+        };
+        let items = short_items_of_kept_lists(&ex.blocks, kept);
+        assert!(items.contains(&soda) && items.contains(&salt));
+        // Another list's short item stays out, and nothing comes along when no item of the list is kept.
+        assert!(!items.contains(&pin));
+        assert!(short_items_of_kept_lists(&ex.blocks, |_| false).is_empty());
+
+        // Two tiny items next to each other are joined into one block, still too short to judge: it goes too.
+        let page = "<article><ul><li>2 and 1/4 cups (281g) all-purpose flour</li><li>1 egg</li><li>Salt</li>\
+            <li>3/4 cup (170g) unsalted butter, melted</li></ul></article>";
+        let ex = html(page, &base());
+        let joined = ex.blocks.iter().position(|b| b.text == "1 egg\nSalt").unwrap();
+        let flour = ex.blocks.iter().position(|b| b.text.starts_with("2 and")).unwrap();
+        assert!(short_items_of_kept_lists(&ex.blocks, |i| i == flour).contains(&joined));
+    }
+
+    #[test]
+    fn the_page_itself_is_not_an_image() {
+        let page = r#"<html><head><meta property="og:image" content="?q=80"></head><body><article>
+            <p>Text</p><img src="/blog/post?w=800" width="800" height="400"><img src="/a.png" width="800" height="400">
+            </article></body></html>"#;
+        let ex = html(page, &Url::parse("https://example.com/blog/post").unwrap());
+        let urls: Vec<_> = ex.images.iter().map(|i| i.url.as_str()).collect();
+        assert_eq!(urls, ["https://example.com/a.png"]);
+    }
+
+    #[test]
+    fn markdown_code_keeps_its_lines() {
+        let md = "Intro\n\n```js\nuseEffect(() => {\n  const c = connect();\n\n  return () => {\n    c.disconnect();\n  };\n}, []);\n```\n";
+        let ex = markdown(md, &base());
+        let code = ex.blocks.iter().find(|b| b.kind == Kind::Code).unwrap();
+        assert_eq!(
+            code.text,
+            "useEffect(() => {\n  const c = connect();\n\n  return () => {\n    c.disconnect();\n  };\n}, []);"
+        );
+        assert_eq!(code.lang.as_deref(), Some("js"));
     }
 
     #[test]

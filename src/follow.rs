@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use futures::future::join_all;
 use reqwest::Client;
 use serde_json::Map;
@@ -15,6 +15,7 @@ use url::Url;
 use crate::{
     Args, Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, Timer,
     config::Config,
+    decide::is_api_error,
     extract::{self, Extracted, Link},
     links::{self, key, overlap},
     load, precise_pick, print_blocks, print_precise, score_blocks, top,
@@ -232,31 +233,42 @@ async fn visit(
         // The answer the way `-q` finds it (score_blocks), and with --precise, the way --precise picks it.
         let answer = async {
             let mut t = Timer::new();
-            let Ok((scores, kind)) = score_blocks(&ctx, &ex, &mut t).await else { return (None, 0.0) };
+            // A page with nothing to read is a page without the answer; Jev failing ends the search.
+            let (scores, kind) = match score_blocks(&ctx, &ex, &mut t).await {
+                Ok(s) => s,
+                Err(e) if is_api_error(&e) => return Err(e),
+                Err(_) => return Ok((None, 0.0)),
+            };
             let warmth = scores.iter().flatten().copied().fold(0.0, f64::max);
             if args.precise {
                 let keep = top(&scores, PRECISE_BLOCK_FLOOR, 3);
                 if keep.is_empty() {
-                    return (None, warmth);
+                    return Ok((None, warmth));
                 }
                 match precise_pick(&ctx, &ex, &keep, &mut t).await {
                     Ok(pick) => {
                         let p = pick.p;
-                        (Some((Found::Precise(pick), p)), warmth)
+                        Ok((Some((Found::Precise(pick), p)), warmth))
                     }
-                    Err(_) => (None, warmth),
+                    Err(e) if is_api_error(&e) => Err(e),
+                    Err(_) => Ok((None, warmth)),
                 }
             } else {
                 let keep = top(&scores, args.threshold(), args.limit(5));
                 let best = keep.values().copied().fold(0.0, f64::max);
-                ((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth)
+                Ok(((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth))
             }
         };
         // `--links -q` on the same page, at the same time; a long search also asks for the answer's field.
         let long = args.follow.unwrap_or(5) >= 10;
         let leads = links::score(&ctx, &candidates, "Following the link in `links`", long);
-        let ((answer, warmth), scores) = tokio::join!(answer, leads);
-        let scores = scores.unwrap_or_else(|_| vec![0.0; candidates.len()]);
+        let (answer, scores) = tokio::join!(answer, leads);
+        let (answer, warmth) = answer?;
+        let scores = match scores {
+            Ok(s) => s,
+            Err(e) if is_api_error(&e) => return Err(e),
+            Err(_) => vec![0.0; candidates.len()],
+        };
         let links = candidates
             .into_iter()
             .zip(scores)
@@ -479,6 +491,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
                     path.push(v.url.clone());
                     take(v, lead.score, lead.p, path, &mut leads, &mut found);
                 }
+                Err(e) if is_api_error(&e) => return Err(e),
                 Err(e) if args.timing => eprintln!("jurl: skipped {}: {e:#}", lead.url),
                 Err(_) => {}
             }
@@ -499,7 +512,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     let (v, path, answered) = match found.into_iter().next() {
         Some((_, v, path)) => (v, path, true),
         None => match closest {
-            // JSON says what came closest, as on a single page; text fails with it.
+            // JSON says what came closest, as on a single page, and fails like it; text fails with it in the message.
             Some((_, v, path)) if args.json && args.precise => (v, path, false),
             Some((_, v, path)) => {
                 let what = match &v.found {
@@ -514,12 +527,18 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
                     _ => String::new(),
                 };
                 let _ = path;
-                bail!("read {pages} pages of {} and none answers that{what}", site.root);
+                return Err(crate::not_found(format!(
+                    "read {pages} pages of {} and none answers that{what}",
+                    site.root
+                )));
             }
             None if cold => {
-                bail!("read {pages} pages of {} and none answers that; no link left looks promising", site.root)
+                return Err(crate::not_found(format!(
+                    "read {pages} pages of {} and none answers that; no link left looks promising",
+                    site.root
+                )));
             }
-            None => bail!("read {pages} pages of {} and none answers that", site.root),
+            None => return Err(crate::not_found(format!("read {pages} pages of {} and none answers that", site.root))),
         },
     };
     let ctx = Ctx::new(args, client, key, &v.url, &v.ex);
@@ -533,6 +552,9 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     if !args.json {
         let state = if answered { "found" } else { "closest" };
         eprintln!("jurl: {state} after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
+    }
+    if !answered {
+        return Err(crate::not_found(format!("read {pages} pages of {} and none answers that", site.root)));
     }
     Ok(())
 }
