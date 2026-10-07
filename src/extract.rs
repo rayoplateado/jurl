@@ -91,9 +91,16 @@ pub fn html(body: &str, base: &Url) -> Extracted {
     } else {
         &["article", "main", "[role=main]", "body"]
     };
+    // An <article> or <main> holding a sliver of the page's text isn't its content: a sign-up modal's
+    // <main>, a "related" card. Below this share of the body's visible text, try the next candidate.
+    let body_len = doc.select(&sel("body")).next().map(visible_len).unwrap_or(0);
     let root = order
         .iter()
-        .find_map(|s| doc.select(&sel(s)).max_by_key(|e| e.text().map(str::len).sum::<usize>()))
+        .find_map(|s| {
+            doc.select(&sel(s))
+                .max_by_key(|e| visible_len(*e))
+                .filter(|e| *s == "body" || visible_len(*e) * ROOT_MIN_SHARE_INV >= body_len)
+        })
         .unwrap_or_else(|| doc.root_element());
     let in_body = root.value().name() == "body";
 
@@ -420,6 +427,22 @@ fn permalink(el: ElementRef) -> bool {
         && matches!(collapse(&el.text().collect::<String>()).as_str(), "" | "¶" | "#" | "§" | "🔗" | "⚓")
 }
 
+/// The root must hold at least 1/5 of the body's visible text.
+const ROOT_MIN_SHARE_INV: usize = 5;
+
+/// Text a reader could see: skips script, style and the like, which can outweigh the article itself.
+fn visible_len(el: ElementRef) -> usize {
+    el.descendants()
+        .filter_map(|n| n.value().as_text().map(|t| (n, t.len())))
+        .filter(|(n, _)| {
+            !n.ancestors()
+                .filter_map(ElementRef::wrap)
+                .any(|a| matches!(a.value().name(), "script" | "style" | "noscript" | "template"))
+        })
+        .map(|(_, len)| len)
+        .sum()
+}
+
 fn has_block_desc(el: ElementRef) -> bool {
     el.descendants().filter_map(ElementRef::wrap).skip(1).any(|d| !INLINE.contains(&d.value().name()))
 }
@@ -630,6 +653,16 @@ mod tests {
 
     fn base() -> Url {
         Url::parse("https://example.com/post/").unwrap()
+    }
+
+    #[test]
+    fn a_modal_main_is_not_the_content() {
+        let page = r#"<body><main class="membershipModal"><p>Join our premium membership today.</p></main>
+            <div class="article"><h2>Val Best Class</h2><p>The best class for Val is the Rune Knight, thanks to its damage.</p>
+            <p>A second paragraph about Val's builds and skills, long enough to matter.</p>
+            <p>A third paragraph about Val's builds and skills, long enough to matter.</p></div></body>"#;
+        let ex = html(page, &base());
+        assert!(ex.blocks.iter().any(|b| b.text.contains("Rune Knight")), "{:?}", ex.blocks);
     }
 
     #[test]
