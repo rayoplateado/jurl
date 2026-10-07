@@ -1,0 +1,82 @@
+[
+ {
+  "id": "ripgrep",
+  "url": "https://github.com/BurntSushi/ripgrep",
+  "q": "how do I install it on macOS?",
+  "truth": [
+   "brew install ripgrep"
+  ]
+ },
+ {
+  "id": "python-lines",
+  "url": "https://docs.python.org/3/tutorial/inputoutput.html",
+  "q": "how do I read a file line by line?",
+  "truth": [
+   "for line in f"
+  ]
+ },
+ {
+  "id": "uv-install",
+  "url": "https://github.com/astral-sh/uv",
+  "q": "how do I install uv on macOS or Linux?",
+  "truth": [
+   "curl -LsSf https://astral.sh/uv/install.sh | sh"
+  ]
+ },
+ {
+  "id": "jevons",
+  "url": "https://en.wikipedia.org/wiki/Jevons_paradox",
+  "q": "who first described the paradox and in which book?",
+  "truth": [
+   "The Coal Question"
+  ]
+ },
+ {
+  "id": "mdn-at",
+  "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/at",
+  "q": "what happens when the index is negative?",
+  "truth": [
+   "count back from the last item"
+  ]
+ },
+ {
+  "id": "cf-pricing",
+  "url": "https://developers.cloudflare.com/workers/platform/pricing/",
+  "q": "how many requests per month are included in the Workers Paid plan?",
+  "truth": [
+   "10 million"
+  ]
+ },
+ {
+  "id": "gh-ratelimit",
+  "url": "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+  "q": "what is the primary rate limit for authenticated users?",
+  "truth": [
+   "5,000 requests per hour"
+  ]
+ },
+ {
+  "id": "node-fs",
+  "url": "https://nodejs.org/api/fs.html",
+  "q": "how do I read a whole file as a string with the promises API?",
+  "truth": [
+   "fsPromises.readFile"
+  ]
+ },
+ {
+  "id": "pg-bigint",
+  "url": "https://www.postgresql.org/docs/current/datatype-numeric.html",
+  "q": "what is the range of bigint?",
+  "truth": [
+   "9223372036854775807"
+  ]
+ },
+ {
+  "id": "react-useeffect",
+  "url": "https://react.dev/reference/react/useEffect",
+  "q": "how do I clean up a subscription when the component unmounts?",
+  "truth": [
+   "return () =>"
+  ]
+ }
+]

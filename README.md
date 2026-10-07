@@ -225,6 +225,20 @@ Keys live in `~/.config/jurl/env`. Environment variables take precedence over th
 
 Measured on 2026-10-04. Run any command with `-t` to see your own numbers.
 
+## How it compares
+
+Ten documentation pages, one question each, and what an agent gets back from each way of reading them:
+
+| Reader | Exact answer | Code lines not on the page | Median tokens |
+| --- | --- | --- | --- |
+| `jurl -q` | 10/10 | 1 of 60 | 375 |
+| Claude Code WebFetch | 10/10 | 33 of 63 | 148 |
+| Exa contents + highlights | 8/10 | 0 of 59 | 351 |
+| Tavily extract | 5/10 | 8 of 36 | 524 |
+| The whole page | 10/10 | 0 | 15,352 |
+
+WebFetch rewrites what it reads: half the code it hands back isn't on the page. Exa is faster and costs about the same, but missed both answers that were code. Measured on 2026-10-07; the tasks, the scripts and every answer are in [bench/](bench).
+
 ## Your keys, your data
 
 jurl has no server and no account of its own. It talks to the model APIs directly with **your** keys:

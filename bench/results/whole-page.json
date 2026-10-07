@@ -1,0 +1,52 @@
+{
+ "ripgrep": {
+  "hit": true,
+  "tokens": 14889,
+  "ms": 5026
+ },
+ "python-lines": {
+  "hit": true,
+  "tokens": 7543,
+  "ms": 2710
+ },
+ "uv-install": {
+  "hit": true,
+  "tokens": 28999,
+  "ms": 4862
+ },
+ "jevons": {
+  "hit": true,
+  "tokens": 30411,
+  "ms": 6916
+ },
+ "mdn-at": {
+  "hit": true,
+  "tokens": 8061,
+  "ms": 867
+ },
+ "cf-pricing": {
+  "hit": true,
+  "tokens": 19370,
+  "ms": 517
+ },
+ "gh-ratelimit": {
+  "hit": true,
+  "tokens": 8286,
+  "ms": 2145
+ },
+ "node-fs": {
+  "hit": true,
+  "tokens": 136414,
+  "ms": 1522
+ },
+ "pg-bigint": {
+  "hit": true,
+  "tokens": 5926,
+  "ms": 987
+ },
+ "react-useeffect": {
+  "hit": true,
+  "tokens": 15815,
+  "ms": 591
+ }
+}
