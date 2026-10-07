@@ -3,15 +3,15 @@
 An agent has a URL and a question. What it gets back from each way of reading the page, on 10 documentation pages.
 Measured on 2026-10-07.
 
-| Reader | Exact answer | Code lines not on the page | Median tokens | Median time |
-| --- | --- | --- | --- | --- |
-| jurl -q | 10/10 (30/30 over 3 runs) | 0 of 60 | 375 | 0.8 s |
-| Claude Code WebFetch | 10/10 | 33 of 63 | 148 | — |
-| Exa contents + highlights | 8/10 | 0 of 59 | 351 | 0.3 s |
-| Exa search + highlights | 8/10 | — | 1,529 | 1.9 s |
-| Tavily extract (query) | 5/10 | 8 of 36 | 524 | 0.5 s |
-| Tavily search | 3/10 | — | 942 | 3.4 s |
-| Whole page as markdown | 10/10 | 0 | 15,352 | 1.8 s |
+| Reader | Exact answer | Code lines not on the page | Cost per page | Median tokens | Median time |
+| --- | --- | --- | --- | --- | --- |
+| jurl -q | 10/10 (30/30 over 3 runs) | 0 of 60 | $0.0004 | 375 | 0.8 s |
+| Claude Code WebFetch | 10/10 | 33 of 63 | ~$0.015 | 148 | — |
+| Exa contents + highlights | 8/10 | 0 of 59 | $0.001 | 351 | 0.3 s |
+| Exa search + highlights | 8/10 | — | $0.007 | 1,529 | 1.9 s |
+| Tavily extract (query) | 5/10 | 8 of 36 | $0.0016 | 524 | 0.5 s |
+| Tavily search | 3/10 | — | $0.008 | 942 | 3.4 s |
+| Whole page as markdown | 10/10 | 0 | — | 15,352 | 1.8 s |
 
 - **Exact answer:** the answer's text (`truth` in [tasks.json](tasks.json)) is in what the reader returned, word for word. This is strict on purpose: an explanation in other words counts as a miss. Exa's React answer, for example, explains cleanup correctly in prose but has no `return () =>`.
 - **Code lines not on the page:** every line inside a code block of the answer, looked up (ignoring whitespace, and a heading's `#`) in the page as served. Claude Code's WebFetch rewrites what it reads, adding comments and examples of its own, e.g. `const subscription = createSubscription(data);` for React, which isn't on react.dev. Search rows are left out: their results are other pages.
@@ -20,9 +20,9 @@ Measured on 2026-10-07.
 ## What it costs
 
 - **jurl:** $0.0004 per page (median), $0.0086 at most, for Node's 450 KB `fs` page. Jev is $0.042 per million input tokens.
+- **Claude Code's WebFetch:** included in Claude Code; each call has a small model read the page, up to 100,000 characters. At Claude Haiku 4.5's $1 per million input tokens that's ~$0.015 for the median page here.
 - **Exa:** $0.001 per contents call, $0.007 per search, as reported by the API.
-- **Claude Code's WebFetch:** included in Claude Code, but each call has a small model read up to 100,000 characters of the page.
-- **Tavily:** not measured.
+- **Tavily:** $0.008 per credit; extract is 1 credit per 5 pages, search 1 credit.
 
 ## What it shows, and what it doesn't
 

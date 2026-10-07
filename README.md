@@ -227,17 +227,21 @@ Measured on 2026-10-04. Run any command with `-t` to see your own numbers.
 
 ## How it compares
 
-Ten documentation pages, one question each, and what an agent gets back from each way of reading them:
+Ten documentation pages, one question each ([bench/](bench) has the tasks, the scripts and every answer):
 
-| Reader | Exact answer | Code lines not on the page | Median tokens |
-| --- | --- | --- | --- |
-| `jurl -q` | 10/10 | 0 of 60 | 375 |
-| Claude Code WebFetch | 10/10 | 33 of 63 | 148 |
-| Exa contents + highlights | 8/10 | 0 of 59 | 351 |
-| Tavily extract | 5/10 | 8 of 36 | 524 |
-| The whole page | 10/10 | 0 | 15,352 |
+| | jurl | Claude Code WebFetch | Exa | Tavily |
+| --- | --- | --- | --- | --- |
+| Exact answer | **10/10** | **10/10** | 8/10 | 5/10 |
+| Code lines not on the page | **0 of 60** | 33 of 63 | **0 of 59** | 8 of 36 |
+| Cost per page | **$0.0004** | ~$0.015 | $0.001 | $0.0016 |
+| Tokens the agent reads | 375 | **148** | 351 | 524 |
+| Time per page | 0.8 s | — | **0.3 s** | 0.5 s |
+| Finds an image by what it shows | **yes** | no | no | no |
+| Picks the links worth following | **yes** | no | no | no |
+| Just the code | **yes** | no | no | no |
+| Open source, in your terminal | **yes** | no | no | no |
 
-WebFetch rewrites what it reads: half the code it hands back isn't on the page. Exa is faster and costs about the same, but missed both answers that were code. Measured on 2026-10-07; the tasks, the scripts and every answer are in [bench/](bench).
+Best in each row in bold. WebFetch hands the agent the fewest tokens because it rewrites what it reads: half the code it hands back isn't on the page, and each call has a small model ($1 per million tokens) read the whole page. Exa is the fastest, but missed both answers that were code. Tavily cut the code out of its extracts. Measured on 2026-10-07.
 
 ## Your keys, your data
 
