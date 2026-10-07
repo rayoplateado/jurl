@@ -1,0 +1,133 @@
+[
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 109239,
+  "ms": 2907,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 109177,
+  "ms": 2820,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 109078,
+  "ms": 2758,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 minutes (300,000 ms)",
+  "right": true,
+  "pages": 5,
+  "tokens": 102635,
+  "ms": 3181,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/",
+   "https://developers.cloudflare.com/workers/platform/limits/index.md"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 min (default: 30 seconds)",
+  "right": true,
+  "pages": 5,
+  "tokens": 106378,
+  "ms": 3291,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/",
+   "https://developers.cloudflare.com/workers/platform/limits/index.md"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 minutes",
+  "right": true,
+  "pages": 5,
+  "tokens": 103253,
+  "ms": 3418,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "Always",
+  "right": true,
+  "pages": 5,
+  "tokens": 354045,
+  "ms": 3456,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "Always",
+  "right": true,
+  "pages": 5,
+  "tokens": 337708,
+  "ms": 3091,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "Always",
+  "right": true,
+  "pages": 5,
+  "tokens": 336957,
+  "ms": 3108,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+  ]
+ }
+]

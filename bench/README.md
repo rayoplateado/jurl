@@ -103,13 +103,12 @@ Up to here `--follow` never opened a wiki's own pages by a list of MediaWiki pre
 
 Telling Jev in the question that "a page about the site itself (help, editing, policies, search, accounts…) does neither" didn't work: on the American Automobile Association page `Special:Search` went from 0.18 to 0.31 and `Main_Page` from 0.16 to 0.29, every score rose about twice, and on linear.app "signup" went from 0.15 to 0.53. The question is unchanged.
 
-Measured the same day ([before](results/follow-generic-base.json), [first version](results/follow-generic-first.json): `<sup>`/image links and menus scored once, no discount; [long](results/follow-generic-long.json) and [heldout](results/follow-generic-heldout.json) with the discount):
+Measured the same day, 84 runs each ([before](results/follow-generic-base.json), [first version](results/follow-generic-first.json): `<sup>`/image links and menus scored once, no discount; [final](results/follow-generic-final.json): with the discount):
 
-| | All | Pricing | Docs | Wikipedia | long | heldout | Not on the site |
-|---|---|---|---|---|---|---|---|
-| Prefix list (before) | 80/84 | 24/24 | 8/9 | 9/9 | 15/15 | 15/18 | 9/9 |
-| Generic, no discount | 76/84 | 24/24 | 7/9 | 9/9 | 14/15 | 13/18 | 9/9 |
-| Generic, with the discount | | | | | 15/15 | 15/18 | |
+| | All | Pricing | Docs | Wikipedia | long | heldout | Not on the site | Tokens (all 84 runs) |
+|---|---|---|---|---|---|---|---|---|
+| Prefix list (before) | 80/84 | 24/24 | 8/9 | 9/9 | 15/15 | 15/18 | 9/9 | 34.3M ($1.44) |
+| Generic, no discount | 76/84 | 24/24 | 7/9 | 9/9 | 14/15 | 13/18 | 9/9 | 33.8M ($1.42) |
+| Generic, final | 80/84 | 24/24 | 6/9 | 9/9 | 15/15 | 17/18 | 9/9 | 33.4M ($1.40) |
 
-The discount only applies from `--follow 10`, so pricing, docs, Wikipedia and the traps (5 to 8 pages) run as in the second row. Not measured yet: a full run of the final version (the account ran out of credits); the long and heldout runs above treated links with no text at all as marginal too (on Wikipedia, only a photo's empty "enlarge" link), which the final version narrowed to image-only links. Bicycle → the Titanic: 0/3 before, 1/3 with the discount (through Steel → Ship → RMS Titanic). In `-t` runs from Paris (6) and Bicycle (3) with menus scored once, no `Wikipedia:`, `Main_Page`, `Special:` or `File:` page was opened (with `<sup>`/image links alone, Bicycle opened `Main_Page` and five `Wikipedia:Contents` pages); with the discount, no trail in the long and heldout runs goes through one. Pizza wasn't checked with `-t` after the discount.
-
+Docs moved, so it was run again with both binaries, back to back ([before](results/follow-generic-base-docs2.json), [final](results/follow-generic-final-docs2.json); 5 runs each: [before](results/follow-generic-base-docs3.json), [final](results/follow-generic-final-docs3.json)): 9/9 and 8/9, then 13/15 and 13/15. Every docs miss is Kubernetes, the known one: when the search lands on the Pod API reference instead of the pod lifecycle page, `--precise` picks "NotRequired". Over all its runs that day it was right 8 of 11 times before and 5 of 11 after, but tied 3 of 5 to 3 of 5 when run back to back; GitHub and Cloudflare were right in every run with both. Bicycle → the Titanic: 0/3 before, 2/3 now, both times through `RMS_Titanic`. In `-t` runs of the final version from Paris (4), Bicycle (2) and Pizza (2), no `Wikipedia:`, `Main_Page`, `Special:` or `File:` page was opened, and no trail in the 84 runs goes through one; with only the `<sup>`/image rule, Bicycle had opened `Main_Page` and five `Wikipedia:Contents` pages.
