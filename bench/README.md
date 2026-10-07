@@ -5,7 +5,7 @@ Measured on 2026-10-07.
 
 | Reader | Exact answer | Code lines not on the page | Median tokens | Median time |
 | --- | --- | --- | --- | --- |
-| jurl -q | 10/10 (30/30 over 3 runs) | 1 of 60 | 375 | 0.8 s |
+| jurl -q | 10/10 (30/30 over 3 runs) | 0 of 60 | 375 | 0.8 s |
 | Claude Code WebFetch | 10/10 | 33 of 63 | 148 | — |
 | Exa contents + highlights | 8/10 | 0 of 59 | 351 | 0.3 s |
 | Exa search + highlights | 8/10 | — | 1,529 | 1.9 s |
@@ -14,7 +14,7 @@ Measured on 2026-10-07.
 | Whole page as markdown | 10/10 | 0 | 15,352 | 1.8 s |
 
 - **Exact answer:** the answer's text (`truth` in [tasks.json](tasks.json)) is in what the reader returned, word for word. This is strict on purpose: an explanation in other words counts as a miss. Exa's React answer, for example, explains cleanup correctly in prose but has no `return () =>`.
-- **Code lines not on the page:** every line inside a code block of the answer, looked up (ignoring whitespace) in the page as served. Claude Code's WebFetch rewrites what it reads, adding comments and examples of its own, e.g. `const subscription = createSubscription(data);` for React, which isn't on react.dev. Search rows are left out: their results are other pages.
+- **Code lines not on the page:** every line inside a code block of the answer, looked up (ignoring whitespace, and a heading's `#`) in the page as served. Claude Code's WebFetch rewrites what it reads, adding comments and examples of its own, e.g. `const subscription = createSubscription(data);` for React, which isn't on react.dev. Search rows are left out: their results are other pages.
 - **Median tokens:** what the agent reads, counted with `cl100k_base`.
 
 ## What it costs

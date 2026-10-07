@@ -5,7 +5,7 @@
 # "Exact answer" means the task's truth string (tasks.json) is in what the reader returned, word for word.
 # "Code lines not on the page": every line inside a code block of the answer is looked up, ignoring whitespace, in
 # the page as served (HTML with tags stripped, the markdown it serves to `Accept: text/markdown`, and Jina's
-# markdown). Search rows are left out: their results are other pages.
+# markdown), ignoring a leading markdown heading mark. Search rows are left out: their results are other pages.
 
 import json, re, html, statistics as st
 from pathlib import Path
@@ -32,6 +32,15 @@ def page(url):
 
 def code_lines(md):
     return [l.strip() for b in re.findall(r"```[^\n]*\n(.*?)```", md, re.S) for l in b.split("\n") if l.strip()]
+
+
+def on_page(line, text):
+    if squash(line) in text:
+        return True
+    # A heading mark (`# Title`) is formatting, not text the reader made up. Only for a real line of text,
+    # so a short comment like `# or` still has to be on the page.
+    rest = re.sub(r"^#{1,6}\s+", "", line)
+    return rest != line and len(rest) >= 12 and squash(rest) in text
 
 
 def truth_hit(i, text):
@@ -63,7 +72,7 @@ for name, rows in readers.items():
         off = "—"
     else:
         lines = [(i, l) for i in IDS for l in code_lines(rows[i]["text"])]
-        off = f"{sum(squash(l) not in pages[i] for i, l in lines)} of {len(lines)}"
+        off = f"{sum(not on_page(l, pages[i]) for i, l in lines)} of {len(lines)}"
     toks = int(st.median(len(enc.encode(rows[i]["text"])) for i in IDS))
     ms = [rows[i]["ms"] for i in IDS if rows[i].get("ms")]
     time_cell = f"{st.median(ms) / 1000:.1f} s" if ms else "—"
