@@ -3,6 +3,7 @@ mod decide;
 mod extract;
 mod fetch;
 mod lightpanda;
+mod precise;
 mod setup;
 
 use std::{
@@ -50,6 +51,10 @@ struct Args {
     /// Only code blocks: examples, commands, snippets
     #[arg(short, long)]
     code: bool,
+    /// With -q: print just the answer, in the page's own words, then the block it's in and a link to it.
+    /// Exits with an error when no part of the page is exactly the answer
+    #[arg(short, long)]
+    precise: bool,
     /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text)
     #[arg(short, long)]
     render: bool,
@@ -257,6 +262,12 @@ async fn run(mut args: Args) -> Result<()> {
     if modes > 1 {
         bail!("pick one of --image/--vision, --links, --code");
     }
+    if args.precise && (args.image || args.vision || args.links) {
+        bail!("--precise picks part of a block: use it with -q or --code -q, not images or links");
+    }
+    if args.precise && args.ask.is_none() {
+        bail!("--precise needs a question: add -q \"…\"");
+    }
     let key = setup::typesafe_key(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
@@ -397,6 +408,10 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
         bail!("nothing in {} looks like content (try a lower --threshold)", ctx.url);
     }
 
+    if args.precise {
+        return precise_answer(ctx, ex, &keep, t).await;
+    }
+
     let mut out = stdout().lock();
     if args.json {
         let blocks: Vec<_> = selected
@@ -427,6 +442,70 @@ async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
             writeln!(out, "{}\n", b.markdown())?;
         }
     }
+    Ok(())
+}
+
+/// --precise: Jev scores spans of the best blocks as the exact answer; the winner is printed on its own line.
+async fn precise_answer(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>, t: &mut Timer) -> Result<()> {
+    let q = ctx.args.ask.as_deref().unwrap_or_default();
+    let mut ranked: Vec<(&usize, &f64)> = keep.iter().collect();
+    ranked.sort_by(|a, b| b.1.total_cmp(a.1));
+    let top: Vec<&Block> = ranked.iter().take(3).map(|(i, _)| &ex.blocks[**i]).collect();
+    let spans = precise::candidates(&top);
+    if spans.is_empty() {
+        bail!("nothing in {} answers that exactly", ctx.url);
+    }
+
+    // The blocks ride along as context; each span gets the question.
+    let mut items: Vec<Item> = top
+        .iter()
+        .map(|b| Item {
+            id: format!("ctx{}", b.i),
+            state: json!({ "block": b.i, "text": b.text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
+            question: None,
+        })
+        .collect();
+    items.extend(spans.iter().enumerate().map(|(k, s)| Item {
+        id: format!("s{k}"),
+        state: json!({ "i": k, "block": top[s.block].i, "span": &top[s.block].text[s.range.clone()] }),
+        question: Some(noul(format!(
+            "The span in `candidates` with i={k} is exactly the answer to this question, with nothing missing \
+             and nothing extra: {q}"
+        ))),
+    }));
+    let a = ctx.judge("candidates", items, Map::new()).await?;
+    t.lap(a.label());
+
+    // Best score wins; on a tie (to two decimals) the shorter span, which says the same with less.
+    let mut scored: Vec<(&precise::Span, f64)> =
+        spans.iter().enumerate().map(|(k, s)| (s, a.noul(&format!("s{k}")).unwrap_or(0.0))).collect();
+    let key = |(s, p): &(&precise::Span, f64)| ((-p * 100.0).round() as i64, s.range.len());
+    scored.sort_by_key(key);
+    let (best, p) = scored[0];
+    let block = top[best.block];
+    let answer = &block.text[best.range.clone()];
+    let link = precise::link(ctx.url, &block.text, &best.range);
+
+    let mut out = stdout().lock();
+    if ctx.args.json {
+        let doc = json!({
+            "url": ctx.url.as_str(),
+            "title": ex.title,
+            "ask": q,
+            "answer": (p >= ctx.args.threshold).then_some(answer),
+            "closest": (p < ctx.args.threshold).then_some(answer),
+            "p": p,
+            "quote": block.text,
+            "block": block.i,
+            "link": link,
+        });
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+        return Ok(());
+    }
+    if p < ctx.args.threshold {
+        bail!("no part of {} is exactly the answer (closest: \"{answer}\", p={p:.2})", ctx.url);
+    }
+    writeln!(out, "{answer}\n\n{}\n\n<{link}>", block.markdown())?;
     Ok(())
 }
 
