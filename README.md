@@ -187,7 +187,9 @@ $ jurl --find "a carnival parade" en.wikipedia.org/wiki/Cologne
 jurl: no image in https://en.wikipedia.org/wiki/Cologne looks like "a carnival parade" (closest: …, p=0.02)
 ```
 
-The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer.
+The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer. With `--json` (`--precise`, with or without `--follow`) a miss that has a closest candidate still prints its JSON, `"answer": null` plus what came `closest`, and exits 1 all the same: a script that wants the closest passage reads stdout before checking the exit code. `-t` prints its timings and tokens on a miss too, so a miss can be costed.
+
+Images are picked from `<img>` tags (`src`, `srcset` and the usual lazy-loading attributes) and the page's `og:image`. SVG images aren't candidates: they're mostly icons and logos, and Clef only reads raster images, so a post whose diagrams are all SVG (Stripe's engineering blog) has nothing to find.
 
 ### JavaScript apps
 
@@ -311,7 +313,7 @@ url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · 
         rank · threshold · page order · print verbatim
 ```
 
-- **Fetch.** jurl asks for `text/markdown` first; sites using Cloudflare's *Markdown for Agents* send it already converted. Otherwise jurl's own extractor drops navigation, footers, asides and scripts, and splits the rest into headings, paragraphs, list items, code, quotes and tables.
+- **Fetch.** jurl asks for `text/markdown` first; sites using Cloudflare's *Markdown for Agents* send it already converted (react.dev answers with markdown too, as `text/plain`: jurl reads that as markdown, so code keeps its lines). Otherwise jurl's own extractor drops navigation, footers, asides and scripts, and splits the rest into headings, paragraphs, list items, code, quotes and tables. A list item too short to judge alone ("1 teaspoon baking soda") is printed when an item next to it in the same list is kept.
 - **Ask.** Every candidate becomes one yes/no question, and they all go to Jev in a single request. Asking 100 questions takes about as long as asking one.
 - **Look.** Clef-flash checks the pixels of each image (downscaled to 384 px) while Jev reads the text, not after.
 - **Print.** jurl keeps what clears the threshold, in page order. A heading comes back only when something in its section does.
