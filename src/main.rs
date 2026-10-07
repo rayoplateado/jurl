@@ -256,6 +256,8 @@ impl<'a> Ctx<'a> {
             if field != "blocks" {
                 state["page_text"] = json!(self.excerpt);
             }
+            // The note for each link's question (`ask_per_link`). Jev's side-by-side pick of leads is also asked about
+            // `links` and has it in its one question too; twice there costs nothing.
             if field == "links"
                 && let Some(note) = self.owner_note()
             {
