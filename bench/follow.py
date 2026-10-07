@@ -7,6 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 EXE = os.environ.get("JURL", "jurl")
 HERE = os.path.dirname(os.path.abspath(__file__))
 cases = json.load(open(os.path.join(HERE, "follow.json")))
+# GROUP=long runs only that group.
+if os.environ.get("GROUP"):
+    cases = [c for c in cases if c["group"] == os.environ["GROUP"]]
 label = sys.argv[1] if len(sys.argv) > 1 else "run"
 runs = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 
@@ -50,8 +53,10 @@ for c in cases:
     ok = sum(r["right"] for r in rs)
     ans = " | ".join(sorted({(r["answer"] or "∅").replace("\n", " / ")[:18] for r in rs}))
     print(f"{(c['start'] + ' · ' + c['q'])[:58]:58} {ok}/{len(rs)}   {med([r['pages'] for r in rs])!s:>4}  {med([r['tokens'] for r in rs])!s:>7}  {med([r['ms'] for r in rs])/1000:5.1f}s  {ans}")
-for g in ["pricing", "docs", "wikipedia", "trap"]:
+for g in ["pricing", "docs", "wikipedia", "long", "heldout", "trap"]:
     rs = [r for r in results if r["group"] == g]
+    if not rs:
+        continue
     print(f"{g:10} {sum(r['right'] for r in rs)}/{len(rs)} right · median {med([r['pages'] for r in rs])} pages · {med([r['tokens'] for r in rs])} tokens · {med([r['ms'] for r in rs])/1000:.1f}s")
 tokens = sum(r["tokens"] or 0 for r in results)
 print(f"all       {sum(r['right'] for r in results)}/{len(results)} right · {tokens} tokens in all (${tokens * 0.042 / 1e6:.3f})")

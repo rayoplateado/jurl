@@ -91,13 +91,17 @@ fn table_cells(text: &str) -> Vec<(Range<usize>, Option<String>)> {
     let mut out = Vec::new();
     for row in &rows[1..] {
         let name = row.first().map(cell).unwrap_or_default();
-        for (j, r) in row.iter().enumerate().skip(1) {
+        // The first column names the row, but can be the answer too: in a glossary (`| C9H8O4 | aspirin |`) the
+        // formula is the first cell. It's labelled by the cell next to it.
+        let next = row.get(1).map(cell).unwrap_or_default();
+        for (j, r) in row.iter().enumerate() {
             let value = cell(r);
             if value.is_empty() {
                 continue;
             }
             let column = header.get(j).cloned().unwrap_or_default();
-            let context = [name.as_str(), column.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>();
+            let row_name = if j == 0 { next.as_str() } else { name.as_str() };
+            let context = [row_name, column.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>();
             let label = (!context.is_empty()).then(|| format!("{value} ({})", context.join(" · ")));
             out.push((r.clone(), label));
         }
@@ -389,6 +393,14 @@ mod tests {
         assert_eq!(paid.label.as_deref(), Some("30 s (CPU time · Paid)"));
         let free = spans.iter().find(|s| s.label.as_deref() == Some("10 ms (CPU time · Free)"));
         assert!(free.is_some());
+    }
+
+    #[test]
+    fn the_first_column_can_be_the_answer() {
+        let b = block(Kind::Table, "| Formula | Synonyms |\n| --- | --- |\n| C9H8O4 | acetylsalicylic acid |");
+        let spans = candidates(&[&b]);
+        let formula = spans.iter().find(|s| s.label.as_deref() == Some("C9H8O4 (acetylsalicylic acid · Formula)"));
+        assert!(formula.is_some(), "{spans:?}");
     }
 
     fn texts(b: &Block) -> Vec<String> {

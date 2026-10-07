@@ -67,6 +67,17 @@ WebFetch only runs inside Claude Code: [results/webfetch.json](results/webfetch.
 | | Right | Pricing | Docs | Wikipedia | Not on the site | Median pages (pricing) | Tokens (all 54 runs) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | First version | 44/54 | 21/24 | 3/9 | 11/12 | 9/9 | 4 | 7.5M ($0.32) |
-| Now | 50/54 | 23/24 | 6/9 | 12/12 | 9/9 | 3 | 8.0M ($0.34) |
+| With the first column | 49/54 | 24/24 | 7/9 | 9/12 | 9/9 | 3 | 8.4M ($0.35) |
 
-What changed: the start page is weighed like any other candidate page (a FAQ line on the home page no longer beats `/pricing`); Jev compares the best leads side by side; a docs index counts as warm when it links to the answer; on pages with more links than get scored, those sharing words with the question get in first (Cloudflare's Workers index lists hundreds); table cells reach `--precise` with their row and column ("30 s (CPU time · Paid)"). Warmth is relative too: far from the answer every page is cold, so a page counts as warmer when its best link looks better than the link that led to it; without that, a long game never left the start page's links (Paris → Aspirin went from 2 in 3 to none, and is now 3 in 3, via Glossary of chemical formulae). A wiki's own pages (`Wikipedia:`, `Special:`, `Help:`) aren't followed. Kubernetes is the one miss that stays: the answer page is found, but `--precise` picks another field on it ("NotRequired").
+What changed: the start page is weighed like any other candidate page (a FAQ line on the home page no longer beats `/pricing`); Jev compares the best leads side by side; a docs index counts as warm when it links to the answer; on pages with more links than get scored, those sharing words with the question get in first (Cloudflare's Workers index lists hundreds); table cells reach `--precise` with their row and column ("30 s (CPU time · Paid)"). Warmth is relative too: far from the answer every page is cold, so a page counts as warmer when its best link looks better than the link that led to it; without that, a long game never left the start page's links (Paris → Aspirin went from 2 in 3 to none; with relative warmth it reached the formula in 5 of 10 runs, the long game is still hit or miss). A wiki's own pages (`Wikipedia:`, `Special:`, `Help:`) aren't followed. A table's first column is a candidate in `--precise` too, labelled by the cell next to it: in Wikipedia's glossary of formulae the formula is the first cell (`HC9H7O4`, the page's own spelling), and without it jurl picked the name next to it. Kubernetes is the one miss that stays: the answer page is found, but `--precise` picks another field on it ("NotRequired").
+
+#### Long games
+
+Five games 3 to 5 clicks apart (`--follow 15`, group `long`) and six more that played no part in tuning (group `heldout`), each run 3 times. `GROUP=long python3 follow.py <label>` runs one group.
+
+| | long | heldout |
+|---|---|---|
+| Links scored only by "does it lead to the answer?" | 10/15 | 15/18 |
+| Plus "is it in the answer's field of knowledge?" (`--follow 10` and up) | 15/15 | 16/18 |
+
+Far from the answer every link scores ~0.02–0.08 on "leads to the answer", so the pick is noise: from Tennis, jurl opened Berdych, Deutsche Bank, Kiev, then Freddie Mercury. Asked whether each link is in the answer's field, Jev gives vulcanized rubber and polyester 0.9 (chemistry), and the search reaches Mercury (element) in 10 pages. Asking about the question's subject instead (not the answer's field) made Jev judge links by the page they're on: tennis players, jazz musicians. The miss that stays is Bicycle → the Titanic: "what year" pulls toward calendar pages. A wiki's own pages (`Wikipedia:…/…`, `Main_Page`) are never followed.
