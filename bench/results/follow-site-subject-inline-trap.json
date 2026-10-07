@@ -1,0 +1,119 @@
+[
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 88099,
+  "ms": 4337,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/docs/reference/support-options"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 92199,
+  "ms": 4581,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/docs/reference/support-options"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 88155,
+  "ms": 4274,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/docs/reference/support-options"
+  ]
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the name of the CEO's dog?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 125021,
+  "ms": 4249,
+  "path": []
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the name of the CEO's dog?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 133683,
+  "ms": 4898,
+  "path": []
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the name of the CEO's dog?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 117488,
+  "ms": 4408,
+  "path": []
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the price of the Ultra plan?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 148207,
+  "ms": 5532,
+  "path": [
+   "https://www.raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the price of the Ultra plan?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 151381,
+  "ms": 5338,
+  "path": [
+   "https://www.raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the price of the Ultra plan?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 145761,
+  "ms": 4834,
+  "path": [
+   "https://www.raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ }
+]

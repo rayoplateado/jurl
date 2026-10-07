@@ -51,11 +51,20 @@ const ASSETS: &[&str] = &[
 /// The site: its host without `www.`, subdomains included (docs.example.com belongs to example.com).
 struct Site {
     root: String,
+    /// The search started at the site's front door, so the site itself is what the question is about.
+    front_door: bool,
 }
 
 impl Site {
     fn new(u: &Url) -> Self {
-        Site { root: u.host_str().unwrap_or_default().trim_start_matches("www.").to_string() }
+        let root = u.host_str().unwrap_or_default().trim_start_matches("www.").to_string();
+        Site { root, front_door: u.path() == "/" && u.query().is_none() }
+    }
+
+    /// Whose site it is, for [`Ctx::ask`]: only from the front door. Started from a page (an article, a repo),
+    /// "it" is what the page is about, not who runs the site.
+    fn owner(&self) -> Option<String> {
+        self.front_door.then(|| self.root.clone())
     }
 
     fn contains(&self, u: &Url) -> bool {
@@ -222,7 +231,7 @@ async fn visit(
     let (url, ex) = load(args, cfg, client, url, &mut t).await?;
     let menus = menus(&ex);
     let (found, score, warmth, links) = {
-        let ctx = Ctx::new(args, client, key, &url, &ex);
+        let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &url, &ex) };
         // The links `--links -q` would score, menus and footers included, as long as they stay on the site. A menu
         // link is scored on the first page it's on, not again on every page: on a page far from the question, the
         // site's "Main page" and "Search" would outscore everything in its text.
@@ -299,7 +308,7 @@ struct Lead {
 /// pages one at a time aren't on the same scale. Returns the shortlist reordered by Jev's choice, and the share that
 /// went to "none of these" (an option so the others aren't forced to look good).
 async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Option<(Vec<usize>, f64)> {
-    let q = ctx.args.ask.as_deref().unwrap_or_default();
+    let q = ctx.ask();
     let items: Vec<Item> = leads
         .iter()
         .enumerate()
@@ -362,7 +371,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             site_links: Vec::new(),
             app_shell: false,
         };
-        let ctx = Ctx::new(args, client, key, &start, &empty);
+        let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &start, &empty) };
         let scores = links::score(&ctx, &links, "The page at the URL in `links`", false)
             .await
             .unwrap_or_else(|_| vec![0.0; links.len()]);
@@ -441,7 +450,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         site_links: Vec::new(),
         app_shell: false,
     };
-    let site_ctx = Ctx::new(args, client, key, &start, &empty);
+    let site_ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &start, &empty) };
     let mut cold = false;
     while pages < max {
         leads.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -578,6 +587,14 @@ mod tests {
         assert!(site.contains(&Url::parse("https://docs.linear.app/start").unwrap()));
         assert!(!site.contains(&Url::parse("https://notlinear.app/").unwrap()));
         assert!(!site.contains(&Url::parse("https://linear.app/brand.pdf").unwrap()));
+    }
+
+    #[test]
+    fn only_a_search_from_the_front_door_is_about_the_owner() {
+        assert_eq!(Site::new(&Url::parse("https://www.figma.com/").unwrap()).owner().as_deref(), Some("figma.com"));
+        assert_eq!(Site::new(&Url::parse("https://linear.app").unwrap()).owner().as_deref(), Some("linear.app"));
+        assert_eq!(Site::new(&Url::parse("https://en.wikipedia.org/wiki/Paris").unwrap()).owner(), None);
+        assert_eq!(Site::new(&Url::parse("https://github.com/BurntSushi/ripgrep").unwrap()).owner(), None);
     }
 
     #[test]

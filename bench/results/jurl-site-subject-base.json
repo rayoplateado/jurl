@@ -1,0 +1,220 @@
+{
+ "runs": [
+  {
+   "ripgrep": {
+    "hit": true,
+    "tokens": 159,
+    "ms": 999,
+    "text": "# GitHub - BurntSushi/ripgrep: ripgrep recursively searches directories for a regex pattern while respecting your gitignore\n\n<https://github.com/BurntSushi/ripgrep> \u00b7 docs (0.56)\n\n### Installation\n\nArchives of precompiled binaries for ripgrep are available for Windows, macOS and Linux. Linux and Windows binaries are static executables. Users of platforms not explicitly mentioned below are advised to download one of these archives.\n\nIf you're a macOS Homebrew or a Linuxbrew user, then you can install ripgrep from homebrew-core:\n\n```\n$ brew install ripgrep\n```\n\nIf you're a MacPorts user, then you can install ripgrep from the official ports:\n\n```\n$ sudo port install ripgrep\n```\n\n",
+    "jev_tokens": 12665
+   },
+   "python-lines": {
+    "hit": true,
+    "tokens": 257,
+    "ms": 553,
+    "text": "# 7. Input and Output\n\n<https://docs.python.org/3/tutorial/inputoutput.html> \u00b7 docs (1.00)\n\n### 7.2.1. Methods of File Objects\n\nf.readline() reads a single line from the file; a newline character (\\n) is left at the end of the string, and is only omitted on the last line of the file if the file doesn\u2019t end in a newline. This makes the return value unambiguous; if f.readline() returns an empty string, the end of the file has been reached, while a blank line is represented by '\\n', a string containing only a single newline.\n\n```\n>>> f.readline()\n'This is the first line of the file.\\n'\n>>> f.readline()\n'Second line of the file\\n'\n>>> f.readline()\n''\n```\n\nFor reading lines from a file, you can loop over the file object. This is memory efficient, fast, and leads to simple code:\n\n```\n>>> for line in f:\n...     print(line, end='')\n...\nThis is the first line of the file.\nSecond line of the file\n```\n\nIf you want to read all the lines of a file in a list you can also use list(f) or f.readlines().\n\n",
+    "jev_tokens": 10483
+   },
+   "uv-install": {
+    "hit": true,
+    "tokens": 120,
+    "ms": 976,
+    "text": "# GitHub - astral-sh/uv: An extremely fast Python package and project manager, written in Rust.\n\n<https://github.com/astral-sh/uv> \u00b7 repo (0.53)\n\n## Highlights\n\n- Installable without Rust or Python via curl or pip.\n\n## Installation\n\nInstall uv with our standalone installers:\n\n```\n# On macOS and Linux.\ncurl -LsSf https://astral.sh/uv/install.sh | sh\n```\n\n```\n# With pip.\npip install uv\n```\n\n```\n# Or pipx.\npipx install uv\n```\n\n",
+    "jev_tokens": 6766
+   },
+   "jevons": {
+    "hit": true,
+    "tokens": 287,
+    "ms": 549,
+    "text": "# Jevons paradox - Wikipedia\n\n<https://en.wikipedia.org/wiki/Jevons_paradox> \u00b7 article (0.94)\n\n## History\n\nThe Jevons paradox was first described by the English economist William Stanley Jevons in his 1865 book The Coal Question. Jevons observed that England's consumption of coal soared after James Watt introduced the Watt steam engine, which greatly improved the efficiency of the coal-fired steam engine from Thomas Newcomen's earlier design. Watt's innovations made coal a more cost-effective power source, leading to the increased use of the steam engine in a wide range of industries. This in turn increased total coal consumption, even as the amount of coal required for any particular application fell. Jevons argued that improvements in fuel efficiency tend to increase (rather than decrease) fuel use, writing: \"It is a confusion of ideas to suppose that the economical use of fuel is equivalent to diminished consumption. The very contrary is the truth.\"[6]\n\nAt that time, many in Britain worried that coal reserves were rapidly dwindling, but some experts opined that improving technology would reduce coal consumption. Jevons argued that this view was incorrect, as further increases in efficiency would tend to increase the use of coal. Hence, improving technology would tend to increase the rate at which England's coal deposits were being depleted, and could not be relied upon to solve the problem.[6][7]\n\n",
+    "jev_tokens": 6671
+   },
+   "mdn-at": {
+    "hit": true,
+    "tokens": 371,
+    "ms": 490,
+    "text": "# Array.prototype.at() - JavaScript | MDN\n\n<https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/at> \u00b7 docs (1.00)\n\n# Array.prototype.at()\n\nThe at() method of Array instances takes an integer value and returns the item at that index, allowing for positive and negative integers. Negative integers count back from the last item in the array.\n\n## Try it\n\n```\nconst array = [5, 12, 8, 130, 44];\n\nlet index = 2;\n\nconsole.log(`An index of ${index} returns ${array.at(index)}`);\n// Expected output: \"An index of 2 returns 8\"\n\nindex = -2;\n\nconsole.log(`An index of ${index} returns ${array.at(index)}`);\n// Expected output: \"An index of -2 returns 130\"\n```\n\n### Parameters\n\nZero-based index of the array element to be returned, converted to an integer. Negative index counts back from the end of the array \u2014 if index < 0, index + array.length is accessed.\n\n## Description\n\nThe at() method is equivalent to the bracket notation when index is a non-negative integer. For example, array[0] and array.at(0) both return the first item. However, when counting elements from the end of the array, you cannot use array[-1] like you may in Python or R, because all values inside the square brackets are treated literally as string properties, so you will end up reading array[\"-1\"], which is just a normal string property instead of an array index.\n\nThe usual practice is to access length and calculate the index from that \u2014 for example, array[array.length - 1]. The at() method allows relative indexing, so this can be shortened to array.at(-1).\n\n",
+    "jev_tokens": 3516
+   },
+   "cf-pricing": {
+    "hit": true,
+    "tokens": 460,
+    "ms": 601,
+    "text": "# Pricing\n\n<https://developers.cloudflare.com/workers/platform/pricing/> \u00b7 product (0.89)\n\n## Workers\n\nUsers on the Workers Paid plan have access to the Standard usage model. Workers Enterprise accounts are billed based on the usage model specified in their contract. To switch to the Standard usage model, contact your Account Manager.\n\n#### Example 5: Worker with caching\n\nThe same Worker as Example 4, but with [Workers Caching](https://developers.cloudflare.com/workers/cache/) enabled and an 80% cache hit rate. 80 million requests are served from cache and 20 million invoke the Worker. Cache hits count as requests but do not consume CPU time.\n\n## Workers Trace Events Logpush\n\n|  | Paid plan |\n| --- | --- |\n| Requests <sup>1</sup> | 10 million / month, +$0.05/million |\n\n## Workflows\n\n| Unit | Workers Free | Workers Paid |\n| --- | --- | --- |\n| Requests (millions) | 100,000 per day ([shared with Workers requests](https://developers.cloudflare.com/workers/platform/pricing/#workers)) | 10 million included per month + $0.30 per additional million |\n| CPU time (ms) | 10 milliseconds of CPU time per invocation | 30 million CPU milliseconds included per month + $0.02 per additional million CPU milliseconds |\n| Storage (GB-mo) | 1 GB-month | 1 GB-month included + $0.20/ GB-month |\n| Steps | 3,000 per day | 500,000 included per month + $0.80/ additional 100,000 per month |\n\n### Compute billing\n\n|  | Free plan | Paid plan |\n| --- | --- | --- |\n| Requests | 100,000 / day | 1 million / month, + $0.15/million<br> Includes HTTP requests, RPC sessions<sup>1</sup>, WebSocket messages<sup>2</sup>, and alarm invocations |\n| Duration<sup>3</sup> | 13,000 GB-s / day | 400,000 GB-s / month, + $12.50/million GB-s<sup>4,5</sup> |\n\n",
+    "jev_tokens": 18795
+   },
+   "gh-ratelimit": {
+    "hit": true,
+    "tokens": 409,
+    "ms": 602,
+    "text": "# Rate limits for the REST API\n\n<https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api> \u00b7 docs (1.00)\n\n### Primary rate limit for authenticated users\n\nAll of these requests count towards your personal rate limit of 5,000 requests per hour. Requests made on your behalf by a GitHub App that is owned by a GitHub Enterprise Cloud organization have a higher rate limit of 15,000 requests per hour. Similarly, requests made on your behalf by a OAuth app that is owned or approved by a GitHub Enterprise Cloud organization have a higher rate limit of 15,000 requests per hour if you are a member of the GitHub Enterprise Cloud organization. However, requests made by a higher-limit app reduce the remaining budget available for lower-limit authentication methods. For example, if an app with a 15,000 request limit makes 10,000 requests on your behalf, you will have exhausted the 5,000 request budget for your personal access tokens, even though the app has 5,000 requests remaining.\n\n### Primary rate limit for GitHub App installations\n\nPrimary rate limits for GitHub App user access tokens (as opposed to installation access tokens) are dictated by the primary rate limits for the authenticated user. This rate limit is combined with any requests that another GitHub App or OAuth app makes on that user's behalf and any requests that the user makes with a personal access token. For more information, see [Rate limits for the REST API](/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-authenticated-users).\n\n### Primary rate limit for OAuth apps\n\nPrimary rate limits for OAuth access tokens generated by a OAuth app are dictated by the primary rate limits for authenticated users. This rate limit is combined with any requests that another GitHub App or OAuth app makes on that user's behalf and any requests that the user makes with a personal access token. See [Primary rate limit for authenticated users](#primary-rate-limit-for-authenticated-users).\n\n",
+    "jev_tokens": 5668
+   },
+   "node-fs": {
+    "hit": false,
+    "tokens": 0,
+    "ms": 362,
+    "text": "",
+    "jev_tokens": null
+   },
+   "pg-bigint": {
+    "hit": true,
+    "tokens": 300,
+    "ms": 656,
+    "text": "# 8.1. Numeric Types\n\n<https://www.postgresql.org/docs/current/datatype-numeric.html> \u00b7 docs (1.00)\n\n## 8.1. Numeric Types\n\n| Name | Storage Size | Description | Range |\n| smallint | 2 bytes | small-range integer | -32768 to +32767 |\n| integer | 4 bytes | typical choice for integer | -2147483648 to +2147483647 |\n| bigint | 8 bytes | large-range integer | -9223372036854775808 to +9223372036854775807 |\n| decimal | variable | user-specified precision, exact | up to 131072 digits before the decimal point; up to 16383 digits after the decimal point |\n| numeric | variable | user-specified precision, exact | up to 131072 digits before the decimal point; up to 16383 digits after the decimal point |\n| real | 4 bytes | variable-precision, inexact | 6 decimal digits precision |\n| double precision | 8 bytes | variable-precision, inexact | 15 decimal digits precision |\n| smallserial | 2 bytes | small autoincrementing integer | 1 to 32767 |\n| serial | 4 bytes | autoincrementing integer | 1 to 2147483647 |\n| bigserial | 8 bytes | large autoincrementing integer | 1 to 9223372036854775807 |\n\n",
+    "jev_tokens": 8202
+   },
+   "react-useeffect": {
+    "hit": true,
+    "tokens": 684,
+    "ms": 930,
+    "text": "# useEffect\n\n<https://react.dev/reference/react/useEffect> \u00b7 docs (1.00)\n\n### `useEffect(setup, dependencies?)` {/*useeffect*/}\n\n```js\nimport { useState, useEffect } from 'react';\nimport { createConnection } from './chat.js';\n\nfunction ChatRoom({ roomId }) {\n  const [serverUrl, setServerUrl] = useState('https://localhost:1234');\n\n  useEffect(() => {\n    const connection = createConnection(serverUrl, roomId);\n    connection.connect();\n    return () => {\n      connection.disconnect();\n    };\n  }, [serverUrl, roomId]);\n  // ...\n}\n```\n\n#### Parameters {/*parameters*/}\n\n* `setup`: The function with your Effect's logic. Your setup function may also optionally return a *cleanup* function. When your [component commits](/learn/render-and-commit#step-3-react-commits-changes-to-the-dom), React will run your setup function. After every commit with changed dependencies, React will first run the cleanup function (if you provided it) with the old values, and then run your setup function with the new values. After your component is removed from the DOM, React will run your cleanup function.\n\n### Connecting to an external system {/*connecting-to-an-external-system*/}\n\n1. Your <CodeStep step={1}>setup code</CodeStep> runs when your component is added to the page *(mounts)*.\n2. After every commit of your component where the <CodeStep step={3}>dependencies</CodeStep> have changed:\n   - First, your <CodeStep step={2}>cleanup code</CodeStep> runs with the old props and state.\n   - Then, your <CodeStep step={1}>setup code</CodeStep> runs with the new props and state.\n3. Your <CodeStep step={2}>cleanup code</CodeStep> runs one final time after your component is removed from the page *(unmounts).*\n\n#### Listening to a global browser event {/*listening-to-a-global-browser-event*/}\n\n```js\nimport { useState, useEffect } from 'react';\n\nexport default function App() {\n  const [position, setPosition] = useState({ x: 0, y: 0 });\n\n  useEffect(() => {\n    function handleMove(e) {\n      setPosition({ x: e.clientX, y: e.clientY });\n    }\n    window.addEventListener('pointermove', handleMove);\n    return () => {\n      window.removeEventListener('pointermove', handleMove);\n    };\n  }, []);\n\n  return (\n    <div style={{\n      position: 'absolute',\n      backgroundColor: 'pink',\n      borderRadius: '50%',\n      opacity: 0.6,\n      transform: `translate(${position.x}px, ${position.y}px)`,\n      pointerEvents: 'none',\n      left: -20,\n      top: -20,\n      width: 40,\n      height: 40,\n    }} />\n  );\n}\n```\n\n#### Custom `useWindowListener` Hook {/*custom-usewindowlistener-hook*/}\n\n```js src/useWindowListener.js\nimport { useState, useEffect } from 'react';\n\nexport function useWindowListener(eventType, listener) {\n  useEffect(() => {\n    window.addEventListener(eventType, listener);\n    return () => {\n      window.removeEventListener(eventType, listener);\n    };\n  }, [eventType, listener]);\n}\n```\n\n",
+    "jev_tokens": 31380
+   }
+  },
+  {
+   "ripgrep": {
+    "hit": true,
+    "tokens": 166,
+    "ms": 553,
+    "text": "# GitHub - BurntSushi/ripgrep: ripgrep recursively searches directories for a regex pattern while respecting your gitignore\n\n<https://github.com/BurntSushi/ripgrep> \u00b7 docs (0.56)\n\n### Installation\n\nArchives of precompiled binaries for ripgrep are available for Windows, macOS and Linux. Linux and Windows binaries are static executables. Users of platforms not explicitly mentioned below are advised to download one of these archives.\n\nIf you're a macOS Homebrew or a Linuxbrew user, then you can install ripgrep from homebrew-core:\n\n```\n$ brew install ripgrep\n```\n\nIf you're a MacPorts user, then you can install ripgrep from the official ports:\n\nAlternatively, one can use cargo binstall to install a ripgrep binary directly from GitHub:\n\n",
+    "jev_tokens": 12665
+   },
+   "python-lines": {
+    "hit": true,
+    "tokens": 257,
+    "ms": 683,
+    "text": "# 7. Input and Output\n\n<https://docs.python.org/3/tutorial/inputoutput.html> \u00b7 docs (1.00)\n\n### 7.2.1. Methods of File Objects\n\nf.readline() reads a single line from the file; a newline character (\\n) is left at the end of the string, and is only omitted on the last line of the file if the file doesn\u2019t end in a newline. This makes the return value unambiguous; if f.readline() returns an empty string, the end of the file has been reached, while a blank line is represented by '\\n', a string containing only a single newline.\n\n```\n>>> f.readline()\n'This is the first line of the file.\\n'\n>>> f.readline()\n'Second line of the file\\n'\n>>> f.readline()\n''\n```\n\nFor reading lines from a file, you can loop over the file object. This is memory efficient, fast, and leads to simple code:\n\n```\n>>> for line in f:\n...     print(line, end='')\n...\nThis is the first line of the file.\nSecond line of the file\n```\n\nIf you want to read all the lines of a file in a list you can also use list(f) or f.readlines().\n\n",
+    "jev_tokens": 10483
+   },
+   "uv-install": {
+    "hit": true,
+    "tokens": 91,
+    "ms": 554,
+    "text": "# GitHub - astral-sh/uv: An extremely fast Python package and project manager, written in Rust.\n\n<https://github.com/astral-sh/uv> \u00b7 repo (0.60)\n\n## Installation\n\nInstall uv with our standalone installers:\n\n```\n# On macOS and Linux.\ncurl -LsSf https://astral.sh/uv/install.sh | sh\n```\n\n```\n# With pip.\npip install uv\n```\n\n",
+    "jev_tokens": 6766
+   },
+   "jevons": {
+    "hit": true,
+    "tokens": 287,
+    "ms": 572,
+    "text": "# Jevons paradox - Wikipedia\n\n<https://en.wikipedia.org/wiki/Jevons_paradox> \u00b7 article (0.89)\n\n## History\n\nThe Jevons paradox was first described by the English economist William Stanley Jevons in his 1865 book The Coal Question. Jevons observed that England's consumption of coal soared after James Watt introduced the Watt steam engine, which greatly improved the efficiency of the coal-fired steam engine from Thomas Newcomen's earlier design. Watt's innovations made coal a more cost-effective power source, leading to the increased use of the steam engine in a wide range of industries. This in turn increased total coal consumption, even as the amount of coal required for any particular application fell. Jevons argued that improvements in fuel efficiency tend to increase (rather than decrease) fuel use, writing: \"It is a confusion of ideas to suppose that the economical use of fuel is equivalent to diminished consumption. The very contrary is the truth.\"[6]\n\nAt that time, many in Britain worried that coal reserves were rapidly dwindling, but some experts opined that improving technology would reduce coal consumption. Jevons argued that this view was incorrect, as further increases in efficiency would tend to increase the use of coal. Hence, improving technology would tend to increase the rate at which England's coal deposits were being depleted, and could not be relied upon to solve the problem.[6][7]\n\n",
+    "jev_tokens": 6671
+   },
+   "mdn-at": {
+    "hit": true,
+    "tokens": 371,
+    "ms": 534,
+    "text": "# Array.prototype.at() - JavaScript | MDN\n\n<https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/at> \u00b7 docs (1.00)\n\n# Array.prototype.at()\n\nThe at() method of Array instances takes an integer value and returns the item at that index, allowing for positive and negative integers. Negative integers count back from the last item in the array.\n\n## Try it\n\n```\nconst array = [5, 12, 8, 130, 44];\n\nlet index = 2;\n\nconsole.log(`An index of ${index} returns ${array.at(index)}`);\n// Expected output: \"An index of 2 returns 8\"\n\nindex = -2;\n\nconsole.log(`An index of ${index} returns ${array.at(index)}`);\n// Expected output: \"An index of -2 returns 130\"\n```\n\n### Parameters\n\nZero-based index of the array element to be returned, converted to an integer. Negative index counts back from the end of the array \u2014 if index < 0, index + array.length is accessed.\n\n## Description\n\nThe at() method is equivalent to the bracket notation when index is a non-negative integer. For example, array[0] and array.at(0) both return the first item. However, when counting elements from the end of the array, you cannot use array[-1] like you may in Python or R, because all values inside the square brackets are treated literally as string properties, so you will end up reading array[\"-1\"], which is just a normal string property instead of an array index.\n\nThe usual practice is to access length and calculate the index from that \u2014 for example, array[array.length - 1]. The at() method allows relative indexing, so this can be shortened to array.at(-1).\n\n",
+    "jev_tokens": 3516
+   },
+   "cf-pricing": {
+    "hit": true,
+    "tokens": 588,
+    "ms": 618,
+    "text": "# Pricing\n\n<https://developers.cloudflare.com/workers/platform/pricing/> \u00b7 product (0.88)\n\n## Workers\n\nUsers on the Workers Paid plan have access to the Standard usage model. Workers Enterprise accounts are billed based on the usage model specified in their contract. To switch to the Standard usage model, contact your Account Manager.\n\n|  | Requests<sup>1, 2, 3, 4</sup> | Duration | CPU time |\n| --- | --- | --- | --- |\n| **Free** | 100,000 per day | No charge for duration | 10 milliseconds of CPU time per invocation |\n| **Standard** | 10 million included per month <br> +$0.30 per additional million | No charge or limit for duration | 30 million CPU milliseconds included per month<br> +$0.02 per additional million CPU milliseconds<br><br> Max of [5 minutes of CPU time](https://developers.cloudflare.com/workers/platform/limits/#account-plan-limits) per invocation (default: 30 seconds)<br> Max of 15 minutes of CPU time per [Cron Trigger](https://developers.cloudflare.com/workers/configuration/cron-triggers/) or [Queue Consumer](https://developers.cloudflare.com/queues/configuration/javascript-apis/#consumer) invocation |\n\n## Workers Trace Events Logpush\n\n|  | Paid plan |\n| --- | --- |\n| Requests <sup>1</sup> | 10 million / month, +$0.05/million |\n\n## Workflows\n\n| Unit | Workers Free | Workers Paid |\n| --- | --- | --- |\n| Requests (millions) | 100,000 per day ([shared with Workers requests](https://developers.cloudflare.com/workers/platform/pricing/#workers)) | 10 million included per month + $0.30 per additional million |\n| CPU time (ms) | 10 milliseconds of CPU time per invocation | 30 million CPU milliseconds included per month + $0.02 per additional million CPU milliseconds |\n| Storage (GB-mo) | 1 GB-month | 1 GB-month included + $0.20/ GB-month |\n| Steps | 3,000 per day | 500,000 included per month + $0.80/ additional 100,000 per month |\n\n### Compute billing\n\n|  | Free plan | Paid plan |\n| --- | --- | --- |\n| Requests | 100,000 / day | 1 million / month, + $0.15/million<br> Includes HTTP requests, RPC sessions<sup>1</sup>, WebSocket messages<sup>2</sup>, and alarm invocations |\n| Duration<sup>3</sup> | 13,000 GB-s / day | 400,000 GB-s / month, + $12.50/million GB-s<sup>4,5</sup> |\n\n",
+    "jev_tokens": 18795
+   },
+   "gh-ratelimit": {
+    "hit": true,
+    "tokens": 409,
+    "ms": 519,
+    "text": "# Rate limits for the REST API\n\n<https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api> \u00b7 docs (1.00)\n\n### Primary rate limit for authenticated users\n\nAll of these requests count towards your personal rate limit of 5,000 requests per hour. Requests made on your behalf by a GitHub App that is owned by a GitHub Enterprise Cloud organization have a higher rate limit of 15,000 requests per hour. Similarly, requests made on your behalf by a OAuth app that is owned or approved by a GitHub Enterprise Cloud organization have a higher rate limit of 15,000 requests per hour if you are a member of the GitHub Enterprise Cloud organization. However, requests made by a higher-limit app reduce the remaining budget available for lower-limit authentication methods. For example, if an app with a 15,000 request limit makes 10,000 requests on your behalf, you will have exhausted the 5,000 request budget for your personal access tokens, even though the app has 5,000 requests remaining.\n\n### Primary rate limit for GitHub App installations\n\nPrimary rate limits for GitHub App user access tokens (as opposed to installation access tokens) are dictated by the primary rate limits for the authenticated user. This rate limit is combined with any requests that another GitHub App or OAuth app makes on that user's behalf and any requests that the user makes with a personal access token. For more information, see [Rate limits for the REST API](/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-authenticated-users).\n\n### Primary rate limit for OAuth apps\n\nPrimary rate limits for OAuth access tokens generated by a OAuth app are dictated by the primary rate limits for authenticated users. This rate limit is combined with any requests that another GitHub App or OAuth app makes on that user's behalf and any requests that the user makes with a personal access token. See [Primary rate limit for authenticated users](#primary-rate-limit-for-authenticated-users).\n\n",
+    "jev_tokens": 5668
+   },
+   "node-fs": {
+    "hit": false,
+    "tokens": 0,
+    "ms": 373,
+    "text": "",
+    "jev_tokens": null
+   },
+   "pg-bigint": {
+    "hit": true,
+    "tokens": 300,
+    "ms": 630,
+    "text": "# 8.1. Numeric Types\n\n<https://www.postgresql.org/docs/current/datatype-numeric.html> \u00b7 docs (1.00)\n\n## 8.1. Numeric Types\n\n| Name | Storage Size | Description | Range |\n| smallint | 2 bytes | small-range integer | -32768 to +32767 |\n| integer | 4 bytes | typical choice for integer | -2147483648 to +2147483647 |\n| bigint | 8 bytes | large-range integer | -9223372036854775808 to +9223372036854775807 |\n| decimal | variable | user-specified precision, exact | up to 131072 digits before the decimal point; up to 16383 digits after the decimal point |\n| numeric | variable | user-specified precision, exact | up to 131072 digits before the decimal point; up to 16383 digits after the decimal point |\n| real | 4 bytes | variable-precision, inexact | 6 decimal digits precision |\n| double precision | 8 bytes | variable-precision, inexact | 15 decimal digits precision |\n| smallserial | 2 bytes | small autoincrementing integer | 1 to 32767 |\n| serial | 4 bytes | autoincrementing integer | 1 to 2147483647 |\n| bigserial | 8 bytes | large autoincrementing integer | 1 to 9223372036854775807 |\n\n",
+    "jev_tokens": 8202
+   },
+   "react-useeffect": {
+    "hit": true,
+    "tokens": 684,
+    "ms": 650,
+    "text": "# useEffect\n\n<https://react.dev/reference/react/useEffect> \u00b7 docs (1.00)\n\n### `useEffect(setup, dependencies?)` {/*useeffect*/}\n\n```js\nimport { useState, useEffect } from 'react';\nimport { createConnection } from './chat.js';\n\nfunction ChatRoom({ roomId }) {\n  const [serverUrl, setServerUrl] = useState('https://localhost:1234');\n\n  useEffect(() => {\n    const connection = createConnection(serverUrl, roomId);\n    connection.connect();\n    return () => {\n      connection.disconnect();\n    };\n  }, [serverUrl, roomId]);\n  // ...\n}\n```\n\n#### Parameters {/*parameters*/}\n\n* `setup`: The function with your Effect's logic. Your setup function may also optionally return a *cleanup* function. When your [component commits](/learn/render-and-commit#step-3-react-commits-changes-to-the-dom), React will run your setup function. After every commit with changed dependencies, React will first run the cleanup function (if you provided it) with the old values, and then run your setup function with the new values. After your component is removed from the DOM, React will run your cleanup function.\n\n### Connecting to an external system {/*connecting-to-an-external-system*/}\n\n1. Your <CodeStep step={1}>setup code</CodeStep> runs when your component is added to the page *(mounts)*.\n2. After every commit of your component where the <CodeStep step={3}>dependencies</CodeStep> have changed:\n   - First, your <CodeStep step={2}>cleanup code</CodeStep> runs with the old props and state.\n   - Then, your <CodeStep step={1}>setup code</CodeStep> runs with the new props and state.\n3. Your <CodeStep step={2}>cleanup code</CodeStep> runs one final time after your component is removed from the page *(unmounts).*\n\n#### Listening to a global browser event {/*listening-to-a-global-browser-event*/}\n\n```js\nimport { useState, useEffect } from 'react';\n\nexport default function App() {\n  const [position, setPosition] = useState({ x: 0, y: 0 });\n\n  useEffect(() => {\n    function handleMove(e) {\n      setPosition({ x: e.clientX, y: e.clientY });\n    }\n    window.addEventListener('pointermove', handleMove);\n    return () => {\n      window.removeEventListener('pointermove', handleMove);\n    };\n  }, []);\n\n  return (\n    <div style={{\n      position: 'absolute',\n      backgroundColor: 'pink',\n      borderRadius: '50%',\n      opacity: 0.6,\n      transform: `translate(${position.x}px, ${position.y}px)`,\n      pointerEvents: 'none',\n      left: -20,\n      top: -20,\n      width: 40,\n      height: 40,\n    }} />\n  );\n}\n```\n\n#### Custom `useWindowListener` Hook {/*custom-usewindowlistener-hook*/}\n\n```js src/useWindowListener.js\nimport { useState, useEffect } from 'react';\n\nexport function useWindowListener(eventType, listener) {\n  useEffect(() => {\n    window.addEventListener(eventType, listener);\n    return () => {\n      window.removeEventListener(eventType, listener);\n    };\n  }, [eventType, listener]);\n}\n```\n\n",
+    "jev_tokens": 31380
+   }
+  },
+  {
+   "ripgrep": {
+    "hit": true,
+    "tokens": 159,
+    "ms": 583,
+    "text": "# GitHub - BurntSushi/ripgrep: ripgrep recursively searches directories for a regex pattern while respecting your gitignore\n\n<https://github.com/BurntSushi/ripgrep> \u00b7 docs (0.50)\n\n### Installation\n\nArchives of precompiled binaries for ripgrep are available for Windows, macOS and Linux. Linux and Windows binaries are static executables. Users of platforms not explicitly mentioned below are advised to download one of these archives.\n\nIf you're a macOS Homebrew or a Linuxbrew user, then you can install ripgrep from homebrew-core:\n\n```\n$ brew install ripgrep\n```\n\nIf you're a MacPorts user, then you can install ripgrep from the official ports:\n\n```\n$ cargo binstall ripgrep\n```\n\n",
+    "jev_tokens": 12665
+   },
+   "python-lines": {
+    "hit": true,
+    "tokens": 257,
+    "ms": 593,
+    "text": "# 7. Input and Output\n\n<https://docs.python.org/3/tutorial/inputoutput.html> \u00b7 docs (1.00)\n\n### 7.2.1. Methods of File Objects\n\nf.readline() reads a single line from the file; a newline character (\\n) is left at the end of the string, and is only omitted on the last line of the file if the file doesn\u2019t end in a newline. This makes the return value unambiguous; if f.readline() returns an empty string, the end of the file has been reached, while a blank line is represented by '\\n', a string containing only a single newline.\n\n```\n>>> f.readline()\n'This is the first line of the file.\\n'\n>>> f.readline()\n'Second line of the file\\n'\n>>> f.readline()\n''\n```\n\nFor reading lines from a file, you can loop over the file object. This is memory efficient, fast, and leads to simple code:\n\n```\n>>> for line in f:\n...     print(line, end='')\n...\nThis is the first line of the file.\nSecond line of the file\n```\n\nIf you want to read all the lines of a file in a list you can also use list(f) or f.readlines().\n\n",
+    "jev_tokens": 10483
+   },
+   "uv-install": {
+    "hit": true,
+    "tokens": 91,
+    "ms": 546,
+    "text": "# GitHub - astral-sh/uv: An extremely fast Python package and project manager, written in Rust.\n\n<https://github.com/astral-sh/uv> \u00b7 repo (0.60)\n\n## Installation\n\nInstall uv with our standalone installers:\n\n```\n# On macOS and Linux.\ncurl -LsSf https://astral.sh/uv/install.sh | sh\n```\n\n```\n# With pip.\npip install uv\n```\n\n",
+    "jev_tokens": 6766
+   },
+   "jevons": {
+    "hit": true,
+    "tokens": 287,
+    "ms": 562,
+    "text": "# Jevons paradox - Wikipedia\n\n<https://en.wikipedia.org/wiki/Jevons_paradox> \u00b7 article (0.93)\n\n## History\n\nThe Jevons paradox was first described by the English economist William Stanley Jevons in his 1865 book The Coal Question. Jevons observed that England's consumption of coal soared after James Watt introduced the Watt steam engine, which greatly improved the efficiency of the coal-fired steam engine from Thomas Newcomen's earlier design. Watt's innovations made coal a more cost-effective power source, leading to the increased use of the steam engine in a wide range of industries. This in turn increased total coal consumption, even as the amount of coal required for any particular application fell. Jevons argued that improvements in fuel efficiency tend to increase (rather than decrease) fuel use, writing: \"It is a confusion of ideas to suppose that the economical use of fuel is equivalent to diminished consumption. The very contrary is the truth.\"[6]\n\nAt that time, many in Britain worried that coal reserves were rapidly dwindling, but some experts opined that improving technology would reduce coal consumption. Jevons argued that this view was incorrect, as further increases in efficiency would tend to increase the use of coal. Hence, improving technology would tend to increase the rate at which England's coal deposits were being depleted, and could not be relied upon to solve the problem.[6][7]\n\n",
+    "jev_tokens": 6671
+   },
+   "mdn-at": {
+    "hit": true,
+    "tokens": 371,
+    "ms": 542,
+    "text": "# Array.prototype.at() - JavaScript | MDN\n\n<https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/at> \u00b7 docs (1.00)\n\n# Array.prototype.at()\n\nThe at() method of Array instances takes an integer value and returns the item at that index, allowing for positive and negative integers. Negative integers count back from the last item in the array.\n\n## Try it\n\n```\nconst array = [5, 12, 8, 130, 44];\n\nlet index = 2;\n\nconsole.log(`An index of ${index} returns ${array.at(index)}`);\n// Expected output: \"An index of 2 returns 8\"\n\nindex = -2;\n\nconsole.log(`An index of ${index} returns ${array.at(index)}`);\n// Expected output: \"An index of -2 returns 130\"\n```\n\n### Parameters\n\nZero-based index of the array element to be returned, converted to an integer. Negative index counts back from the end of the array \u2014 if index < 0, index + array.length is accessed.\n\n## Description\n\nThe at() method is equivalent to the bracket notation when index is a non-negative integer. For example, array[0] and array.at(0) both return the first item. However, when counting elements from the end of the array, you cannot use array[-1] like you may in Python or R, because all values inside the square brackets are treated literally as string properties, so you will end up reading array[\"-1\"], which is just a normal string property instead of an array index.\n\nThe usual practice is to access length and calculate the index from that \u2014 for example, array[array.length - 1]. The at() method allows relative indexing, so this can be shortened to array.at(-1).\n\n",
+    "jev_tokens": 3516
+   },
+   "cf-pricing": {
+    "hit": true,
+    "tokens": 588,
+    "ms": 632,
+    "text": "# Pricing\n\n<https://developers.cloudflare.com/workers/platform/pricing/> \u00b7 product (0.85)\n\n## Workers\n\nUsers on the Workers Paid plan have access to the Standard usage model. Workers Enterprise accounts are billed based on the usage model specified in their contract. To switch to the Standard usage model, contact your Account Manager.\n\n|  | Requests<sup>1, 2, 3, 4</sup> | Duration | CPU time |\n| --- | --- | --- | --- |\n| **Free** | 100,000 per day | No charge for duration | 10 milliseconds of CPU time per invocation |\n| **Standard** | 10 million included per month <br> +$0.30 per additional million | No charge or limit for duration | 30 million CPU milliseconds included per month<br> +$0.02 per additional million CPU milliseconds<br><br> Max of [5 minutes of CPU time](https://developers.cloudflare.com/workers/platform/limits/#account-plan-limits) per invocation (default: 30 seconds)<br> Max of 15 minutes of CPU time per [Cron Trigger](https://developers.cloudflare.com/workers/configuration/cron-triggers/) or [Queue Consumer](https://developers.cloudflare.com/queues/configuration/javascript-apis/#consumer) invocation |\n\n## Workers Trace Events Logpush\n\n|  | Paid plan |\n| --- | --- |\n| Requests <sup>1</sup> | 10 million / month, +$0.05/million |\n\n## Workflows\n\n| Unit | Workers Free | Workers Paid |\n| --- | --- | --- |\n| Requests (millions) | 100,000 per day ([shared with Workers requests](https://developers.cloudflare.com/workers/platform/pricing/#workers)) | 10 million included per month + $0.30 per additional million |\n| CPU time (ms) | 10 milliseconds of CPU time per invocation | 30 million CPU milliseconds included per month + $0.02 per additional million CPU milliseconds |\n| Storage (GB-mo) | 1 GB-month | 1 GB-month included + $0.20/ GB-month |\n| Steps | 3,000 per day | 500,000 included per month + $0.80/ additional 100,000 per month |\n\n### Compute billing\n\n|  | Free plan | Paid plan |\n| --- | --- | --- |\n| Requests | 100,000 / day | 1 million / month, + $0.15/million<br> Includes HTTP requests, RPC sessions<sup>1</sup>, WebSocket messages<sup>2</sup>, and alarm invocations |\n| Duration<sup>3</sup> | 13,000 GB-s / day | 400,000 GB-s / month, + $12.50/million GB-s<sup>4,5</sup> |\n\n",
+    "jev_tokens": 18795
+   },
+   "gh-ratelimit": {
+    "hit": true,
+    "tokens": 409,
+    "ms": 543,
+    "text": "# Rate limits for the REST API\n\n<https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api> \u00b7 docs (1.00)\n\n### Primary rate limit for authenticated users\n\nAll of these requests count towards your personal rate limit of 5,000 requests per hour. Requests made on your behalf by a GitHub App that is owned by a GitHub Enterprise Cloud organization have a higher rate limit of 15,000 requests per hour. Similarly, requests made on your behalf by a OAuth app that is owned or approved by a GitHub Enterprise Cloud organization have a higher rate limit of 15,000 requests per hour if you are a member of the GitHub Enterprise Cloud organization. However, requests made by a higher-limit app reduce the remaining budget available for lower-limit authentication methods. For example, if an app with a 15,000 request limit makes 10,000 requests on your behalf, you will have exhausted the 5,000 request budget for your personal access tokens, even though the app has 5,000 requests remaining.\n\n### Primary rate limit for GitHub App installations\n\nPrimary rate limits for GitHub App user access tokens (as opposed to installation access tokens) are dictated by the primary rate limits for the authenticated user. This rate limit is combined with any requests that another GitHub App or OAuth app makes on that user's behalf and any requests that the user makes with a personal access token. For more information, see [Rate limits for the REST API](/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-authenticated-users).\n\n### Primary rate limit for OAuth apps\n\nPrimary rate limits for OAuth access tokens generated by a OAuth app are dictated by the primary rate limits for authenticated users. This rate limit is combined with any requests that another GitHub App or OAuth app makes on that user's behalf and any requests that the user makes with a personal access token. See [Primary rate limit for authenticated users](#primary-rate-limit-for-authenticated-users).\n\n",
+    "jev_tokens": 5668
+   },
+   "node-fs": {
+    "hit": false,
+    "tokens": 0,
+    "ms": 327,
+    "text": "",
+    "jev_tokens": null
+   },
+   "pg-bigint": {
+    "hit": true,
+    "tokens": 300,
+    "ms": 998,
+    "text": "# 8.1. Numeric Types\n\n<https://www.postgresql.org/docs/current/datatype-numeric.html> \u00b7 docs (1.00)\n\n## 8.1. Numeric Types\n\n| Name | Storage Size | Description | Range |\n| smallint | 2 bytes | small-range integer | -32768 to +32767 |\n| integer | 4 bytes | typical choice for integer | -2147483648 to +2147483647 |\n| bigint | 8 bytes | large-range integer | -9223372036854775808 to +9223372036854775807 |\n| decimal | variable | user-specified precision, exact | up to 131072 digits before the decimal point; up to 16383 digits after the decimal point |\n| numeric | variable | user-specified precision, exact | up to 131072 digits before the decimal point; up to 16383 digits after the decimal point |\n| real | 4 bytes | variable-precision, inexact | 6 decimal digits precision |\n| double precision | 8 bytes | variable-precision, inexact | 15 decimal digits precision |\n| smallserial | 2 bytes | small autoincrementing integer | 1 to 32767 |\n| serial | 4 bytes | autoincrementing integer | 1 to 2147483647 |\n| bigserial | 8 bytes | large autoincrementing integer | 1 to 9223372036854775807 |\n\n",
+    "jev_tokens": 8202
+   },
+   "react-useeffect": {
+    "hit": true,
+    "tokens": 684,
+    "ms": 678,
+    "text": "# useEffect\n\n<https://react.dev/reference/react/useEffect> \u00b7 docs (1.00)\n\n### `useEffect(setup, dependencies?)` {/*useeffect*/}\n\n```js\nimport { useState, useEffect } from 'react';\nimport { createConnection } from './chat.js';\n\nfunction ChatRoom({ roomId }) {\n  const [serverUrl, setServerUrl] = useState('https://localhost:1234');\n\n  useEffect(() => {\n    const connection = createConnection(serverUrl, roomId);\n    connection.connect();\n    return () => {\n      connection.disconnect();\n    };\n  }, [serverUrl, roomId]);\n  // ...\n}\n```\n\n#### Parameters {/*parameters*/}\n\n* `setup`: The function with your Effect's logic. Your setup function may also optionally return a *cleanup* function. When your [component commits](/learn/render-and-commit#step-3-react-commits-changes-to-the-dom), React will run your setup function. After every commit with changed dependencies, React will first run the cleanup function (if you provided it) with the old values, and then run your setup function with the new values. After your component is removed from the DOM, React will run your cleanup function.\n\n### Connecting to an external system {/*connecting-to-an-external-system*/}\n\n1. Your <CodeStep step={1}>setup code</CodeStep> runs when your component is added to the page *(mounts)*.\n2. After every commit of your component where the <CodeStep step={3}>dependencies</CodeStep> have changed:\n   - First, your <CodeStep step={2}>cleanup code</CodeStep> runs with the old props and state.\n   - Then, your <CodeStep step={1}>setup code</CodeStep> runs with the new props and state.\n3. Your <CodeStep step={2}>cleanup code</CodeStep> runs one final time after your component is removed from the page *(unmounts).*\n\n#### Listening to a global browser event {/*listening-to-a-global-browser-event*/}\n\n```js\nimport { useState, useEffect } from 'react';\n\nexport default function App() {\n  const [position, setPosition] = useState({ x: 0, y: 0 });\n\n  useEffect(() => {\n    function handleMove(e) {\n      setPosition({ x: e.clientX, y: e.clientY });\n    }\n    window.addEventListener('pointermove', handleMove);\n    return () => {\n      window.removeEventListener('pointermove', handleMove);\n    };\n  }, []);\n\n  return (\n    <div style={{\n      position: 'absolute',\n      backgroundColor: 'pink',\n      borderRadius: '50%',\n      opacity: 0.6,\n      transform: `translate(${position.x}px, ${position.y}px)`,\n      pointerEvents: 'none',\n      left: -20,\n      top: -20,\n      width: 40,\n      height: 40,\n    }} />\n  );\n}\n```\n\n#### Custom `useWindowListener` Hook {/*custom-usewindowlistener-hook*/}\n\n```js src/useWindowListener.js\nimport { useState, useEffect } from 'react';\n\nexport function useWindowListener(eventType, listener) {\n  useEffect(() => {\n    window.addEventListener(eventType, listener);\n    return () => {\n      window.removeEventListener(eventType, listener);\n    };\n  }, [eventType, listener]);\n}\n```\n\n",
+    "jev_tokens": 31380
+   }
+  }
+ ]
+}

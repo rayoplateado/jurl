@@ -1,0 +1,338 @@
+[
+ {
+  "start": "linear.app",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10 per user/month",
+  "right": true,
+  "pages": 3,
+  "tokens": 77450,
+  "ms": 2831,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/pricing"
+  ]
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10 per user/month",
+  "right": true,
+  "pages": 3,
+  "tokens": 77442,
+  "ms": 2746,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/pricing"
+  ]
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10 per user/month",
+  "right": true,
+  "pages": 3,
+  "tokens": 77464,
+  "ms": 2921,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/pricing"
+  ]
+ },
+ {
+  "start": "loom.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$18",
+  "right": true,
+  "pages": 3,
+  "tokens": 93788,
+  "ms": 2966,
+  "path": [
+   "https://loom.com/",
+   "https://www.loom.com/pricing"
+  ]
+ },
+ {
+  "start": "loom.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$18",
+  "right": true,
+  "pages": 3,
+  "tokens": 94547,
+  "ms": 2828,
+  "path": [
+   "https://www.loom.com/",
+   "https://www.loom.com/pricing"
+  ]
+ },
+ {
+  "start": "loom.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$18",
+  "right": true,
+  "pages": 3,
+  "tokens": 87229,
+  "ms": 2742,
+  "path": [
+   "https://www.loom.com/",
+   "https://www.loom.com/pricing"
+  ]
+ },
+ {
+  "start": "calendly.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10\n/seat/mo",
+  "right": true,
+  "pages": 3,
+  "tokens": 82533,
+  "ms": 3141,
+  "path": [
+   "https://calendly.com/",
+   "https://calendly.com/pricing"
+  ]
+ },
+ {
+  "start": "calendly.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 80981,
+  "ms": 3140,
+  "path": [
+   "https://calendly.com/",
+   "https://calendly.com/pricing"
+  ]
+ },
+ {
+  "start": "calendly.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10\n/seat/mo",
+  "right": true,
+  "pages": 3,
+  "tokens": 81482,
+  "ms": 3318,
+  "path": [
+   "https://calendly.com/",
+   "https://calendly.com/pricing"
+  ]
+ },
+ {
+  "start": "cal.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$12",
+  "right": true,
+  "pages": 5,
+  "tokens": 161347,
+  "ms": 4071,
+  "path": [
+   "https://cal.com/",
+   "https://cal.com/pricing"
+  ]
+ },
+ {
+  "start": "cal.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$12",
+  "right": true,
+  "pages": 5,
+  "tokens": 161381,
+  "ms": 3840,
+  "path": [
+   "https://cal.com/",
+   "https://cal.com/pricing"
+  ]
+ },
+ {
+  "start": "cal.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$12",
+  "right": true,
+  "pages": 3,
+  "tokens": 125339,
+  "ms": 2842,
+  "path": [
+   "https://cal.com/",
+   "https://cal.com/pricing"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$8 per user, per month",
+  "right": true,
+  "pages": 3,
+  "tokens": 98379,
+  "ms": 2468,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/pricing"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$8 per user, per month",
+  "right": true,
+  "pages": 3,
+  "tokens": 98379,
+  "ms": 2443,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/pricing"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$8 per user, per month",
+  "right": true,
+  "pages": 5,
+  "tokens": 134019,
+  "ms": 6175,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/pricing"
+  ]
+ },
+ {
+  "start": "vercel.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$20/mo",
+  "right": true,
+  "pages": 3,
+  "tokens": 94126,
+  "ms": 2295,
+  "path": [
+   "https://vercel.com/",
+   "https://vercel.com/pricing"
+  ]
+ },
+ {
+  "start": "vercel.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$20/mo",
+  "right": true,
+  "pages": 5,
+  "tokens": 116141,
+  "ms": 3004,
+  "path": [
+   "https://vercel.com/",
+   "https://vercel.com/pricing"
+  ]
+ },
+ {
+  "start": "vercel.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$20/mo",
+  "right": true,
+  "pages": 5,
+  "tokens": 118017,
+  "ms": 2924,
+  "path": [
+   "https://vercel.com/",
+   "https://vercel.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 71880,
+  "ms": 2915,
+  "path": [
+   "https://raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 72415,
+  "ms": 3349,
+  "path": [
+   "https://raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 71837,
+  "ms": 2962,
+  "path": [
+   "https://raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "notion.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "€9.50",
+  "right": true,
+  "pages": 3,
+  "tokens": 121347,
+  "ms": 3453,
+  "path": [
+   "https://www.notion.com/",
+   "https://www.notion.com/pricing"
+  ]
+ },
+ {
+  "start": "notion.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "€9.50",
+  "right": true,
+  "pages": 3,
+  "tokens": 121371,
+  "ms": 2846,
+  "path": [
+   "https://notion.com/",
+   "https://www.notion.com/pricing"
+  ]
+ },
+ {
+  "start": "notion.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "€9.50",
+  "right": true,
+  "pages": 3,
+  "tokens": 121303,
+  "ms": 2976,
+  "path": [
+   "https://notion.com/",
+   "https://www.notion.com/pricing"
+  ]
+ }
+]

@@ -1,0 +1,218 @@
+[
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 108848,
+  "ms": 2747,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 109191,
+  "ms": 2932,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 109219,
+  "ms": 2817,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 minutes (300,000 ms)",
+  "right": true,
+  "pages": 5,
+  "tokens": 103468,
+  "ms": 3474,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 min (default: 30 seconds)",
+  "right": true,
+  "pages": 5,
+  "tokens": 106610,
+  "ms": 3496,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 min (default: 30 seconds)",
+  "right": true,
+  "pages": 5,
+  "tokens": 106817,
+  "ms": 3486,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "NotRequired",
+  "right": false,
+  "pages": 3,
+  "tokens": 174770,
+  "ms": 2199,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "Always",
+  "right": true,
+  "pages": 5,
+  "tokens": 301480,
+  "ms": 4013,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "NotRequired",
+  "right": false,
+  "pages": 5,
+  "tokens": 302550,
+  "ms": 3180,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Wolfgang Amadeus Mozart",
+  "right": true,
+  "pages": 10,
+  "tokens": 796934,
+  "ms": 3632,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Battle_of_Vienna",
+   "https://en.wikipedia.org/wiki/Vienna",
+   "https://en.wikipedia.org/wiki/Wolfgang_Amadeus_Mozart"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Mozart",
+  "right": true,
+  "pages": 7,
+  "tokens": 573587,
+  "ms": 3052,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Coffeehouse",
+   "https://en.wikipedia.org/wiki/Age_of_Enlightenment"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Wolfgang Amadeus Mozart",
+  "right": true,
+  "pages": 15,
+  "tokens": 1337232,
+  "ms": 4869,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Ottoman_Empire",
+   "https://en.wikipedia.org/wiki/Habsburg",
+   "https://en.wikipedia.org/wiki/Maria_Theresa",
+   "https://en.wikipedia.org/wiki/Joseph_II",
+   "https://en.wikipedia.org/wiki/Wolfgang_Amadeus_Mozart"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": "1912",
+  "right": true,
+  "pages": 10,
+  "tokens": 764413,
+  "ms": 3291,
+  "path": [
+   "https://en.wikipedia.org/wiki/Bicycle",
+   "https://en.wikipedia.org/wiki/Steel",
+   "https://en.wikipedia.org/wiki/Ship",
+   "https://en.wikipedia.org/wiki/Sinking_of_the_Titanic"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 1005729,
+  "ms": 3897,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 1002863,
+  "ms": 3699,
+  "path": []
+ }
+]

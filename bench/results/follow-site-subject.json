@@ -1,0 +1,1242 @@
+[
+ {
+  "start": "linear.app",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10 per user/month",
+  "right": true,
+  "pages": 3,
+  "tokens": 66537,
+  "ms": 2305,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/pricing"
+  ]
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10 per user/month",
+  "right": true,
+  "pages": 3,
+  "tokens": 66520,
+  "ms": 2436,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/pricing"
+  ]
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10 per user/month",
+  "right": true,
+  "pages": 3,
+  "tokens": 66525,
+  "ms": 2217,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/pricing"
+  ]
+ },
+ {
+  "start": "loom.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$18",
+  "right": true,
+  "pages": 3,
+  "tokens": 83372,
+  "ms": 2167,
+  "path": [
+   "https://loom.com/",
+   "https://www.loom.com/pricing"
+  ]
+ },
+ {
+  "start": "loom.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$18",
+  "right": true,
+  "pages": 3,
+  "tokens": 84493,
+  "ms": 2246,
+  "path": [
+   "https://loom.com/",
+   "https://www.loom.com/pricing"
+  ]
+ },
+ {
+  "start": "loom.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$18",
+  "right": true,
+  "pages": 3,
+  "tokens": 89621,
+  "ms": 2088,
+  "path": [
+   "https://loom.com/",
+   "https://www.loom.com/pricing"
+  ]
+ },
+ {
+  "start": "calendly.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 74989,
+  "ms": 2318,
+  "path": [
+   "https://calendly.com/",
+   "https://calendly.com/pricing"
+  ]
+ },
+ {
+  "start": "calendly.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 73991,
+  "ms": 2457,
+  "path": [
+   "https://calendly.com/",
+   "https://calendly.com/pricing"
+  ]
+ },
+ {
+  "start": "calendly.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10\n/seat/mo",
+  "right": true,
+  "pages": 3,
+  "tokens": 74483,
+  "ms": 2794,
+  "path": [
+   "https://calendly.com/",
+   "https://calendly.com/pricing"
+  ]
+ },
+ {
+  "start": "cal.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$12",
+  "right": true,
+  "pages": 3,
+  "tokens": 111132,
+  "ms": 2568,
+  "path": [
+   "https://cal.com/",
+   "https://cal.com/pricing"
+  ]
+ },
+ {
+  "start": "cal.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$12",
+  "right": true,
+  "pages": 3,
+  "tokens": 111112,
+  "ms": 2513,
+  "path": [
+   "https://cal.com/",
+   "https://cal.com/pricing"
+  ]
+ },
+ {
+  "start": "cal.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$12",
+  "right": true,
+  "pages": 3,
+  "tokens": 111120,
+  "ms": 2496,
+  "path": [
+   "https://cal.com/",
+   "https://cal.com/pricing"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$8 per user, per month",
+  "right": true,
+  "pages": 3,
+  "tokens": 86047,
+  "ms": 2125,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/pricing"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$8 per user, per month",
+  "right": true,
+  "pages": 5,
+  "tokens": 121665,
+  "ms": 6207,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/pricing"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$8 per user, per month",
+  "right": true,
+  "pages": 3,
+  "tokens": 86013,
+  "ms": 2111,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/pricing"
+  ]
+ },
+ {
+  "start": "vercel.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$20/mo",
+  "right": true,
+  "pages": 3,
+  "tokens": 77793,
+  "ms": 1974,
+  "path": [
+   "https://vercel.com/",
+   "https://vercel.com/pricing"
+  ]
+ },
+ {
+  "start": "vercel.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$20/month",
+  "right": true,
+  "pages": 5,
+  "tokens": 108500,
+  "ms": 2941,
+  "path": [
+   "https://vercel.com/",
+   "https://vercel.com/docs/plans/pro-plan"
+  ]
+ },
+ {
+  "start": "vercel.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$20/month",
+  "right": true,
+  "pages": 5,
+  "tokens": 108512,
+  "ms": 3348,
+  "path": [
+   "https://vercel.com/",
+   "https://vercel.com/docs/plans/pro-plan"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 63166,
+  "ms": 3325,
+  "path": [
+   "https://raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 63164,
+  "ms": 3033,
+  "path": [
+   "https://www.raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10",
+  "right": true,
+  "pages": 3,
+  "tokens": 62627,
+  "ms": 2662,
+  "path": [
+   "https://raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "notion.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "€9.50",
+  "right": true,
+  "pages": 3,
+  "tokens": 109398,
+  "ms": 3474,
+  "path": [
+   "https://notion.com/",
+   "https://www.notion.com/pricing"
+  ]
+ },
+ {
+  "start": "notion.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "€9.50",
+  "right": true,
+  "pages": 3,
+  "tokens": 109392,
+  "ms": 3078,
+  "path": [
+   "https://notion.com/",
+   "https://www.notion.com/pricing"
+  ]
+ },
+ {
+  "start": "notion.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "€9.50",
+  "right": true,
+  "pages": 3,
+  "tokens": 109550,
+  "ms": 2742,
+  "path": [
+   "https://notion.com/",
+   "https://www.notion.com/pricing"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 142183,
+  "ms": 3262,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 162933,
+  "ms": 3267,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 142452,
+  "ms": 2803,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 min (default: 30 seconds)",
+  "right": true,
+  "pages": 5,
+  "tokens": 151884,
+  "ms": 3537,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/",
+   "https://developers.cloudflare.com/workers/platform/limits/index.md"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 minutes",
+  "right": true,
+  "pages": 5,
+  "tokens": 148765,
+  "ms": 3721,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/",
+   "https://developers.cloudflare.com/workers/platform/limits/index.md"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 min (default: 30 seconds)",
+  "right": true,
+  "pages": 5,
+  "tokens": 151959,
+  "ms": 3559,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/",
+   "https://developers.cloudflare.com/workers/platform/limits/index.md"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "NotRequired",
+  "right": false,
+  "pages": 3,
+  "tokens": 174770,
+  "ms": 2239,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "NotRequired",
+  "right": false,
+  "pages": 3,
+  "tokens": 174820,
+  "ms": 2084,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "NotRequired",
+  "right": false,
+  "pages": 3,
+  "tokens": 174798,
+  "ms": 1977,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Medicine",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "wikipedia",
+  "answer": "C9H8O4",
+  "right": true,
+  "pages": 3,
+  "tokens": 167606,
+  "ms": 3639,
+  "path": [
+   "https://en.wikipedia.org/wiki/Medicine",
+   "https://en.wikipedia.org/wiki/Aspirin"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Medicine",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "wikipedia",
+  "answer": "C9H8O4",
+  "right": true,
+  "pages": 3,
+  "tokens": 167608,
+  "ms": 3193,
+  "path": [
+   "https://en.wikipedia.org/wiki/Medicine",
+   "https://en.wikipedia.org/wiki/Aspirin"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Medicine",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "wikipedia",
+  "answer": "C9H8O4",
+  "right": true,
+  "pages": 3,
+  "tokens": 167604,
+  "ms": 3195,
+  "path": [
+   "https://en.wikipedia.org/wiki/Medicine",
+   "https://en.wikipedia.org/wiki/Aspirin"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "Who designed the Eiffel Tower?",
+  "group": "wikipedia",
+  "answer": "Maurice Koechlin and Emile Nouguier",
+  "right": true,
+  "pages": 5,
+  "tokens": 259038,
+  "ms": 4515,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/Exposition_Universelle_(1889)",
+   "https://en.wikipedia.org/wiki/Gustave_Eiffel"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "Who designed the Eiffel Tower?",
+  "group": "wikipedia",
+  "answer": "Maurice Koechlin and Emile Nouguier",
+  "right": true,
+  "pages": 5,
+  "tokens": 256868,
+  "ms": 5106,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/Exposition_Universelle_(1889)",
+   "https://en.wikipedia.org/wiki/Gustave_Eiffel"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "Who designed the Eiffel Tower?",
+  "group": "wikipedia",
+  "answer": "Maurice Koechlin and Emile Nouguier",
+  "right": true,
+  "pages": 5,
+  "tokens": 270645,
+  "ms": 3550,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/Exposition_Universelle_(1889)",
+   "https://en.wikipedia.org/wiki/Gustave_Eiffel"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Alcohol",
+  "q": "What is the boiling point of ethanol?",
+  "group": "wikipedia",
+  "answer": "78.23 ± 0.09[3] °C (172.81 ± 0.16 °F; 351.38 ± 0.09 K)",
+  "right": true,
+  "pages": 3,
+  "tokens": 119780,
+  "ms": 2193,
+  "path": [
+   "https://en.wikipedia.org/wiki/Alcohol",
+   "https://en.wikipedia.org/wiki/Ethanol"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Alcohol",
+  "q": "What is the boiling point of ethanol?",
+  "group": "wikipedia",
+  "answer": "78.23 ± 0.09[3] °C (172.81 ± 0.16 °F; 351.38 ± 0.09 K)",
+  "right": true,
+  "pages": 3,
+  "tokens": 119809,
+  "ms": 2136,
+  "path": [
+   "https://en.wikipedia.org/wiki/Alcohol",
+   "https://en.wikipedia.org/wiki/Ethanol"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Alcohol",
+  "q": "What is the boiling point of ethanol?",
+  "group": "wikipedia",
+  "answer": "78.23 ± 0.09[3] °C (172.81 ± 0.16 °F; 351.38 ± 0.09 K)",
+  "right": true,
+  "pages": 3,
+  "tokens": 119813,
+  "ms": 2096,
+  "path": [
+   "https://en.wikipedia.org/wiki/Alcohol",
+   "https://en.wikipedia.org/wiki/Ethanol"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "long",
+  "answer": "C9H8O4",
+  "right": true,
+  "pages": 15,
+  "tokens": 1002028,
+  "ms": 5695,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/French_Academy_of_Sciences",
+   "https://en.wikipedia.org/wiki/Chemistry",
+   "https://en.wikipedia.org/wiki/Glossary_of_chemistry_terms",
+   "https://en.wikipedia.org/wiki/Carboxylic_acid",
+   "https://en.wikipedia.org/wiki/Aspirin"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "long",
+  "answer": "C9H8O4",
+  "right": true,
+  "pages": 15,
+  "tokens": 1122536,
+  "ms": 5585,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/French_Academy_of_Sciences",
+   "https://en.wikipedia.org/wiki/Chemistry",
+   "https://en.wikipedia.org/wiki/Glossary_of_chemistry_terms",
+   "https://en.wikipedia.org/wiki/Acid",
+   "https://en.wikipedia.org/wiki/Acetylsalicylic_acid"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "long",
+  "answer": "HC9H7O4",
+  "right": true,
+  "pages": 13,
+  "tokens": 960873,
+  "ms": 4294,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/French_Academy_of_Sciences",
+   "https://en.wikipedia.org/wiki/Chemistry",
+   "https://en.wikipedia.org/wiki/Chemical_compound",
+   "https://en.wikipedia.org/wiki/Dictionary_of_chemical_formulas"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 80546,
+  "ms": 4959,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/docs/reference/support-options"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 80818,
+  "ms": 4493,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/docs"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 80288,
+  "ms": 4761,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/contact/sales",
+   "https://tailscale.com/docs"
+  ]
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the name of the CEO's dog?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 112376,
+  "ms": 4352,
+  "path": []
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the name of the CEO's dog?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 112578,
+  "ms": 4566,
+  "path": []
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the name of the CEO's dog?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 100643,
+  "ms": 4261,
+  "path": []
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the price of the Ultra plan?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 130386,
+  "ms": 5196,
+  "path": [
+   "https://www.raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the price of the Ultra plan?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 127899,
+  "ms": 4672,
+  "path": [
+   "https://raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the price of the Ultra plan?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 127860,
+  "ms": 4967,
+  "path": [
+   "https://raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Banana",
+  "q": "What is the atomic number of uranium?",
+  "group": "long",
+  "answer": "92",
+  "right": true,
+  "pages": 10,
+  "tokens": 589430,
+  "ms": 2941,
+  "path": [
+   "https://en.wikipedia.org/wiki/Banana",
+   "https://en.wikipedia.org/wiki/Colchicine",
+   "https://en.wikipedia.org/wiki/Chemical_formula",
+   "https://en.wikipedia.org/wiki/Periodic_table"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Banana",
+  "q": "What is the atomic number of uranium?",
+  "group": "long",
+  "answer": "92",
+  "right": true,
+  "pages": 10,
+  "tokens": 609534,
+  "ms": 3064,
+  "path": [
+   "https://en.wikipedia.org/wiki/Banana",
+   "https://en.wikipedia.org/wiki/Colchicine",
+   "https://en.wikipedia.org/wiki/Chemical_formula",
+   "https://en.wikipedia.org/wiki/Periodic_table"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Banana",
+  "q": "What is the atomic number of uranium?",
+  "group": "long",
+  "answer": "92",
+  "right": true,
+  "pages": 15,
+  "tokens": 764446,
+  "ms": 4706,
+  "path": [
+   "https://en.wikipedia.org/wiki/Banana",
+   "https://en.wikipedia.org/wiki/Starch",
+   "https://en.wikipedia.org/wiki/Chemical_formula",
+   "https://en.wikipedia.org/wiki/Periodic_table"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Jazz",
+  "q": "How many moons does Mars have?",
+  "group": "long",
+  "answer": "2",
+  "right": true,
+  "pages": 13,
+  "tokens": 1058464,
+  "ms": 4711,
+  "path": [
+   "https://en.wikipedia.org/wiki/Jazz",
+   "https://en.wikipedia.org/wiki/African_Diaspora",
+   "https://en.wikipedia.org/wiki/Asia",
+   "https://en.wikipedia.org/wiki/Ptolemy",
+   "https://en.wikipedia.org/wiki/Mars"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Jazz",
+  "q": "How many moons does Mars have?",
+  "group": "long",
+  "answer": "2",
+  "right": true,
+  "pages": 15,
+  "tokens": 1137874,
+  "ms": 4833,
+  "path": [
+   "https://en.wikipedia.org/wiki/Jazz",
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Radio",
+   "https://en.wikipedia.org/wiki/Visible_light",
+   "https://en.wikipedia.org/wiki/Natural_satellite",
+   "https://en.wikipedia.org/wiki/Mars"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Jazz",
+  "q": "How many moons does Mars have?",
+  "group": "long",
+  "answer": "2",
+  "right": true,
+  "pages": 13,
+  "tokens": 1042563,
+  "ms": 4585,
+  "path": [
+   "https://en.wikipedia.org/wiki/Jazz",
+   "https://en.wikipedia.org/wiki/South_Carolina",
+   "https://en.wikipedia.org/wiki/Geographic_coordinate_system",
+   "https://en.wikipedia.org/wiki/Astronomical",
+   "https://en.wikipedia.org/wiki/Mars"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Tennis",
+  "q": "What is the boiling point of mercury?",
+  "group": "long",
+  "answer": "629.88 K ​(356.73 °C, ​674.11 °F)",
+  "right": true,
+  "pages": 10,
+  "tokens": 700083,
+  "ms": 4239,
+  "path": [
+   "https://en.wikipedia.org/wiki/Tennis",
+   "https://en.wikipedia.org/wiki/Nylon",
+   "https://en.wikipedia.org/wiki/Density",
+   "https://en.wikipedia.org/wiki/Mercury_(element)"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Tennis",
+  "q": "What is the boiling point of mercury?",
+  "group": "long",
+  "answer": "629.88 K ​(356.73 °C, ​674.11 °F)",
+  "right": true,
+  "pages": 13,
+  "tokens": 864517,
+  "ms": 4103,
+  "path": [
+   "https://en.wikipedia.org/wiki/Tennis",
+   "https://en.wikipedia.org/wiki/Nylon",
+   "https://en.wikipedia.org/wiki/Melting_point",
+   "https://en.wikipedia.org/wiki/Mercury_(element)"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Tennis",
+  "q": "What is the boiling point of mercury?",
+  "group": "long",
+  "answer": "629.88 K ​(356.73 °C, ​674.11 °F)",
+  "right": true,
+  "pages": 10,
+  "tokens": 675961,
+  "ms": 3387,
+  "path": [
+   "https://en.wikipedia.org/wiki/Tennis",
+   "https://en.wikipedia.org/wiki/Kevlar",
+   "https://en.wikipedia.org/wiki/Relative_density",
+   "https://en.wikipedia.org/wiki/Mercury_(element)"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Pizza",
+  "q": "Who wrote Don Quixote?",
+  "group": "long",
+  "answer": "Miguel de Cervantes Saavedra",
+  "right": true,
+  "pages": 10,
+  "tokens": 667710,
+  "ms": 2997,
+  "path": [
+   "https://en.wikipedia.org/wiki/Pizza",
+   "https://en.wikipedia.org/wiki/Aeneid",
+   "https://en.wikipedia.org/wiki/Western_canon",
+   "https://en.wikipedia.org/wiki/Miguel_de_Cervantes"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Pizza",
+  "q": "Who wrote Don Quixote?",
+  "group": "long",
+  "answer": "Miguel de Cervantes Saavedra",
+  "right": true,
+  "pages": 10,
+  "tokens": 672533,
+  "ms": 3416,
+  "path": [
+   "https://en.wikipedia.org/wiki/Pizza",
+   "https://en.wikipedia.org/wiki/Aeneid",
+   "https://en.wikipedia.org/wiki/Western_canon",
+   "https://en.wikipedia.org/wiki/Miguel_de_Cervantes"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Pizza",
+  "q": "Who wrote Don Quixote?",
+  "group": "long",
+  "answer": "Miguel de Cervantes Saavedra",
+  "right": true,
+  "pages": 10,
+  "tokens": 622821,
+  "ms": 3424,
+  "path": [
+   "https://en.wikipedia.org/wiki/Pizza",
+   "https://en.wikipedia.org/wiki/Aeneid",
+   "https://en.wikipedia.org/wiki/Western_canon",
+   "https://en.wikipedia.org/wiki/Miguel_de_Cervantes"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": "Leonardo da Vinci",
+  "right": true,
+  "pages": 13,
+  "tokens": 1106768,
+  "ms": 6185,
+  "path": [
+   "https://en.wikipedia.org/wiki/Volcano",
+   "https://en.wikipedia.org/wiki/Roman_mythology",
+   "https://en.wikipedia.org/wiki/Western_painting",
+   "https://en.wikipedia.org/wiki/Mona_Lisa"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": "Leonardo",
+  "right": true,
+  "pages": 10,
+  "tokens": 782451,
+  "ms": 3304,
+  "path": [
+   "https://en.wikipedia.org/wiki/Volcano",
+   "https://en.wikipedia.org/wiki/Smithsonian_Institution",
+   "https://en.wikipedia.org/wiki/Portrait_painting",
+   "https://en.wikipedia.org/wiki/Leonardo_da_Vinci"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": "Leonardo",
+  "right": true,
+  "pages": 10,
+  "tokens": 781864,
+  "ms": 3234,
+  "path": [
+   "https://en.wikipedia.org/wiki/Volcano",
+   "https://en.wikipedia.org/wiki/Smithsonian_Institution",
+   "https://en.wikipedia.org/wiki/Portrait_painting",
+   "https://en.wikipedia.org/wiki/Leonardo_da_Vinci"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "343 m/s",
+  "right": true,
+  "pages": 13,
+  "tokens": 996917,
+  "ms": 4295,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_science",
+   "https://en.wikipedia.org/wiki/Physics",
+   "https://en.wikipedia.org/wiki/Acoustics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "343 m/s",
+  "right": true,
+  "pages": 10,
+  "tokens": 759540,
+  "ms": 3416,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_scientists",
+   "https://en.wikipedia.org/wiki/Fluid_dynamics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "343 m/s",
+  "right": true,
+  "pages": 10,
+  "tokens": 762092,
+  "ms": 3557,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_science",
+   "https://en.wikipedia.org/wiki/Fluid_dynamics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 1023519,
+  "ms": 5630,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Balliol_College,_Oxford",
+   "https://en.wikipedia.org/wiki/Imagery_(literature)",
+   "https://en.wikipedia.org/wiki/Rhythm"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Wolfgang Amadeus Mozart",
+  "right": true,
+  "pages": 10,
+  "tokens": 765820,
+  "ms": 2956,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Battle_of_Vienna",
+   "https://en.wikipedia.org/wiki/Vienna",
+   "https://en.wikipedia.org/wiki/Wolfgang_Amadeus_Mozart"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Wolfgang Amadeus Mozart",
+  "right": true,
+  "pages": 13,
+  "tokens": 1044353,
+  "ms": 4647,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Coffeehouse",
+   "https://en.wikipedia.org/wiki/Age_of_Enlightenment",
+   "https://en.wikipedia.org/wiki/Johann_Wolfgang_von_Goethe",
+   "https://en.wikipedia.org/wiki/Wolfgang_Amadeus_Mozart"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": "5700±30 years",
+  "right": true,
+  "pages": 10,
+  "tokens": 640863,
+  "ms": 4213,
+  "path": [
+   "https://en.wikipedia.org/wiki/Association_football",
+   "https://en.wikipedia.org/wiki/SI",
+   "https://en.wikipedia.org/wiki/Radioactive_decay",
+   "https://en.wikipedia.org/wiki/Carbon-14"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": "5700±30 years",
+  "right": true,
+  "pages": 10,
+  "tokens": 617011,
+  "ms": 3723,
+  "path": [
+   "https://en.wikipedia.org/wiki/Association_football",
+   "https://en.wikipedia.org/wiki/SI",
+   "https://en.wikipedia.org/wiki/Radioactive_decay",
+   "https://en.wikipedia.org/wiki/Carbon-14"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": "5700±30 years",
+  "right": true,
+  "pages": 10,
+  "tokens": 634134,
+  "ms": 3201,
+  "path": [
+   "https://en.wikipedia.org/wiki/Association_football",
+   "https://en.wikipedia.org/wiki/SI",
+   "https://en.wikipedia.org/wiki/Radioactive_decay",
+   "https://en.wikipedia.org/wiki/Carbon-14"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": "Jupiter",
+  "right": true,
+  "pages": 13,
+  "tokens": 910316,
+  "ms": 4442,
+  "path": [
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Radio",
+   "https://en.wikipedia.org/wiki/Infrared",
+   "https://en.wikipedia.org/wiki/Planet",
+   "https://en.wikipedia.org/wiki/Solar_System"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": "Jupiter",
+  "right": true,
+  "pages": 7,
+  "tokens": 469836,
+  "ms": 2964,
+  "path": [
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Graphite",
+   "https://en.wikipedia.org/wiki/Solar_System"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": "Jupiter",
+  "right": true,
+  "pages": 13,
+  "tokens": 996095,
+  "ms": 3715,
+  "path": [
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Radio",
+   "https://en.wikipedia.org/wiki/X-ray",
+   "https://en.wikipedia.org/wiki/Star",
+   "https://en.wikipedia.org/wiki/Jupiter"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 929193,
+  "ms": 4589,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 982701,
+  "ms": 4983,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 1030294,
+  "ms": 3876,
+  "path": []
+ }
+]

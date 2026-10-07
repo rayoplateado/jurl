@@ -79,7 +79,7 @@ pub async fn score(ctx: &Ctx<'_>, links: &[Link], what: &str, field: bool) -> Re
     if links.is_empty() {
         return Ok(Vec::new());
     }
-    let q = ctx.args.ask.as_deref().unwrap_or_default();
+    let q = ctx.ask_per_link();
     // A link off the page's host says where it goes (`--links` keeps them; `--follow` only leaves for a subdomain).
     let host = |l: &Link| l.url.host_str().filter(|h| Some(*h) != ctx.url.host_str()).map(str::to_string);
     let mut items: Vec<Item> = links

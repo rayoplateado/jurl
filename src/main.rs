@@ -89,14 +89,6 @@ impl Args {
     fn limit(&self, default: usize) -> usize {
         if self.all { usize::MAX } else { self.max.unwrap_or(default) }
     }
-
-    /// The question asked about each candidate: the user's, or the mode's default.
-    fn question(&self, target: &str, default: &str) -> Value {
-        match &self.ask {
-            Some(q) => noul(format!("{target} helps answer this question: {q}")),
-            None => noul(format!("{target} {default}")),
-        }
-    }
 }
 
 /// The answer's share of one choice over every span and "none". On 30 pricing pages every answer at or above
@@ -174,6 +166,8 @@ struct Ctx<'a> {
     url: &'a url::Url,
     title: &'a str,
     excerpt: String,
+    /// With --follow from a site's front door: the site whose owner the question is about (see [`Ctx::ask`]).
+    owner: Option<String>,
 }
 
 /// A candidate for Jev: its entry in the state, plus a question if it is being judged
@@ -188,7 +182,41 @@ impl<'a> Ctx<'a> {
     fn new(args: &'a Args, client: &'a Client, key: &'a str, url: &'a url::Url, ex: &'a Extracted) -> Self {
         let excerpt = ex.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
         let excerpt = excerpt.chars().take(EXCERPT_CHARS).collect();
-        Ctx { args, client, key, url, title: &ex.title, excerpt }
+        Ctx { args, client, key, url, title: &ex.title, excerpt, owner: None }
+    }
+
+    /// The question as Jev is asked it. On a search of a site, "the company" is the site's owner: on a customer story
+    /// it would otherwise read as the customer ("Founded: San Francisco" for OpenAI, on linear.app).
+    fn ask(&self) -> String {
+        let q = self.args.ask.clone().unwrap_or_default();
+        match self.owner_note() {
+            Some(note) => format!("{q} ({note})"),
+            None => q,
+        }
+    }
+
+    fn owner_note(&self) -> Option<String> {
+        self.owner.as_ref().map(|site| {
+            format!(
+                "Asked about {site}: unless the question names someone, \"the company\", \"they\", \"we\" or \"it\" is the \
+                 organisation behind {site}, not a customer or partner it writes about."
+            )
+        })
+    }
+
+    /// The question for each of a page's links: the owner's note is in the state once (`asked_about`, see
+    /// [`Ctx::judge`]), not repeated for 250 links.
+    fn ask_per_link(&self) -> String {
+        let q = self.args.ask.clone().unwrap_or_default();
+        if self.owner.is_some() { format!("{q} (read it as `asked_about` says)") } else { q }
+    }
+
+    /// The question asked about each candidate: the user's, or the mode's default.
+    fn question(&self, target: &str, default: &str) -> Value {
+        match &self.args.ask {
+            Some(_) => noul(format!("{target} helps answer this question: {}", self.ask())),
+            None => noul(format!("{target} {default}")),
+        }
     }
 
     /// Chunk items so each request fits the budget, ask all chunks in parallel, merge.
@@ -227,6 +255,13 @@ impl<'a> Ctx<'a> {
             let mut state = json!({ "title": self.title, "url": self.url.as_str(), field: entries });
             if field != "blocks" {
                 state["page_text"] = json!(self.excerpt);
+            }
+            // The note for each link's question (`ask_per_link`). Jev's side-by-side pick of leads is also asked about
+            // `links` and has it in its one question too; twice there costs nothing.
+            if field == "links"
+                && let Some(note) = self.owner_note()
+            {
+                state["asked_about"] = json!(note);
             }
             decide::jev(self.client, self.key, state, qs)
         }))
@@ -477,7 +512,7 @@ async fn score_blocks(
         .map(|b| Item {
             id: format!("b{}", b.i),
             state: json!({ "i": b.i, "kind": b.kind, "text": b.text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
-            question: is_candidate(b).then(|| args.question(&format!("The block in `blocks` with i={}", b.i), default)),
+            question: is_candidate(b).then(|| ctx.question(&format!("The block in `blocks` with i={}", b.i), default)),
         })
         .collect();
     let extra = Map::from_iter([(
@@ -577,7 +612,7 @@ struct Pick {
 
 /// --precise: Jev scores spans of the best blocks as the exact answer.
 async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>, t: &mut Timer) -> Result<Pick> {
-    let q = ctx.args.ask.as_deref().unwrap_or_default();
+    let q = ctx.ask();
     let mut ranked: Vec<(&usize, &f64)> = keep.iter().collect();
     ranked.sort_by(|a, b| b.1.total_cmp(a.1));
     let top: Vec<&Block> = ranked.iter().take(3).map(|(i, _)| &ex.blocks[**i]).collect();
@@ -736,7 +771,7 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<()> {
             .map(|l| Item {
                 id: format!("l{}", l.i),
                 state: json!({ "i": l.i, "text": l.text, "context": l.context, "host": l.url.host_str() }),
-                question: Some(ctx.args.question(
+                question: Some(ctx.question(
                     &format!("The link in `links` with i={}", l.i),
                     "points to something a reader of this page would want to follow — referenced articles, sources, \
                      docs, downloads or related content — not site navigation, login, social sharing, legal pages or ads.",
@@ -1012,6 +1047,20 @@ async fn thumbnail(client: &Client, url: &url::Url) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_site_owner_rides_along_with_the_question() {
+        let args = Args::parse_from(["jurl", "-q", "Where is the company headquartered?", "linear.app"]);
+        let client = Client::new();
+        let url = url::Url::parse("https://linear.app/customers/openai").unwrap();
+        let ex = extract::html("<p>Founded: San Francisco</p>", &url);
+        let ctx = Ctx::new(&args, &client, "", &url, &ex);
+        assert_eq!(ctx.ask(), "Where is the company headquartered?");
+        let ctx = Ctx { owner: Some("linear.app".into()), ..ctx };
+        assert!(ctx.ask().starts_with("Where is the company headquartered? (Asked about linear.app:"), "{}", ctx.ask());
+        // Each link only points at the note, which the links' state holds once.
+        assert_eq!(ctx.ask_per_link(), "Where is the company headquartered? (read it as `asked_about` says)");
+    }
 
     #[test]
     fn exit_codes_tell_nothing_found_from_failures() {
