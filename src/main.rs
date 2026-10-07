@@ -189,13 +189,26 @@ impl<'a> Ctx<'a> {
     /// it would otherwise read as the customer ("Founded: San Francisco" for OpenAI, on linear.app).
     fn ask(&self) -> String {
         let q = self.args.ask.clone().unwrap_or_default();
-        match &self.owner {
-            Some(site) => format!(
-                "{q} (Asked about {site}: unless the question names someone, \"the company\", \"they\", \"we\" or \
-                 \"it\" is the organisation behind {site}, not a customer or partner it writes about.)"
-            ),
+        match self.owner_note() {
+            Some(note) => format!("{q} ({note})"),
             None => q,
         }
+    }
+
+    fn owner_note(&self) -> Option<String> {
+        self.owner.as_ref().map(|site| {
+            format!(
+                "Asked about {site}: unless the question names someone, \"the company\", \"they\", \"we\" or \"it\" is the \
+                 organisation behind {site}, not a customer or partner it writes about."
+            )
+        })
+    }
+
+    /// The question for each of a page's links: the owner's note is in the state once (`asked_about`, see
+    /// [`Ctx::judge`]), not repeated for 250 links.
+    fn ask_per_link(&self) -> String {
+        let q = self.args.ask.clone().unwrap_or_default();
+        if self.owner.is_some() { format!("{q} (read it as `asked_about` says)") } else { q }
     }
 
     /// The question asked about each candidate: the user's, or the mode's default.
@@ -242,6 +255,11 @@ impl<'a> Ctx<'a> {
             let mut state = json!({ "title": self.title, "url": self.url.as_str(), field: entries });
             if field != "blocks" {
                 state["page_text"] = json!(self.excerpt);
+            }
+            if field == "links"
+                && let Some(note) = self.owner_note()
+            {
+                state["asked_about"] = json!(note);
             }
             decide::jev(self.client, self.key, state, qs)
         }))
@@ -1038,6 +1056,8 @@ mod tests {
         assert_eq!(ctx.ask(), "Where is the company headquartered?");
         let ctx = Ctx { owner: Some("linear.app".into()), ..ctx };
         assert!(ctx.ask().starts_with("Where is the company headquartered? (Asked about linear.app:"), "{}", ctx.ask());
+        // Each link only points at the note, which the links' state holds once.
+        assert_eq!(ctx.ask_per_link(), "Where is the company headquartered? (read it as `asked_about` says)");
     }
 
     #[test]
