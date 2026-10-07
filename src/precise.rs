@@ -247,7 +247,7 @@ fn trim(text: &str, r: Range<usize>) -> Option<Range<usize>> {
         lead += rest.len() - after.len();
         rest = after;
     }
-    let trim_end = |s: &str| s.trim_end_matches(|c: char| c.is_whitespace() || ".,;:!?)\"'”’—–".contains(c)).len();
+    let trim_end = |s: &str| s.trim_end_matches(|c: char| c.is_whitespace() || ".,;:!?)|\"'”’—–".contains(c)).len();
     let mut kept = &rest[..trim_end(rest)];
     loop {
         let k = strip_note(kept);
@@ -406,6 +406,13 @@ mod tests {
         let small = block(Kind::Para, "Daniel Ek is the CEO.");
         let spans = candidates(&[&big, &small]);
         assert!(spans.iter().any(|s| s.block == 1 && small.text[s.range.clone()] == *"Daniel Ek"), "{spans:?}");
+    }
+
+    #[test]
+    fn a_table_cell_border_is_not_part_of_an_answer() {
+        let t = texts(&block(Kind::Table, "| **Pro** | $20/mo. | Everything you need |"));
+        assert!(t.contains(&"$20/mo".to_string()), "{t:?}");
+        assert!(!t.iter().any(|s| s.ends_with('|')), "{t:?}");
     }
 
     #[test]
