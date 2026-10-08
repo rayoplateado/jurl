@@ -34,6 +34,9 @@ const MAX_RESULTS: u64 = 50;
 /// Tool calls running at once. The rest wait their turn, in arrival order, so one agent's burst can't fetch every page
 /// at once.
 const MAX_CALLS: usize = 4;
+/// Tool calls that may wait for one of the `MAX_CALLS` slots. Past this a call is refused at once (see `drive`), so a
+/// client that sends faster than calls finish can't grow the queue, or its own wait, without bound.
+const MAX_PENDING: usize = 64;
 
 const VERBATIM: &str = "Everything returned is copied from the page, verbatim, with its links: jurl never writes, \
                         summarizes or guesses. When the page doesn't have it, the result says so (\"Not found\").";
@@ -440,10 +443,17 @@ where
                     Ok(line) if line.trim().is_empty() => continue,
                     Ok(line) => match handle(line) {
                         Reply::Now(reply) => reply,
-                        Reply::Run { id, argv } => {
+                        Reply::Run { id, argv } if pending.len() < MAX_PENDING => {
                             pending.push_back((id, argv));
                             continue;
                         }
+                        // -32000 is the first code JSON-RPC leaves to the server. The call itself is fine (so this isn't a
+                        // tool error the model would read and try to fix), it's the server that has no room for it.
+                        Reply::Run { id, .. } => Some(error(
+                            id,
+                            -32000,
+                            &format!("too many tool calls waiting (at most {MAX_PENDING}); try again later"),
+                        )),
                     },
                     // Not text, so not JSON: there's no id to answer, and serving goes on for the calls in flight.
                     Err(_) => Some(error(Value::Null, -32700, "parse error: not valid UTF-8")),
@@ -736,5 +746,47 @@ mod tests {
             assert_eq!(input_schema(tool)["type"], "object");
         }
         assert_eq!(Tool::from_name("summarize"), None);
+    }
+
+    #[tokio::test]
+    async fn a_call_past_the_waiting_bound_is_refused_at_once_and_never_runs() {
+        // MAX_CALLS run and MAX_PENDING wait; the next one is refused as soon as it is read, while none has finished.
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let call = |argv: Vec<String>| {
+            started.lock().unwrap().push(argv.last().unwrap().clone());
+            async {
+                // Far more polls than the input has lines, so no call finishes before the input has been read.
+                for _ in 0..1_000 {
+                    tokio::task::yield_now().await;
+                }
+                json!({ "content": [{ "type": "text", "text": "ok" }] })
+            }
+        };
+        let accepted = MAX_CALLS + MAX_PENDING;
+        let total = accepted + 1;
+        let input: String = (1..=total)
+            .map(|i| {
+                request(
+                    i as u64,
+                    "tools/call",
+                    json!({ "name": "read_page", "arguments": { "url": format!("x{i}.com") } }),
+                )
+            })
+            .collect();
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, call).await.unwrap();
+
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), total, "{replies:?}");
+        // The refusal comes first, and it is a protocol error with the request's id, not a tool result.
+        assert_eq!(replies[0]["id"], total as u64);
+        assert_eq!(replies[0]["error"]["code"], -32000);
+        assert!(replies[0].get("result").is_none(), "{}", replies[0]);
+        let mut ids: Vec<u64> = replies[1..].iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, (1..=accepted as u64).collect::<Vec<u64>>());
+        // The refused call never ran; the accepted ones ran in arrival order.
+        let urls: Vec<String> = (1..=accepted).map(|i| format!("x{i}.com")).collect();
+        assert_eq!(*started.lock().unwrap(), urls);
     }
 }
