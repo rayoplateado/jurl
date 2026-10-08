@@ -79,43 +79,7 @@ pub async fn score(ctx: &Ctx<'_>, links: &[Link], what: &str, field: bool) -> Re
     if links.is_empty() {
         return Ok(Vec::new());
     }
-    let q = ctx.ask_per_link();
-    // A link off the page's host says where it goes (`--links` keeps them; `--follow` only leaves for a subdomain).
-    let host = |l: &Link| l.url.host_str().filter(|h| Some(*h) != ctx.url.host_str()).map(str::to_string);
-    let mut items: Vec<Item> = links
-        .iter()
-        .map(|l| {
-            let mut state = json!({ "i": l.i, "text": l.text, "context": l.context, "path": l.url.path() });
-            if let Some(h) = host(l) {
-                state["host"] = json!(h);
-            }
-            Item {
-                state,
-                questions: vec![(
-                    format!("l{}", l.i),
-                    noul(format!("{what} with i={} is the page that answers this question, or leads to it: {q}", l.i)),
-                )],
-            }
-        })
-        .collect();
-    if field {
-        let mut more = Vec::new();
-        for l in links {
-            more.push(Item {
-                state: json!({ "i": l.i, "text": l.text, "path": l.url.path() }),
-                questions: vec![(
-                    format!("f{}", l.i),
-                    noul(format!(
-                        "{what} with i={} is about the same field of knowledge as the answer to this question \
-                         (chemistry, astronomy, literature, medicine…): {q}",
-                        l.i
-                    )),
-                )],
-            });
-        }
-        items.extend(more);
-    }
-    let a = ctx.judge("links", items, Map::new()).await?;
+    let a = ctx.judge("links", items(ctx, links, what, field), Map::new()).await?;
     Ok(links
         .iter()
         .map(|l| {
@@ -126,9 +90,45 @@ pub async fn score(ctx: &Ctx<'_>, links: &[Link], what: &str, field: bool) -> Re
         .collect())
 }
 
+/// What `score` asks Jev about, one item per link: its entry in the state and the question whether following it leads
+/// to the answer. With `field`, its field question is on the same item, so the two share a request and the link's
+/// state is sent once.
+fn items(ctx: &Ctx<'_>, links: &[Link], what: &str, field: bool) -> Vec<Item> {
+    let q = ctx.ask_per_link();
+    // A link off the page's host says where it goes (`--links` keeps them; `--follow` only leaves for a subdomain).
+    let host = |l: &Link| l.url.host_str().filter(|h| Some(*h) != ctx.url.host_str()).map(str::to_string);
+    links
+        .iter()
+        .map(|l| {
+            let mut state = json!({ "i": l.i, "text": l.text, "context": l.context, "path": l.url.path() });
+            if let Some(h) = host(l) {
+                state["host"] = json!(h);
+            }
+            let mut questions = vec![(
+                format!("l{}", l.i),
+                noul(format!("{what} with i={} is the page that answers this question, or leads to it: {q}", l.i)),
+            )];
+            if field {
+                questions.push((
+                    format!("f{}", l.i),
+                    noul(format!(
+                        "{what} with i={} is about the same field of knowledge as the answer to this question \
+                         (chemistry, astronomy, literature, medicine…): {q}",
+                        l.i
+                    )),
+                ));
+            }
+            Item { state, questions }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Args, extract};
+    use clap::Parser;
+    use reqwest::Client;
 
     #[test]
     fn question_words_pick_which_links_get_scored() {
@@ -150,5 +150,56 @@ mod tests {
     #[test]
     fn same_page_key() {
         assert_eq!(key(&Url::parse("https://x.com/pricing/#plans").unwrap()), "https://x.com/pricing");
+    }
+
+    /// The question ids of an item, in order.
+    fn ids(item: &Item) -> Vec<&str> {
+        item.questions.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_links_field_question_rides_on_its_item() {
+        let args = Args::parse_from(["jurl", "-q", "Which element is in vulcanized rubber?", "x.com"]);
+        let url = Url::parse("https://x.com/").unwrap();
+        let ex = extract::html("", &url);
+        let client = Client::new();
+        let ctx = Ctx::new(&args, &client, "", &url, &ex);
+        let link = |i: usize, path: &str| Link {
+            i,
+            url: Url::parse(&format!("https://x.com{path}")).unwrap(),
+            text: String::new(),
+            context: String::new(),
+            marginal: false,
+        };
+        let links = [link(0, "/rubber"), link(1, "/polyester")];
+        let leads = "Following the link in `links`";
+
+        let plain = items(&ctx, &links, leads, false);
+        assert_eq!(ids(&plain[0]), ["l0"]);
+        assert_eq!(plain[0].state, json!({ "i": 0, "text": "", "context": "", "path": "/rubber" }));
+        assert_eq!(
+            plain[0].questions[0].1,
+            json!({
+                "type": "noul",
+                "instructions": "Following the link in `links` with i=0 is the page that answers this question, or leads \
+                                 to it: Which element is in vulcanized rubber?",
+            })
+        );
+
+        // With the field, the link's field question is on its item beside its leads question: the two share a request,
+        // and the link's state is sent once.
+        let field = items(&ctx, &links, leads, true);
+        assert_eq!(field.len(), 2);
+        assert_eq!(ids(&field[1]), ["l1", "f1"]);
+        assert_eq!(field[1].state, plain[1].state);
+        assert_eq!(
+            field[1].questions[1].1,
+            json!({
+                "type": "noul",
+                "instructions": "Following the link in `links` with i=1 is about the same field of knowledge as the answer \
+                                 to this question (chemistry, astronomy, literature, medicine…): Which element is in \
+                                 vulcanized rubber?",
+            })
+        );
     }
 }
