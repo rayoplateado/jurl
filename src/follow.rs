@@ -20,7 +20,7 @@ use crate::{
     decide::is_api_error,
     extract::{self, Extracted, Link},
     judge::{Ctx, Item},
-    links::{self, FieldScores, overlap},
+    links::{self, FieldScores},
     load,
     output::{Rendered, missed, not_found},
     timing::Timer,
@@ -414,13 +414,8 @@ pub async fn run(
     // The first page, the site's own map and robots.txt, all at once.
     let hints = async {
         let q = args.ask.as_deref().unwrap_or_default();
-        let mut links = site_map(client, &start, &site).await;
         // The site's pages that share words with the question first, then the shallowest.
-        if links.len() > MAX_HINTS {
-            let mut ranked: Vec<(usize, Link)> = links.into_iter().map(|l| (overlap(q, &l), l)).collect();
-            ranked.sort_by_key(|(o, l)| (std::cmp::Reverse(*o), l.i));
-            links = ranked.into_iter().take(MAX_HINTS).map(|(_, l)| l).collect();
-        }
+        let mut links = links::most_relevant(q, site_map(client, &start, &site).await, MAX_HINTS);
         // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
         links.retain(|l| links::key(&l.url) != links::key(&start));
         links
