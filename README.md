@@ -391,9 +391,16 @@ cargo build --release && ./target/release/jurl -t <url>
 
 | File | What's in it |
 | --- | --- |
-| `src/main.rs` | Modes, chunking, hedging, output |
+| `src/main.rs` | Entry point: flags checked, the page loaded, the mode picked |
+| `src/cli.rs` | The flags, as clap parses them and `--help` shows them |
+| `src/judge.rs` | Jev's requests: items and questions, chunks that fit the budget, block pages |
+| `src/blocks.rs` | The default mode and `-q`/`--code`: the best blocks, in page order |
+| `src/answer.rs` | `--precise`: the answer as a span of the best blocks |
+| `src/vision.rs` | `--image`, `--vision`, `--find`: content images, and Clef's look at the pixels |
+| `src/output.rs` | What a run prints (text or `--json`), exit codes, misses |
+| `src/timing.rs` | `-t`: per-phase timings on stderr |
 | `src/precise.rs` | `--precise`: candidate spans and the link to them |
-| `src/links.rs` | `--links -q` and `--follow`: which links lead to the answer |
+| `src/links.rs` | `--links` and `--links -q` (ranked by the answer), `--follow`: which links lead to the answer |
 | `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
 | `src/extract.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
