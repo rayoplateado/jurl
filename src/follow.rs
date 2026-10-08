@@ -26,7 +26,7 @@ use crate::{
 const PARALLEL: usize = 2;
 /// A long search (`--follow 10` and up) goes wider: a long trail needs more than one or two guesses per step.
 const PARALLEL_LONG: usize = 3;
-/// URLs from the site map scored, like a page's links (at most [`links::MAX_LINKS`]).
+/// URLs from the site map scored, like a page's links: at most this many, besides the start page.
 const MAX_HINTS: usize = 300;
 /// A link's score is discounted per hop, so a good lead near the start beats a slightly better one deep down.
 const HOP_DECAY: f64 = 0.85;
@@ -407,13 +407,10 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     let mut leads: Vec<Lead> = Vec::new();
     let mut found: Vec<(f64, Visit, Vec<Url>)> = Vec::new();
     // How well the start page fits the question as a page, from the same scoring as the site map's pages. A home page
-    // answering in passing (a FAQ line) counts for less than a pricing page that the site lists.
+    // answering in passing (a FAQ line) counts for less than a pricing page that the site lists. The start page is
+    // always the first hint (inserted above), so it's taken out here.
     let mut hints = hints;
-    let start_fit = if hints.first().is_some_and(|h| self::key(&h.0) == self::key(&start)) {
-        hints.remove(0).2.max(COLD_PAGE)
-    } else {
-        1.0
-    };
+    let start_fit = hints.remove(0).2.max(COLD_PAGE);
 
     // A page that answers is ranked by how sure Jev is of the answer AND of the page: a blog post from two years ago
     // can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
