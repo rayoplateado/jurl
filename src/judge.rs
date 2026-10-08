@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     cli::Args,
     decide::{self, Answers, noul},
-    extract::Extracted,
+    extract::{Block, Extracted},
 };
 
 /// One Jev request stays well under the ~64k token budget.
@@ -42,9 +42,7 @@ pub(crate) struct Item {
 
 impl<'a> Ctx<'a> {
     pub(crate) fn new(args: &'a Args, client: &'a Client, key: &'a str, url: &'a url::Url, ex: &'a Extracted) -> Self {
-        let excerpt = ex.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
-        let excerpt = excerpt.chars().take(EXCERPT_CHARS).collect();
-        Ctx { args, client, key, url, title: &ex.title, excerpt, owner: None }
+        Ctx { args, client, key, url, title: &ex.title, excerpt: excerpt_of(&ex.blocks), owner: None }
     }
 
     /// The question as Jev is asked it. On a search of a site, "the company" is the site's owner: on a customer story
@@ -125,6 +123,16 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// The start of the page's text, its blocks joined by newlines, cut to `EXCERPT_CHARS` characters while it is built.
+fn excerpt_of(blocks: &[Block]) -> String {
+    blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(k, b)| (k > 0).then_some('\n').into_iter().chain(b.text.chars()))
+        .take(EXCERPT_CHARS)
+        .collect()
+}
+
 /// Splits items into the requests `judge` sends. An item goes with all its questions in one request: they open a new
 /// one when they would take the open request past MAX_QUESTIONS (`extra` counts; it goes in the first) or past
 /// MAX_STATE_CHARS. Items without questions (headings) never open one.
@@ -155,9 +163,37 @@ fn chunks(items: Vec<Item>, extra: Map<String, Value>) -> Vec<(Vec<Value>, Map<S
 mod tests {
     use clap::Parser;
 
-    use crate::extract;
+    use crate::extract::{self, Block, Kind};
 
     use super::*;
+
+    /// Blocks holding `texts`, one each, as a page cut into blocks has them.
+    fn page_blocks(texts: &[String]) -> Vec<Block> {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Block { i, kind: Kind::Para, level: None, lang: None, text: t.clone(), list: None })
+            .collect()
+    }
+
+    #[test]
+    fn the_excerpt_is_the_first_characters_of_the_blocks_joined_by_newlines() {
+        let joined = |texts: &[String]| texts.join("\n").chars().take(EXCERPT_CHARS).collect::<String>();
+        let cases: Vec<Vec<String>> = vec![
+            vec![],
+            vec!["one block".into()],
+            vec!["a".into(), String::new(), "b".into()],
+            // The cut falls on a separator, then inside the next block.
+            vec!["x".repeat(EXCERPT_CHARS - 1), "yy".into(), "z".into()],
+            // Characters, not bytes: each 'é' is two bytes.
+            vec!["é".repeat(EXCERPT_CHARS + 100)],
+            vec!["p".repeat(500), "q".repeat(500)],
+            vec!["k".repeat(EXCERPT_CHARS), "after".into()],
+        ];
+        for texts in cases {
+            assert_eq!(excerpt_of(&page_blocks(&texts)), joined(&texts));
+        }
+    }
 
     #[test]
     fn the_site_owner_rides_along_with_the_question() {
