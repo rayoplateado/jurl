@@ -187,7 +187,7 @@ $ jurl --find "a carnival parade" en.wikipedia.org/wiki/Cologne
 jurl: no image in https://en.wikipedia.org/wiki/Cologne looks like "a carnival parade" (closest: …, p=0.02)
 ```
 
-The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer: 1 when the page has nothing that answers, 2 when something failed (see [Exit codes](#exit-codes)). With `--json` (`--precise`, with or without `--follow`) a miss still prints its JSON, `"answer": null` plus what came `closest` (`null` too when no block came close), and exits 1 all the same: a script that wants the closest passage reads stdout before checking the exit code. `-t` prints its timings and tokens on a miss too, so a miss can be costed.
+The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer: 1 when the page has nothing that answers, 2 when something failed (see [Exit codes](#exit-codes)). With `--precise --json` (with or without `--follow`) a miss still prints its JSON, `"answer": null` plus what came `closest` (`null` too when no block came close), and exits 1 all the same: a script that wants the closest passage reads stdout before checking the exit code. Without `--precise`, a miss prints nothing on stdout, `--json` or not. `-t` prints its timings and tokens on a miss too, so a miss can be costed.
 
 Images are picked from `<img>` tags (`src`, `srcset` and the usual lazy-loading attributes) and the page's `og:image`. SVG images aren't candidates: they're mostly icons and logos, and Clef only reads raster images, so a post whose diagrams are all SVG (Stripe's engineering blog) has nothing to find.
 
@@ -292,7 +292,7 @@ As with grep, a script can tell "not there" from "something broke":
 | Code | Meaning |
 | --- | --- |
 | 0 | Something was printed: an answer, blocks, links or images |
-| 1 | The page (or the site, with `--follow`) was read and has nothing that answers: no exact answer, no image that looks like that, nothing above `--threshold`. With `--json`, the JSON is still printed (`"answer": null` and what came `closest`) |
+| 1 | The page (or the site, with `--follow`) was read and has nothing that answers: no exact answer, no image that looks like that, nothing above `--threshold`. With `--precise --json`, the JSON is still printed (`"answer": null` and what came `closest`); without `--precise`, nothing is printed |
 | 2 | An error: the page couldn't be read (HTTP error, timeout, a block page, no readable text), the API couldn't be asked (a bad key, no credits), or the arguments are wrong |
 
 Before 0.1.11 every failure exited 1, and a `--json` miss exited 0.
@@ -331,7 +331,7 @@ Best in each row in bold. WebFetch hands the agent the fewest tokens because it 
 
 jurl has no server and no account of its own. It talks to the model APIs directly with **your** keys:
 
-- **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result, a miss included, says what its run used: `"usage": {"pages": 3, "jev": {"requests": 6, "input_tokens": 41250}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); a request counts once it has answered.
+- **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result says what its run used, a `--precise` miss included: `"usage": {"pages": 3, "jev": {"requests": 6, "input_tokens": 41250}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); a request counts once it has answered.
 - **What leaves your machine:** the text of the page goes to TypeSafe. With `--vision` or `--find`, the images go to Cloudflare too. Keep that in mind for internal or private pages.
 - **What jurl can't read:** it sends no cookies, so pages behind a login are out of reach.
 
