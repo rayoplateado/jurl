@@ -11,6 +11,7 @@ These scripts measure how often a candidate (another model, or Jev with other se
 - [record.py](record.py): a proxy between jurl and Jev that saves every request and answer (JSONL).
 - [replay.py](replay.py): sends the recorded requests to a candidate and saves its answers next to Jev's.
 - [compare.py](compare.py): one column per replay. Python's standard library only, like the rest of `bench/`.
+- [diff.py](diff.py): the requests two recordings share, and what differs between them (for a refactor).
 
 ## What compare.py counts
 
@@ -73,6 +74,20 @@ For each `noul` kind: mean absolute difference, how often both are on the same s
    With `JURL_JEV_URL` set, jurl sends no TypeSafe key, only `JURL_JEV_KEY` if the candidate needs a bearer of its own.
 
 Recordings, replays and pairs (`results/*.jsonl`) hold the pages' text and are large (156 MB on 2026-10-08): they're ignored by git. Summaries (`results/*.txt`) are committed.
+
+### Proving a refactor changes nothing
+
+Record a `follow.py` run with the old binary, then run the same run with the new one against that recording. `record.py --from` answers a request whose body was recorded with its recorded answer, and any other with a 500: jurl fails that search, because the new binary asked something new. Nothing is forwarded, so the check is free.
+
+```sh
+python3 bench/models/record.py --out bench/models/results/base.jsonl &                # Jev, port 18100
+JURL_JEV_URL=http://127.0.0.1:18100/v1/systemone JURL=/path/to/old/jurl python3 bench/follow.py refactor-old 1
+python3 bench/models/record.py --from bench/models/results/base.jsonl --out bench/models/results/check.jsonl --port 18101 &
+env -u TYPESAFE_API_KEY JURL_JEV_URL=http://127.0.0.1:18101/v1/systemone JURL=target/release/jurl python3 bench/follow.py refactor-new 1
+python3 bench/models/diff.py bench/models/results/base.jsonl bench/models/results/check.jsonl   # what differs; exits 1 if any
+```
+
+A page can change between runs, and then a request differs for a reason that isn't the code: record and check back to back.
 
 ## What it costs
 
