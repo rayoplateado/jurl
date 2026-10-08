@@ -28,10 +28,10 @@ For each `noul` kind: mean absolute difference, how often both are on the same s
 
 ## Workflow
 
-1. **Record** one `follow.py` run through the proxy, only the groups you need (Jev's key goes through, it's never written):
+1. **Record** one `follow.py` run through the proxy, only the groups you need. jurl never sends the TypeSafe key to `JURL_JEV_URL`, so the proxy adds it itself, from `TYPESAFE_API_KEY` in its own environment (never written to the file):
 
    ```sh
-   python3 bench/models/record.py --out bench/models/results/jev-pricing.jsonl &      # → Jev, on port 18100
+   TYPESAFE_API_KEY=… python3 bench/models/record.py --out bench/models/results/jev-pricing.jsonl &   # → Jev, port 18100
    JURL_JEV_URL=http://127.0.0.1:18100/v1/systemone JURL=target/release/jurl GROUP=pricing \
      python3 bench/follow.py jev-pricing 1
    ```
@@ -66,11 +66,11 @@ For each `noul` kind: mean absolute difference, how often both are on the same s
 5. **End to end**, when the agreement is close: `follow.py` with jurl pointed at the candidate. A slow self-hosted model needs one search at a time and more time per search (a search that times out counts as wrong):
 
    ```sh
-   env -u TYPESAFE_API_KEY JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone POOL=1 TIMEOUT=1800 \
+   JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone POOL=1 TIMEOUT=1800 \
      JURL=target/release/jurl python3 bench/follow.py cand 1
    ```
 
-   **Unset `TYPESAFE_API_KEY`** whenever `JURL_JEV_URL` points anywhere but your own proxy to Jev: jurl sends the key it has to whatever server that is. A key in `~/.config/jurl/env` or `./.env` is sent too: point `XDG_CONFIG_HOME` at an empty directory and run from one without a `.env`.
+   With `JURL_JEV_URL` set, jurl sends no TypeSafe key, only `JURL_JEV_KEY` if the candidate needs a bearer of its own.
 
 Recordings, replays and pairs (`results/*.jsonl`) hold the pages' text and are large (156 MB on 2026-10-08): they're ignored by git. Summaries (`results/*.txt`) are committed.
 

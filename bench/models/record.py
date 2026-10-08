@@ -1,10 +1,12 @@
 # A recording proxy in front of a Jev-contract endpoint: jurl talks to it (JURL_JEV_URL), it forwards every POST to
 # --upstream and appends each request and response body, with the upstream's latency, as one JSON line to --out.
-# Headers are forwarded (Jev needs jurl's Authorization) but never written. Listens on 127.0.0.1 only.
-#   python3 record.py --out results/jev-pricing.jsonl                 # upstream: Jev, port 18100
+# jurl never sends the TypeSafe key to JURL_JEV_URL, so to Jev the proxy adds it itself, from TYPESAFE_API_KEY in its
+# own environment; to any other upstream it forwards jurl's bearer (JURL_JEV_KEY), if any. No header is ever written.
+# Listens on 127.0.0.1 only.
+#   TYPESAFE_API_KEY=… python3 record.py --out results/jev-pricing.jsonl     # upstream: Jev, port 18100
 #   python3 record.py --upstream http://127.0.0.1:8000/v1/systemone --port 18101 --out results/cand-follow.jsonl
 # Appending to an existing file continues its `seq`, so several runs (GROUP=pricing, then docs) make one corpus.
-import argparse, http.client, json, threading, time, urllib.parse
+import argparse, http.client, json, os, threading, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ap = argparse.ArgumentParser()
@@ -15,6 +17,11 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--user-agent", default="curl/8.7.1")
 a = ap.parse_args()
 U = urllib.parse.urlsplit(a.upstream)
+JEV_KEY = None
+if U.hostname == "api.typesafe.ai":
+    JEV_KEY = os.environ.get("TYPESAFE_API_KEY")
+    if not JEV_KEY:
+        raise SystemExit("recording Jev needs TYPESAFE_API_KEY in this proxy's environment")
 local = threading.local()
 lock = threading.Lock()
 seq = 0
@@ -55,7 +62,9 @@ class Handler(BaseHTTPRequestHandler):
         global seq
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         hdr = {"Content-Type": "application/json", "User-Agent": a.user_agent}
-        if self.headers.get("Authorization"):
+        if JEV_KEY:
+            hdr["Authorization"] = "Bearer " + JEV_KEY
+        elif self.headers.get("Authorization"):
             hdr["Authorization"] = self.headers["Authorization"]
         t0 = time.time()
         for attempt in (0, 1):
