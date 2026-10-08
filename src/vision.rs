@@ -111,7 +111,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     let limit = ctx.args.limit(if query.is_some() { 1 } else { usize::MAX });
     let kept = keep(scored, ctx.args.threshold(), limit);
     if kept.is_empty() {
-        return Err(nothing_kept(ctx.url, &looks, query, best));
+        return Err(nothing_kept(ctx.url, &looks, ex.images.len(), query, best));
     }
     Ok(render(ctx, ex, &kept))
 }
@@ -210,10 +210,16 @@ fn keep(scored: Vec<(&Image, f64)>, threshold: f64, limit: usize) -> Vec<(&Image
 
 /// The error for a run that kept nothing: every look failed, or a query found nothing close enough, or no content
 /// image passed the threshold.
-fn nothing_kept(url: &url::Url, looks: &Looks, query: Option<&str>, best: Option<(url::Url, f64)>) -> anyhow::Error {
+fn nothing_kept(
+    url: &url::Url,
+    looks: &Looks,
+    total: usize,
+    query: Option<&str>,
+    best: Option<(url::Url, f64)>,
+) -> anyhow::Error {
     // Every image failed: an error, not "nothing looks like that".
     if let Some(e) = looks.all_failed() {
-        return anyhow!(why_no_look(url, e));
+        return anyhow!(why_no_look(url, e, looks.len(), total));
     }
     if let (Some(q), Some((closest, p))) = (query, best) {
         return not_found(format!("no image in {url} looks like \"{q}\" (closest: {closest}, p={p:.2})"));
@@ -222,13 +228,20 @@ fn nothing_kept(url: &url::Url, looks: &Looks, query: Option<&str>, best: Option
 }
 
 /// What a run reports when every look failed: a timeout, a Clef error (a bad token, no credits) or a download error
-/// (anything else is about getting the images to Clef at all).
-fn why_no_look(url: &url::Url, e: &anyhow::Error) -> String {
+/// (anything else is about getting the images to Clef at all). `looked` images were tried out of `total` on the page.
+fn why_no_look(url: &url::Url, e: &anyhow::Error, looked: usize, total: usize) -> String {
     if let Some(timeout) = e.chain().find_map(|c| c.downcast_ref::<Timeout>()) {
-        return format!("no image answered within {} ms (JURL_VISION_TIMEOUT_MS) in {url}", timeout.0.as_millis());
+        let who = if total > looked { format!("none of the {looked} images it looked at") } else { "no image".into() };
+        return format!("{who} answered within {} ms (JURL_VISION_TIMEOUT_MS) in {url}", timeout.0.as_millis());
     }
-    let what = if is_api_error(e) { "Clef couldn't look at any image" } else { "couldn't download any image" };
-    format!("{what} in {url}: {e:#}")
+    let what = if is_api_error(e) { "Clef couldn't look at" } else { "couldn't download" };
+    format!("{what} {} in {url}: {e:#}", tried(looked, total))
+}
+
+/// The images a look covered, as a message names them: "any image", or "any of the 12 images it looked at" when the
+/// page has more images than that.
+fn tried(looked: usize, total: usize) -> String {
+    if total > looked { format!("any of the {looked} images it looked at") } else { "any image".into() }
 }
 
 /// The result: each kept image's URL on its own line, and the same images as JSON.
@@ -555,13 +568,28 @@ mod tests {
         let url = url::Url::parse("https://example.test/page").unwrap();
         let timed_out = anyhow::Error::from(Timeout(Duration::from_millis(2500)));
         assert_eq!(
-            why_no_look(&url, &timed_out),
+            why_no_look(&url, &timed_out, 3, 3),
             "no image answered within 2500 ms (JURL_VISION_TIMEOUT_MS) in https://example.test/page"
         );
         let download = anyhow!("connection reset");
         assert_eq!(
-            why_no_look(&url, &download),
+            why_no_look(&url, &download, 3, 3),
             "couldn't download any image in https://example.test/page: connection reset"
+        );
+    }
+
+    #[test]
+    fn with_more_images_than_it_looked_at_the_report_says_how_many_it_tried() {
+        let url = url::Url::parse("https://example.test/page").unwrap();
+        let download = anyhow!("connection reset");
+        assert_eq!(
+            why_no_look(&url, &download, 12, 73),
+            "couldn't download any of the 12 images it looked at in https://example.test/page: connection reset"
+        );
+        let timed_out = anyhow::Error::from(Timeout(Duration::from_millis(2500)));
+        assert_eq!(
+            why_no_look(&url, &timed_out, 12, 73),
+            "none of the 12 images it looked at answered within 2500 ms (JURL_VISION_TIMEOUT_MS) in https://example.test/page"
         );
     }
 
