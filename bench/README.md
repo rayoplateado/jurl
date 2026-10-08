@@ -1,7 +1,7 @@
 # Reading docs for one answer
 
 An agent has a URL and a question. What it gets back from each way of reading the page, on 10 documentation pages.
-Measured on 2026-10-07; jurl again on 2026-10-08, with this branch.
+Measured on 2026-10-07; jurl again on 2026-10-08.
 
 | Reader | Exact answer | Code lines not on the page | Cost per 10,000 pages | Median tokens | Median time |
 | --- | --- | --- | --- | --- | --- |
@@ -182,14 +182,14 @@ Measured the same day:
 
 | | Right | Tokens | p50 | p90 |
 | --- | --- | --- | --- | --- |
-| follow.json, main ([1 run](results/follow-main-all.json)) | 25/28 | 11.31M ($0.475) | $0.0064 | $0.0416 |
-| follow.json, this branch ([1 run](results/follow-final-all.json)) | 27/28 | 10.14M ($0.426) | $0.0063 | $0.0355 |
-| real-world, main ([r1](results/follow-real-main-r1.json), [r2](results/follow-real-main-r2.json)) | 58/60 | 4.15M ($0.174) | $0.0026 | $0.0048 |
-| real-world, this branch ([r1](results/follow-real-final-r1.json), [r2](results/follow-real-final-r2.json)) | 58/60 | 4.02M ($0.169) | $0.0026 | $0.0047 |
+| follow.json, before (7e68b67, [1 run](results/follow-main-all.json)) | 25/28 | 11.31M ($0.475) | $0.0064 | $0.0416 |
+| follow.json, after ([1 run](results/follow-final-all.json)) | 27/28 | 10.14M ($0.426) | $0.0063 | $0.0355 |
+| real-world, before (7e68b67, [r1](results/follow-real-main-r1.json), [r2](results/follow-real-main-r2.json)) | 58/60 | 4.15M ($0.174) | $0.0026 | $0.0048 |
+| real-world, after ([r1](results/follow-real-final-r1.json), [r2](results/follow-real-final-r2.json)) | 58/60 | 4.02M ($0.169) | $0.0026 | $0.0047 |
 
 p50 and p90 are nearest-rank percentiles of each search's cost.
 
-On follow.json, main missed the Kubernetes docs question (`NotRequired`), Coffee → The Magic Flute and Bicycle → the Titanic, both with no answer. This branch got Coffee right and missed only Bicycle → the Titanic (no answer after 15 pages), the same miss as before. On the real-world set, main missed Grafana's default port (no answer, r1) and MEGA's storage (r2 answered `!{freePlanStorage} storage`: the placeholder was not filled). This branch missed the pCloud trap in both runs: "Where does pCloud's CEO live?" got a Swiss street address from help.pcloud.com/contact.
+On follow.json, the build before missed the Kubernetes docs question (`NotRequired`), Coffee → The Magic Flute and Bicycle → the Titanic, both with no answer. The new build got Coffee and Kubernetes right and missed only Bicycle → the Titanic (no answer after 15 pages), the same miss as before. On the real-world set, the build before missed Grafana's default port (no answer, r1) and MEGA's storage (r2 answered `!{freePlanStorage} storage`: the placeholder was not filled; such pages are now rendered). The new build missed the pCloud trap in both runs: "Where does pCloud's CEO live?" got a Swiss street address from help.pcloud.com/contact.
 
 On the real-world searches the cost is about the same: 3% fewer tokens. On the 11 long games, one run each, 13% fewer tokens (9.23M → 8.00M), p90 per search $0.049 → $0.041 (16% less), and 10/11 right against 9/11. The 17 short searches read 3% more (2.08M → 2.14M, one run each): the docs searches 26% more, the pricing searches 9% less.
 
@@ -200,7 +200,7 @@ What didn't work:
 - Local static embeddings (model2vec) for the field question, or to pre-filter the links: Spearman 0.15 against Jev's field answers, 0.92 for Jev against itself. Keeping the 150 links closest to the question cut a step of 7 of 10 winning long trails ([summary](models/results/2026-10-08-embeddings.txt)).
 - A BM25 pre-filter of the blocks: on the 30 held-out real-world searches it dropped 4 of 24 answer blocks (Brave's headquarters, Vite's and Grafana's ports, Django's upload limit; [summary](models/results/2026-10-08-bm25-blocks.txt)).
 - Asking Jev about blocks in stages (the first 30 or 60, the rest only if nothing is strong): 4.1% and 2.6% fewer net tokens on real-world pages, with a second round trip on 31% and 17% of pages ([summary](models/results/2026-10-08-staged-blocks.txt)).
-- Scoring 150 of the site map's URLs instead of 300, ranked by BM25 over character 3-grams of the URL: p50 $0.0021 against $0.0026 on main's two runs, but Grafana's default port went unanswered. [One run](results/follow-ab-real-hints.json): 27/30, with MEGA's placeholder, Grafana and the pCloud trap missed. The answer is on `/tutorials/grafana-fundamentals`, and every run that answered reached it. The 300 are still picked by shared words, then depth.
+- Scoring 150 of the site map's URLs instead of 300, ranked by BM25 over character 3-grams of the URL: p50 $0.0021 against $0.0026 for the build before, but Grafana's default port went unanswered. [One run](results/follow-ab-real-hints.json): 27/30, with MEGA's placeholder, Grafana and the pCloud trap missed. The answer is on `/tutorials/grafana-fundamentals`, and every run that answered reached it. The 300 are still picked by shared words, then depth.
 
 ## Another decision model in Jev's place
 
