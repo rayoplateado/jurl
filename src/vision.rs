@@ -133,13 +133,12 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         (a, looks)
     };
 
-    let looks: HashMap<usize, Result<f64>> = looks.into_iter().collect();
     let mut scored: Vec<(&Image, f64)> = ex
         .images
         .iter()
         .map(|img| {
             let p_text = a.noul(&format!("img{}", img.i)).unwrap_or(0.0);
-            let p = match looks.get(&img.i) {
+            let p = match looks.get(img.i) {
                 // Searching: Clef saw the pixels *and* the alt/caption, so it decides.
                 Some(Ok(p_pixels)) if query.is_some() => *p_pixels,
                 // Pixels say what it is; Jev's page context says whether it belongs here.
@@ -167,7 +166,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     // Clef couldn't look; any other error is about getting the images to Clef at all.
     if kept.is_empty()
         && !looks.is_empty()
-        && let Some(e) = looks.values().try_fold(None, |_, r| r.as_ref().err().map(Some)).flatten()
+        && let Some(e) = looks.0.values().try_fold(None, |_, r| r.as_ref().err().map(Some)).flatten()
     {
         let what = if is_api_error(e) { "Clef couldn't look at any image" } else { "couldn't download any image" };
         bail!("{what} in {}: {e:#}", ctx.url);
@@ -188,6 +187,22 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }) })
 }
 
+/// Clef's answers for the images it looked at, by image index (`Image::i`).
+#[derive(Default)]
+struct Looks(HashMap<usize, Result<f64>>);
+
+impl Looks {
+    fn get(&self, i: usize) -> Option<&Result<f64>> {
+        self.0.get(&i)
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// Clef on several images at once, each bounded by the vision deadline.
 async fn look_all(
     client: &Client,
@@ -196,14 +211,15 @@ async fn look_all(
     title: &str,
     imgs: Vec<&Image>,
     query: Option<&str>,
-) -> Vec<(usize, Result<f64>)> {
-    let Some((account, token)) = keys else { return Vec::new() };
+) -> Looks {
+    let Some((account, token)) = keys else { return Looks::default() };
     let deadline = vision_deadline();
-    join_all(imgs.into_iter().map(|img| async move {
+    let answers = join_all(imgs.into_iter().map(|img| async move {
         let look = tokio::time::timeout(deadline, look(client, clef_client, account, token, title, img, query)).await;
         (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms (JURL_VISION_TIMEOUT_MS)", deadline.as_millis()))))
     }))
-    .await
+    .await;
+    Looks(answers.into_iter().collect())
 }
 
 /// Clef's view of one image: with a query, P(it shows that); without, P(it is content, not chrome).
