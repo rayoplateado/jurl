@@ -78,6 +78,7 @@ pub struct Link {
     pub marginal: bool,
 }
 
+#[derive(Default)]
 pub struct Extracted {
     pub title: String,
     pub blocks: Vec<Block>,
