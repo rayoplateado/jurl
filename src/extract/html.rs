@@ -18,6 +18,11 @@ const INLINE: &[&str] = &[
     "time", "br", "kbd", "q", "cite", "label", "var", "samp", "dfn", "bdi", "wbr", "font", "img", "picture", "data",
 ];
 
+/// Attributes where a lazy loader keeps an image's real address while `src` holds a placeholder, in the order read.
+const LAZY_SRC: &[&str] = &["data-src", "data-lazy-src"];
+/// The full-size file a lazy loader may keep as well. The image reads it after `LAZY_SRC`, never its preview does.
+const LAZY_FULL_SIZE: &str = "data-original";
+
 pub fn html(body: &str, base: &Url) -> Extracted {
     let doc = Html::parse_document(body);
     let root = content_root(&doc);
@@ -86,23 +91,25 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
             continue;
         }
         let a = |k| img.value().attr(k);
-        let src = a("srcset").or(a("data-srcset")).and_then(best_srcset).or(a("data-src")
-            .or(a("data-lazy-src"))
-            .or(a("data-original"))
-            .or(a("src"))
-            .map(String::from));
+        let srcsets = a("srcset").or(a("data-srcset"));
+        let src = srcsets
+            .and_then(best_srcset)
+            .or(first_attr(img, LAZY_SRC).or(a(LAZY_FULL_SIZE)).or(a("src")).map(String::from));
         let Some(src) = src else { continue };
-        let preview = a("srcset").or(a("data-srcset")).and_then(small_srcset).or(a("data-src")
-            .or(a("data-lazy-src"))
-            .or(a("src"))
-            .filter(|s| !s.starts_with("data:"))
-            .map(String::from));
+        let preview = srcsets
+            .and_then(small_srcset)
+            .or(first_attr(img, LAZY_SRC).or(a("src")).filter(|s| !s.starts_with("data:")).map(String::from));
         let alt = collapse(a("alt").or(a("title")).unwrap_or(""));
         let caption = figcaption(img);
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
         push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
     }
     images
+}
+
+/// The first of these attributes that the element has.
+fn first_attr<'a>(el: ElementRef<'a>, names: &[&str]) -> Option<&'a str> {
+    names.iter().find_map(|n| el.value().attr(n))
 }
 
 /// The links of the content root. Hidden links, and links inside skipped elements, are left out.
