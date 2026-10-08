@@ -187,7 +187,9 @@ async fn post(client: &Client, url: &str, bearer: &str, body: &Value) -> Result<
         let res = req.send().await.map_err(|e| ApiError(format!("{url}: {e}")))?;
         let status = res.status();
         if status.is_success() {
-            return Ok(res.json().await?);
+            // A cut-off or garbled reply is a failed call; --follow would otherwise read it as a page with no answer.
+            let text = res.text().await.map_err(|e| ApiError(format!("{url}: reading the reply: {e}")))?;
+            return parse_reply(url, &text);
         }
         let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.as_u16() == 529;
         if retryable && attempt < 2 {
@@ -201,8 +203,18 @@ async fn post(client: &Client, url: &str, bearer: &str, body: &Value) -> Result<
             continue;
         }
         let text = res.text().await.unwrap_or_default();
-        return Err(ApiError(format!("{url} → HTTP {status}: {}", text.chars().take(400).collect::<String>())).into());
+        return Err(ApiError(format!("{url} → HTTP {status}: {}", snippet(&text))).into());
     }
+}
+
+/// A 200's body as JSON. One that doesn't parse is an API failure, not a page with nothing on it.
+fn parse_reply(url: &str, text: &str) -> Result<Value> {
+    serde_json::from_str(text).map_err(|e| ApiError(format!("{url}: bad reply ({e}): {}", snippet(text))).into())
+}
+
+/// The start of a reply, for an error message.
+fn snippet(text: &str) -> String {
+    text.chars().take(400).collect()
 }
 
 #[cfg(test)]
@@ -234,5 +246,39 @@ mod tests {
         assert_eq!(non_empty(Some("  ".into())), None);
         let url = "http://127.0.0.1:8000/v1/systemone";
         assert_eq!(non_empty(Some(url.into())).as_deref(), Some(url));
+    }
+
+    #[test]
+    fn a_reply_that_does_not_parse_is_an_api_error() {
+        let e = parse_reply("https://x/v1", "{\"answers\":").unwrap_err();
+        assert!(is_api_error(&e), "{e:#}");
+        assert!(parse_reply("https://x/v1", r#"{"answers":{}}"#).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_reply_cut_off_mid_body_is_an_api_error() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/systemone", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            // Read the whole request first, so closing the socket doesn't reset the connection.
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            let mut len = 0;
+            for line in r.by_ref().lines().map_while(Result::ok) {
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(n) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = n.trim().parse().unwrap();
+                }
+            }
+            r.read_exact(&mut vec![0; len]).unwrap();
+            // Promises 100 bytes, sends 10, then closes.
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"answers\"").unwrap();
+        });
+        let e = post(&Client::new(), &url, "", &json!({})).await.unwrap_err();
+        assert!(is_api_error(&e), "{e:#}");
+        assert!(format!("{e:#}").contains("reading the reply"), "{e:#}");
     }
 }
