@@ -356,7 +356,10 @@ fn exit_code(e: &anyhow::Error) -> u8 {
 async fn run(mut args: Args) -> Result<()> {
     let mut cfg = Config::load();
     let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/0.1")
+        .user_agent(concat!(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/",
+            env!("CARGO_PKG_VERSION")
+        ))
         .timeout(Duration::from_secs(20))
         .pool_idle_timeout(Duration::from_secs(30))
         .build()?;
