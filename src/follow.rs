@@ -20,7 +20,7 @@ use crate::{
     decide::is_api_error,
     extract::{self, Extracted, Link},
     judge::{Ctx, Item},
-    links::{self, FieldScores, key, overlap},
+    links::{self, FieldScores, overlap},
     load,
     output::{Rendered, missed, not_found},
     timing::Timer,
@@ -215,7 +215,7 @@ async fn site_map(client: &Client, start: &Url, site: &Site) -> Vec<Link> {
     let mut out: Vec<Link> = Vec::new();
     let mut seen = HashSet::new();
     let mut add = |url: Url, text: String| {
-        if site.contains(&url) && seen.insert(key(&url)) {
+        if site.contains(&url) && seen.insert(links::key(&url)) {
             out.push(Link { i: out.len(), url, text, context: String::new(), marginal: false });
         }
     };
@@ -263,8 +263,8 @@ struct Visit {
 
 /// A page's links outside its text: menus and footers, which a site repeats on every page.
 fn menus(ex: &Extracted) -> HashSet<String> {
-    let text: HashSet<String> = ex.links.iter().map(|l| key(&l.url)).collect();
-    ex.site_links.iter().map(|l| key(&l.url)).filter(|k| !text.contains(k)).collect()
+    let text: HashSet<String> = ex.links.iter().map(|l| links::key(&l.url)).collect();
+    ex.site_links.iter().map(|l| links::key(&l.url)).filter(|k| !text.contains(k)).collect()
 }
 
 /// Read one page: is the answer here, and which of its links lead on? Both questions go to Jev at once. `known` holds
@@ -274,7 +274,7 @@ async fn visit(
     args: &Args,
     cfg: &Config,
     client: &Client,
-    key: &str,
+    api_key: &str,
     url: &Url,
     site: &Site,
     known: &HashSet<String>,
@@ -284,7 +284,7 @@ async fn visit(
     let (url, ex) = load(args, cfg, client, url, &mut t).await?;
     let menus = menus(&ex);
     let (found, score, warmth, links, new_field_scores) = {
-        let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &url, &ex) };
+        let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, api_key, &url, &ex) };
         // The links `--links -q` would score, menus and footers included, as long as they stay on the site. A menu
         // link is scored on the first page it's on, not again on every page: on a page far from the question, the
         // site's "Main page" and "Search" would outscore everything in its text.
@@ -399,7 +399,14 @@ async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Result<Option<(Vec<usize>,
     Ok(Some((order, probs.get("none").copied().unwrap_or(0.0))))
 }
 
-pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: Url, t: &mut Timer) -> Result<Rendered> {
+pub async fn run(
+    args: &Args,
+    cfg: &Config,
+    client: &Client,
+    api_key: &str,
+    start: Url,
+    t: &mut Timer,
+) -> Result<Rendered> {
     let max = args.follow.unwrap_or(5).max(1);
     let threshold = if args.precise { args.threshold.unwrap_or(PRECISE_THRESHOLD) } else { args.threshold() };
     let site = Site::new(&start);
@@ -415,7 +422,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             links = ranked.into_iter().take(MAX_HINTS).map(|(_, l)| l).collect();
         }
         // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
-        links.retain(|l| self::key(&l.url) != self::key(&start));
+        links.retain(|l| links::key(&l.url) != links::key(&start));
         links
             .insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false });
         for (i, l) in links.iter_mut().enumerate() {
@@ -429,7 +436,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             site_links: Vec::new(),
             app_shell: false,
         };
-        let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &start, &empty) };
+        let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, api_key, &start, &empty) };
         let scores = match links::score(&ctx, &links, "The page at the URL in `links`", None).await {
             Ok((scores, _)) => scores,
             Err(e) if is_api_error(&e) => return Err(e),
@@ -441,7 +448,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     let mut field_scores = FieldScores::new();
     let mut robots = RobotsByHost::default();
     let (first, hints, _) = tokio::join!(
-        visit(args, cfg, client, key, &start, &site, &known, &field_scores),
+        visit(args, cfg, client, api_key, &start, &site, &known, &field_scores),
         hints,
         robots.load_for(client, std::slice::from_ref(&start)),
     );
@@ -451,7 +458,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     field_scores.extend(std::mem::take(&mut first.new_field_scores));
     t.lap(format!("page 1 + site map ({} pages listed)", hints.len()));
 
-    let mut visited: HashSet<String> = [self::key(&start), self::key(&first.url)].into_iter().collect();
+    let mut visited: HashSet<String> = [links::key(&start), links::key(&first.url)].into_iter().collect();
     // `pages` is the pages read, which is what the search reports. `opened` is the pages opened, read or not: the
     // budget `--follow N` stops at, so a page that fails to load still takes its step.
     let mut pages = 1;
@@ -517,13 +524,13 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         site_links: Vec::new(),
         app_shell: false,
     };
-    let site_ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &start, &empty) };
+    let site_ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, api_key, &start, &empty) };
     let mut cold = false;
     while opened < max {
         leads.sort_by(|a, b| b.score.total_cmp(&a.score));
         let mut seen = HashSet::new();
         leads.retain(|l| {
-            let k = self::key(&l.url);
+            let k = links::key(&l.url);
             !visited.contains(&k) && seen.insert(k)
         });
         // The leads that can be picked this step are the best few, each checked against its own host's robots.txt
@@ -569,19 +576,20 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             batch.push(leads.remove(i));
         }
         for l in &batch {
-            visited.insert(self::key(&l.url));
+            visited.insert(links::key(&l.url));
         }
         // The pages of a batch are read side by side: each reads the field scores from before the batch, and what it
         // asked is kept once the batch is in.
         let results =
-            join_all(batch.iter().map(|l| visit(args, cfg, client, key, &l.url, &site, &known, &field_scores))).await;
+            join_all(batch.iter().map(|l| visit(args, cfg, client, api_key, &l.url, &site, &known, &field_scores)))
+                .await;
         opened += batch.len();
         t.lap(format!("{} more", batch.len()));
         for (lead, r) in batch.into_iter().zip(results) {
             match r {
                 Ok(mut v) => {
                     pages += 1;
-                    visited.insert(self::key(&v.url));
+                    visited.insert(links::key(&v.url));
                     known.extend(v.menus.iter().cloned());
                     field_scores.extend(std::mem::take(&mut v.new_field_scores));
                     let mut path = lead.path.clone();
@@ -638,7 +646,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             None => return Err(not_found(format!("read {pages} pages of {} and none answers that", site.root))),
         },
     };
-    let ctx = Ctx::new(args, client, key, &v.url, &v.ex);
+    let ctx = Ctx::new(args, client, api_key, &v.url, &v.ex);
     let rendered = match &v.found {
         Some(Found::Precise(pick)) => render_precise(&ctx, &v.ex, pick, Some(&path)),
         Some(Found::Blocks { scores, keep, kind }) => {
