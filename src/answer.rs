@@ -266,6 +266,111 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decide::Answers;
+
+    /// A span of `block` covering `range`, with no label.
+    fn span(block: usize, range: Range<usize>) -> precise::Span {
+        precise::Span { block, range, label: None }
+    }
+
+    /// Jev's answer to one choice, as `judge` hands it back: the probability of each option key.
+    fn answered(id: &str, probabilities: &[(&str, f64)]) -> Answers {
+        let probs: Map<String, Value> = probabilities.iter().map(|&(k, p)| (k.to_string(), json!(p))).collect();
+        Answers { answers: HashMap::from([(id.to_string(), json!({ "probabilities": probs }))]), ..Default::default() }
+    }
+
+    /// The probability of each span, read from Jev's answer to the pick the way `precise_pick` reads it.
+    fn pick_scores(spans: &[precise::Span], probabilities: &[(&str, f64)]) -> Vec<f64> {
+        let probs = answered("pick", probabilities).probabilities("pick").unwrap();
+        option_scores(&probs, 's', spans.len())
+    }
+
+    #[test]
+    fn the_share_is_the_winner_plus_the_spans_that_hold_it_or_sit_inside_it() {
+        let spans = [
+            span(0, 0..10),
+            span(0, 0..20),
+            span(0, 2..5),
+            span(0, 12..15),
+            span(1, 0..10),
+            precise::Span { block: 0, range: 0..10, label: Some("ten".into()) },
+        ];
+        let probs =
+            pick_scores(&spans, &[("s0", 0.30), ("s1", 0.20), ("s2", 0.10), ("s3", 0.25), ("s4", 0.15), ("s5", 0.05)]);
+        let scored = ranked(&spans, &probs);
+        let (best, own) = scored[0];
+        assert_eq!(best.range, 0..10);
+        // The holding span (0.20) and the inside one (0.10) count; the span beside the winner, the one in another
+        // block and the one with the same range don't.
+        assert_eq!(share(best, own, &scored), 0.6);
+    }
+
+    #[test]
+    fn the_share_is_capped_at_one_and_rounded_to_two_decimals() {
+        let spans = [span(0, 0..10), span(0, 0..20)];
+        let scored = ranked(&spans, &pick_scores(&spans, &[("s0", 0.7), ("s1", 0.5)]));
+        assert_eq!(share(scored[0].0, scored[0].1, &scored), 1.0);
+
+        let spans = [span(0, 0..10), span(0, 2..5)];
+        let scored = ranked(&spans, &pick_scores(&spans, &[("s0", 0.5), ("s1", 0.126)]));
+        assert_eq!(share(scored[0].0, scored[0].1, &scored), 0.63);
+    }
+
+    #[test]
+    fn the_likeliest_span_wins_and_a_tie_at_two_decimals_goes_to_the_shorter() {
+        let spans = [span(0, 0..30), span(0, 0..5)];
+        // 0.404 and 0.396 both read as 40 in whole percent: the shorter span wins.
+        let scored = ranked(&spans, &[0.404, 0.396]);
+        assert_eq!(scored[0].0.range, 0..5);
+        // Past that, the likelier span wins whatever its length.
+        let scored = ranked(&spans, &[0.52, 0.50]);
+        assert_eq!(scored[0].0.range, 0..30);
+        // Equal in both: the one that came first.
+        let spans = [span(0, 0..5), span(0, 6..11)];
+        let scored = ranked(&spans, &[0.3, 0.3]);
+        assert_eq!(scored[0].0.range, 0..5);
+    }
+
+    #[test]
+    fn the_inside_spans_are_the_shorter_candidates_of_the_winners_block_within_it() {
+        let winner = span(0, 0..10);
+        // Not the winner's own range, not one that runs past it, not one in another block: the two inside, in order.
+        let spans = [winner.clone(), span(0, 2..5), span(0, 0..10), span(0, 8..12), span(1, 2..5), span(0, 4..6)];
+        let want: Vec<Range<usize>> = vec![2..5, 4..6];
+        assert_eq!(inside_ranges(&spans, &winner), want);
+    }
+
+    #[test]
+    fn the_refine_options_are_the_winner_then_the_inside_spans_then_the_pieces_each_once() {
+        let winner = 0..100;
+        let inside = [10..20, 30..40];
+        let pieces = vec![0..50, 10..20, 60..70, 0..100, 80..90];
+        let want: Vec<Range<usize>> = vec![0..100, 10..20, 30..40, 0..50, 60..70, 80..90];
+        assert_eq!(refine_options(&winner, &inside, pieces), want);
+    }
+
+    #[test]
+    fn the_refine_options_cap_the_pieces_at_max_refine_with_inside_spans_first() {
+        let winner = 0..1000;
+        let inside: Vec<Range<usize>> = (500..560).map(|i| i..i + 1).collect();
+        let pieces: Vec<Range<usize>> = (0..150).map(|i| i..i + 1).collect();
+        let options = refine_options(&winner, &inside, pieces);
+        // The winner, then all 60 inside spans, then the first 40 pieces: 100 pieces besides the winner.
+        assert_eq!(options.len(), precise::MAX_REFINE + 1);
+        assert_eq!(options[1..61], inside[..]);
+        let first_pieces: Vec<Range<usize>> = (0..40).map(|i| i..i + 1).collect();
+        assert_eq!(options[61..], first_pieces[..]);
+    }
+
+    #[test]
+    fn a_piece_wins_only_if_at_least_as_likely_as_the_whole_and_at_the_threshold() {
+        // The whole is option 0. The likeliest piece wins when it reaches the threshold and is at least the whole.
+        assert_eq!(refine_winner(&[0.3, 0.5, 0.45], 0.4), 1);
+        assert_eq!(refine_winner(&[0.6, 0.5], 0.4), 0);
+        assert_eq!(refine_winner(&[0.9, 0.3], 0.4), 0);
+        // On a tie the earlier piece wins.
+        assert_eq!(refine_winner(&[0.2, 0.5, 0.5], 0.4), 1);
+    }
 
     #[test]
     fn span_choice_names_each_span_and_maybe_none() {
