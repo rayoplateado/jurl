@@ -1,7 +1,7 @@
 //! `--image`, `--vision` and `--find`: the page's content images, best first, with Clef looking at
 //! the pixels when asked.
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
@@ -173,8 +173,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     // Every image failed: an error, not "nothing looks like that". Clef's own errors (a bad token, no credits) say
     // Clef couldn't look; any other error is about getting the images to Clef at all.
     if kept.is_empty()
-        && !looks.is_empty()
-        && let Some(e) = looks.0.values().try_fold(None, |_, r| r.as_ref().err().map(Some)).flatten()
+        && let Some(e) = looks.all_failed()
     {
         let what = if is_api_error(e) { "Clef couldn't look at any image" } else { "couldn't download any image" };
         bail!("{what} in {}: {e:#}", ctx.url);
@@ -195,9 +194,9 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }) })
 }
 
-/// Clef's answers for the images it looked at, by image index (`Image::i`).
+/// Clef's answers for the images it looked at, by image index (`Image::i`), lowest index first.
 #[derive(Default)]
-struct Looks(HashMap<usize, Result<f64>>);
+struct Looks(BTreeMap<usize, Result<f64>>);
 
 impl Looks {
     fn get(&self, i: usize) -> Option<&Result<f64>> {
@@ -206,8 +205,13 @@ impl Looks {
     fn len(&self) -> usize {
         self.0.len()
     }
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    /// Every look failed, so no image has Clef's score: the error to report is the one for the lowest image index,
+    /// so the same failures always report the same error. None when a look answered, or none ran.
+    fn all_failed(&self) -> Option<&anyhow::Error> {
+        if self.0.values().any(Result::is_ok) {
+            return None;
+        }
+        self.0.values().find_map(|r| r.as_ref().err())
     }
 }
 
@@ -312,6 +316,19 @@ mod tests {
         };
         let got = hedged(call, Duration::from_millis(100)).await;
         (got, calls.into_inner())
+    }
+
+    #[test]
+    fn when_every_look_fails_the_lowest_image_index_is_reported() {
+        let looks = Looks(BTreeMap::from([(7, Err(anyhow!("seven"))), (3, Err(anyhow!("three")))]));
+        assert_eq!(format!("{:#}", looks.all_failed().unwrap()), "three");
+    }
+
+    #[test]
+    fn an_answer_or_no_look_at_all_is_not_a_failure() {
+        let answered = Looks(BTreeMap::from([(0, Err(anyhow!("down"))), (1, Ok(0.4))]));
+        assert!(answered.all_failed().is_none());
+        assert!(Looks::default().all_failed().is_none());
     }
 
     #[tokio::test]
