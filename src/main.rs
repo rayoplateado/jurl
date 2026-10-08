@@ -26,7 +26,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     config::Config,
-    decide::{Answers, choice, noul},
+    decide::{Answers, choice, is_api_error, noul},
     extract::{Block, Extracted, Image, Kind, Link},
 };
 
@@ -1027,12 +1027,14 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         .filter(|(_, p)| *p >= ctx.args.threshold())
         .take(ctx.args.limit(if query.is_some() { 1 } else { usize::MAX }))
         .collect();
-    // Clef failing on every image (a bad token, no credits) is an error, not "nothing looks like that".
+    // Every image failed: an error, not "nothing looks like that". Clef's own errors (a bad token, no credits) say
+    // Clef couldn't look; any other error is about getting the images to Clef at all.
     if kept.is_empty()
         && !looks.is_empty()
         && let Some(e) = looks.values().try_fold(None, |_, r| r.as_ref().err().map(Some)).flatten()
     {
-        bail!("Clef couldn't look at any image in {}: {e:#}", ctx.url);
+        let what = if is_api_error(e) { "Clef couldn't look at any image" } else { "couldn't download any image" };
+        bail!("{what} in {}: {e:#}", ctx.url);
     }
     if kept.is_empty()
         && let (Some(q), Some((url, p))) = (query, best)
