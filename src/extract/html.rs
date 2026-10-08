@@ -199,11 +199,6 @@ impl<'a> Walker<'a> {
         self.push(Kind::Para, None, None, text);
     }
 
-    fn skipped(&self, el: ElementRef) -> bool {
-        let name = el.value().name();
-        SKIP.contains(&name) || (self.skip_header && name == "header") || hidden(el) || chrome(el)
-    }
-
     /// Generic container: inline runs become paragraphs, block children recurse.
     fn container(&mut self, el: ElementRef<'a>) {
         for child in el.children() {
@@ -217,7 +212,7 @@ impl<'a> Walker<'a> {
                         self.flush();
                         continue;
                     }
-                    if self.skipped(child) || segment(child) {
+                    if skipped(child, self.skip_header, true) || segment(child) {
                         continue;
                     }
                     if permalink(child) {
@@ -275,7 +270,7 @@ impl<'a> Walker<'a> {
                         }
                         Node::Element(_) => {
                             let c = ElementRef::wrap(c).unwrap();
-                            if !self.skipped(c) {
+                            if !skipped(c, self.skip_header, true) {
                                 own.push(' ');
                                 own.push_str(&inline_text(c));
                             }
@@ -323,12 +318,12 @@ fn inline_text(el: ElementRef) -> String {
     for c in el.children() {
         match c.value() {
             Node::Text(t) => out.push_str(t),
-            Node::Element(e) if SKIP.contains(&e.name()) => {}
-            Node::Element(_) if permalink(ElementRef::wrap(c).unwrap()) => {}
+            // A `<br>` is a line break even where it is hidden, so it is handled before the skip rules.
             Node::Element(e) if e.name() == "br" => out.push(BREAK),
             Node::Element(_) => {
                 let c = ElementRef::wrap(c).unwrap();
-                if !hidden(c) && !chrome(c) {
+                // No `<header>` rule here: inline text keeps the words of a header.
+                if !skipped(c, false, true) && !permalink(c) {
                     let block = !INLINE.contains(&c.value().name());
                     if block {
                         out.push(BREAK);
@@ -372,25 +367,30 @@ fn has_block_desc(el: ElementRef) -> bool {
     el.descendants().filter_map(ElementRef::wrap).skip(1).any(|d| !INLINE.contains(&d.value().name()))
 }
 
+/// Whether an ancestor of the element is skipped. The element's own `hidden` is the caller's to check, and its own
+/// class or role is not checked at all: only its ancestors' are.
 fn has_skipped_ancestor(el: ElementRef, skip_header: bool) -> bool {
-    el.ancestors().filter_map(ElementRef::wrap).any(|a| {
-        let n = a.value().name();
-        SKIP.contains(&n) || (skip_header && n == "header") || hidden(a) || chrome(a)
-    })
+    el.ancestors().filter_map(ElementRef::wrap).any(|a| skipped(a, skip_header, true))
+}
+
+/// What a reader never sees: script-like and form elements, a `<header>` that is the page's masthead (`skip_header`),
+/// page chrome, and hidden elements (`skip_hidden`). A hidden carousel slide is the one exception, which
+/// `image_skipped` makes by passing `skip_hidden = false`.
+fn skipped(el: ElementRef, skip_header: bool, skip_hidden: bool) -> bool {
+    let name = el.value().name();
+    SKIP.contains(&name) || (skip_header && name == "header") || chrome(el) || (skip_hidden && hidden(el))
 }
 
 /// An image is skipped like any element, except that a hidden carousel slide still counts: sliders hide every slide
 /// but the active one with `display:none`, and those are the page's photos (a restaurant's dishes), not chrome.
+/// As for a link, the image's own class or role is not checked, only its ancestors'.
 fn image_skipped(img: ElementRef, skip_header: bool) -> bool {
     let carousel = std::iter::once(img)
         .chain(img.ancestors().filter_map(ElementRef::wrap))
         .take(8)
         .any(|a| a.value().attr("class").is_some_and(is_carousel));
-    let skipped_by = |a: ElementRef| {
-        let n = a.value().name();
-        SKIP.contains(&n) || (skip_header && n == "header") || chrome(a) || (!carousel && hidden(a))
-    };
-    (!carousel && hidden(img)) || img.ancestors().filter_map(ElementRef::wrap).any(skipped_by)
+    (!carousel && hidden(img))
+        || img.ancestors().filter_map(ElementRef::wrap).any(|a| skipped(a, skip_header, !carousel))
 }
 
 const CAROUSEL: &[&str] = &["slide", "slider", "carousel", "swiper", "splide", "glide", "owl-", "slick", "gallery"];
