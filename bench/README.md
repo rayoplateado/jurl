@@ -160,3 +160,7 @@ Headquarters and founding year from more front doors, once each with main and af
 | notion.com, founded | no answer | no answer |
 | vercel.com, headquarters | "San Francisco" (a press release's dateline) | "San Francisco" (the same) |
 | vercel.com, founded | no answer | no answer |
+
+## Another decision model in Jev's place
+
+[models/](models) records what jurl asks Jev, replays it to another model with the same contract (`JURL_JEV_URL`) and counts how often they decide alike, against Jev's agreement with itself.

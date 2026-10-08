@@ -446,9 +446,13 @@ fn prepare(args: &mut Args) -> Result<()> {
 /// answers.
 async fn page(args: &Args, cfg: &Config, client: &Client, key: &str, t: &mut Timer) -> Result<Rendered> {
     // Warm the API connections (TLS handshakes) while the page downloads.
-    let mut hosts = vec!["https://api.typesafe.ai/"];
+    // Jev's host, or the one `JURL_JEV_URL` names.
+    let mut hosts: Vec<String> = url::Url::parse(&decide::jev_url())
+        .map(|u| format!("{}/", u.origin().ascii_serialization()))
+        .into_iter()
+        .collect();
     if args.vision {
-        hosts.push("https://api.cloudflare.com/");
+        hosts.push("https://api.cloudflare.com/".to_string());
     }
     let warm = tokio::spawn({
         let c = client.clone();

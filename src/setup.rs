@@ -17,7 +17,7 @@ pub fn interactive() -> bool {
 
 /// The TypeSafe key, asking for it when running in a terminal and it is missing.
 pub async fn typesafe_key(cfg: &mut Config, client: &Client) -> Result<String> {
-    if !interactive() || cfg.get("TYPESAFE_API_KEY").is_some() {
+    if !interactive() || cfg.get("TYPESAFE_API_KEY").is_some() || decide::custom_jev_url().is_some() {
         return saved_key(cfg);
     }
     eprintln!("jurl reads pages with Jev, TypeSafe's decision model. It needs your API key, once.");
@@ -27,7 +27,16 @@ pub async fn typesafe_key(cfg: &mut Config, client: &Client) -> Result<String> {
 
 /// The TypeSafe key from the environment or `jurl init`, never asking: `jurl mcp` has no terminal to ask in.
 pub fn saved_key(cfg: &Config) -> Result<String> {
-    match cfg.get("TYPESAFE_API_KEY") {
+    key_for(decide::custom_jev_url().is_some(), |k| cfg.get(k))
+}
+
+/// The bearer for Jev's requests. Another server (`JURL_JEV_URL`) never gets the TypeSafe key: only `JURL_JEV_KEY`,
+/// or no bearer at all.
+fn key_for(custom_url: bool, get: impl Fn(&str) -> Option<String>) -> Result<String> {
+    if custom_url {
+        return Ok(get("JURL_JEV_KEY").unwrap_or_default());
+    }
+    match get("TYPESAFE_API_KEY") {
         Some(k) => Ok(k),
         None => bail!("missing TypeSafe API key: run `jurl init`, or set TYPESAFE_API_KEY (get one at {TYPESAFE_URL})"),
     }
@@ -117,4 +126,23 @@ fn line(prompt: &str) -> Result<String> {
 
 fn confirm(prompt: &str) -> Result<bool> {
     Ok(matches!(line(&format!("{prompt} [y/N] "))?.to_ascii_lowercase().as_str(), "y" | "yes"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_typesafe_key_never_goes_to_another_server() {
+        let both = |k: &str| match k {
+            "TYPESAFE_API_KEY" => Some("ts-key".to_string()),
+            "JURL_JEV_KEY" => Some("own-key".to_string()),
+            _ => None,
+        };
+        let typesafe_only = |k: &str| (k == "TYPESAFE_API_KEY").then(|| "ts-key".to_string());
+        assert_eq!(key_for(false, both).unwrap(), "ts-key");
+        assert_eq!(key_for(true, both).unwrap(), "own-key");
+        assert_eq!(key_for(true, typesafe_only).unwrap(), "");
+        assert!(key_for(false, |_| None).is_err());
+    }
 }

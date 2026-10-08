@@ -1,0 +1,3 @@
+# Recordings, replays and pairs hold third-party page text and run to hundreds of MB: never committed.
+results/*.jsonl
+__pycache__/
