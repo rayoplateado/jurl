@@ -41,7 +41,7 @@ pub(crate) struct Args {
     /// reading up to this many pages in all [default: 5]
     #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]
     pub(crate) follow: Option<usize>,
-    /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text)
+    /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text, or unfilled template placeholders)
     #[arg(short, long)]
     pub(crate) render: bool,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
