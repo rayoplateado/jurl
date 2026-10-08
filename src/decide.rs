@@ -187,7 +187,7 @@ pub(crate) fn is_api_error(e: &anyhow::Error) -> bool {
 }
 
 /// Plain http to another host: anyone on the network path could read a key sent there.
-fn plain_http_off_loopback(url: &str) -> bool {
+pub(crate) fn plain_http_off_loopback(url: &str) -> bool {
     let Ok(u) = url::Url::parse(url) else { return false };
     let loopback = match u.host() {
         Some(url::Host::Domain(d)) => d == "localhost",
@@ -239,7 +239,7 @@ fn parse_reply(url: &str, text: &str) -> Result<Value> {
 }
 
 /// The start of a reply, for an error message.
-fn snippet(text: &str) -> String {
+pub(crate) fn snippet(text: &str) -> String {
     text.chars().take(SNIPPET_CHARS).collect()
 }
 

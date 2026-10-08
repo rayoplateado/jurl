@@ -899,7 +899,7 @@ async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, si
 
 /// The path as the "found after reading" line prints it: each URL without its http:// or https:// scheme, joined by
 /// arrows.
-fn trail(path: &[Url]) -> String {
+pub(crate) fn trail(path: &[Url]) -> String {
     path.iter()
         .map(|u| {
             let s = u.as_str();
