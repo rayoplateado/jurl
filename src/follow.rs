@@ -14,6 +14,7 @@ use url::Url;
 
 use crate::{
     answer::{PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, precise_pick, render_precise},
+    blocks::{render_blocks, score_blocks, top},
     cli::Args,
     config::Config,
     decide::is_api_error,
@@ -22,9 +23,7 @@ use crate::{
     links::{self, FieldScores, key, overlap},
     load,
     output::{Rendered, missed, not_found},
-    render_blocks, score_blocks,
     timing::Timer,
-    top,
 };
 
 /// Pages opened at once on each step. Two, so the default 5 pages are two full steps (1 + 2 + 2): answers two links
