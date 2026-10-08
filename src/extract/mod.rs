@@ -1,5 +1,8 @@
 //! HTML/markdown → candidate blocks and images. Every emitted string is text that
 //! exists in the page; nothing here rewrites content beyond whitespace collapsing.
+//!
+//! `html` reads an HTML page, `markdown` a page the server sent as markdown, and `join` turns their short pieces into
+//! blocks a reader can judge. This file holds the types both paths return and the helpers they share.
 
 use serde::Serialize;
 use url::Url;
