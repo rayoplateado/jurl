@@ -56,7 +56,7 @@ impl Install {
 }
 
 /// The latest release's version, from where GitHub's /releases/latest redirects to (no API, no rate limit).
-pub async fn latest(timeout: Duration) -> Result<String> {
+async fn latest(timeout: Duration) -> Result<String> {
     let client = Client::builder()
         .redirect(Policy::none())
         .timeout(timeout)
@@ -69,19 +69,19 @@ pub async fn latest(timeout: Duration) -> Result<String> {
 }
 
 /// Whether `a` is a later version than `b` ("0.1.10" > "0.1.9").
-pub fn newer(a: &str, b: &str) -> bool {
+fn newer(a: &str, b: &str) -> bool {
     let parts = |v: &str| v.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
     parts(a) > parts(b)
 }
 
 /// A line to add to an "unexpected argument" error when a newer jurl is out, which may know the flag.
-pub async fn hint() -> Option<String> {
+pub(crate) async fn hint() -> Option<String> {
     let latest = latest(Duration::from_secs(3)).await.ok()?;
     newer(&latest, CURRENT)
         .then(|| format!("you have jurl {CURRENT} and {latest} is out, which may have it: run `jurl update`"))
 }
 
-pub async fn run() -> Result<()> {
+pub(crate) async fn run() -> Result<()> {
     let latest = latest(Duration::from_secs(10)).await.context("couldn't reach GitHub to check the latest release")?;
     if !newer(&latest, CURRENT) {
         eprintln!("jurl {CURRENT} is the latest.");

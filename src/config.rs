@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 
 /// Keys come from the environment first, then `~/.config/jurl/env`, then `./.env` (simple `KEY=value` lines).
 /// `./.env` supplies only the `DOTENV_KEYS`.
-pub struct Config {
+pub(crate) struct Config {
     file: HashMap<String, String>,
 }
 
@@ -18,25 +18,25 @@ pub struct Config {
 const DOTENV_KEYS: &[&str] = &["TYPESAFE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_TOKEN"];
 
 impl Config {
-    pub fn load() -> Self {
+    pub(crate) fn load() -> Self {
         let user = Self::path().and_then(|p| fs::read_to_string(p).ok()).unwrap_or_default();
         let dotenv = fs::read_to_string(".env").unwrap_or_default();
         Self { file: merge(&user, &dotenv) }
     }
 
-    pub fn path() -> Option<PathBuf> {
+    fn path() -> Option<PathBuf> {
         let base = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| {
             env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(|h| PathBuf::from(h).join(".config"))
         })?;
         Some(base.join("jurl/env"))
     }
 
-    pub fn get(&self, key: &str) -> Option<String> {
+    pub(crate) fn get(&self, key: &str) -> Option<String> {
         env::var(key).ok().filter(|v| !v.is_empty()).or_else(|| self.file.get(key).cloned())
     }
 
     /// Set `key` in `~/.config/jurl/env`, keeping every other line. The file is private (0600).
-    pub fn save(&mut self, key: &str, value: &str) -> Result<PathBuf> {
+    pub(crate) fn save(&mut self, key: &str, value: &str) -> Result<PathBuf> {
         let path = Self::path().context("no config directory ($HOME is not set)")?;
         let old = fs::read_to_string(&path).unwrap_or_default();
         let mut lines: Vec<String> = old

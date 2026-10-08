@@ -405,7 +405,7 @@ fn text(r: &Rendered) -> String {
 
 /// Serve until the client closes stdin, then answer the calls still running. Tool calls run side by side, up to
 /// `MAX_CALLS`: an agent may ask about several pages at once.
-pub async fn serve(client: Client) -> Result<()> {
+pub(crate) async fn serve(client: Client) -> Result<()> {
     let client = &client;
     drive(BufReader::new(tokio::io::stdin()), tokio::io::stdout(), move |argv: Vec<String>| async move {
         run(client, &argv).await

@@ -11,28 +11,28 @@ use anyhow::Result;
 use reqwest::{Client, StatusCode};
 use serde_json::{Map, Value, json};
 
-pub const JEV_MODEL: &str = "jev-1.13.0";
+const JEV_MODEL: &str = "jev-1.13.0";
 
-pub const CLEF_MODEL: &str = "clef-flash";
+const CLEF_MODEL: &str = "clef-flash";
 
 /// The Jev and Clef requests this run got replies to, and the pages it read: `usage` in `--json`. Counted per process,
 /// so `jurl mcp` (calls side by side) doesn't report it.
-pub static USAGE: Usage = Usage::new();
+pub(crate) static USAGE: Usage = Usage::new();
 
 /// Requests that got a reply. Not counted: failed attempts (a retried 429 or 529 included), and a hedged Clef call
 /// cancelled once the other answered. One that reached the server may still be billed: the counts are a floor.
 #[derive(Debug, Default)]
-pub struct Usage {
-    pub pages: AtomicU64,
-    pub jev_requests: AtomicU64,
-    pub jev_tokens: AtomicU64,
-    pub clef_requests: AtomicU64,
-    pub clef_tokens: AtomicU64,
-    pub clef_images: AtomicU64,
+pub(crate) struct Usage {
+    pub(crate) pages: AtomicU64,
+    pub(crate) jev_requests: AtomicU64,
+    pub(crate) jev_tokens: AtomicU64,
+    pub(crate) clef_requests: AtomicU64,
+    pub(crate) clef_tokens: AtomicU64,
+    pub(crate) clef_images: AtomicU64,
 }
 
 impl Usage {
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Usage {
             pages: AtomicU64::new(0),
             jev_requests: AtomicU64::new(0),
@@ -43,18 +43,18 @@ impl Usage {
         }
     }
 
-    pub fn jev(&self, a: &Answers) {
+    pub(crate) fn jev(&self, a: &Answers) {
         self.jev_requests.fetch_add(a.requests as u64, Relaxed);
         self.jev_tokens.fetch_add(a.input_tokens, Relaxed);
     }
 
-    pub fn clef(&self, a: &Answers, images: usize) {
+    pub(crate) fn clef(&self, a: &Answers, images: usize) {
         self.clef_requests.fetch_add(a.requests as u64, Relaxed);
         self.clef_tokens.fetch_add(a.input_tokens, Relaxed);
         self.clef_images.fetch_add(images as u64, Relaxed);
     }
 
-    pub fn json(&self) -> Value {
+    pub(crate) fn json(&self) -> Value {
         let n = |c: &AtomicU64| c.load(Relaxed);
         json!({
             "pages": n(&self.pages),
@@ -65,42 +65,42 @@ impl Usage {
 }
 
 #[derive(Debug, Default)]
-pub struct Answers {
-    pub answers: HashMap<String, Value>,
-    pub input_tokens: u64,
-    pub requests: usize,
+pub(crate) struct Answers {
+    pub(crate) answers: HashMap<String, Value>,
+    pub(crate) input_tokens: u64,
+    pub(crate) requests: usize,
 }
 
 impl Answers {
-    pub fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         format!("jev({} req, {} tok)", self.requests, self.input_tokens)
     }
 
-    pub fn noul(&self, id: &str) -> Option<f64> {
+    pub(crate) fn noul(&self, id: &str) -> Option<f64> {
         self.answers.get(id)?.get("noul")?.as_f64()
     }
 
-    pub fn probabilities(&self, id: &str) -> Option<HashMap<String, f64>> {
+    pub(crate) fn probabilities(&self, id: &str) -> Option<HashMap<String, f64>> {
         let p = self.answers.get(id)?.get("probabilities")?.as_object()?;
         Some(p.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()?))).collect())
     }
 
-    pub fn choice(&self, id: &str) -> Option<(String, f64)> {
+    pub(crate) fn choice(&self, id: &str) -> Option<(String, f64)> {
         let a = self.answers.get(id)?;
         Some((a.get("choice")?.as_str()?.to_string(), a.get("confidence").and_then(Value::as_f64).unwrap_or(0.0)))
     }
 }
 
-pub fn noul(instructions: impl Into<String>) -> Value {
+pub(crate) fn noul(instructions: impl Into<String>) -> Value {
     json!({ "type": "noul", "instructions": instructions.into() })
 }
 
-pub fn choice(instructions: &str, criteria: Value) -> Value {
+pub(crate) fn choice(instructions: &str, criteria: Value) -> Value {
     json!({ "type": "choice", "instructions": instructions, "criteria": criteria })
 }
 
 /// `JURL_JEV_URL`: another server with Jev's contract (a self-hosted model), when set and not empty.
-pub fn custom_jev_url() -> Option<String> {
+pub(crate) fn custom_jev_url() -> Option<String> {
     non_empty(std::env::var("JURL_JEV_URL").ok())
 }
 
@@ -109,13 +109,13 @@ fn non_empty(v: Option<String>) -> Option<String> {
 }
 
 /// Jev's endpoint, or the one in `JURL_JEV_URL`.
-pub fn jev_url() -> String {
+pub(crate) fn jev_url() -> String {
     custom_jev_url().unwrap_or_else(|| JEV_URL.to_string())
 }
 
 const JEV_URL: &str = "https://api.typesafe.ai/v1/systemone";
 
-pub async fn jev(client: &Client, key: &str, state: Value, questions: Map<String, Value>) -> Result<Answers> {
+pub(crate) async fn jev(client: &Client, key: &str, state: Value, questions: Map<String, Value>) -> Result<Answers> {
     let body = json!({ "state": state, "model": JEV_MODEL, "questions": questions });
     let v = post(client, &jev_url(), key, &body).await?;
     let a = parse(&v);
@@ -123,7 +123,7 @@ pub async fn jev(client: &Client, key: &str, state: Value, questions: Map<String
     Ok(a)
 }
 
-pub async fn clef(
+pub(crate) async fn clef(
     client: &Client,
     account: &str,
     token: &str,
@@ -163,7 +163,7 @@ fn parse(v: &Value) -> Answers {
 
 /// Jev or Clef couldn't be asked (a bad key, no credits, the API down): never mistaken for a page with nothing on it.
 #[derive(Debug)]
-pub struct ApiError(String);
+struct ApiError(String);
 
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -173,7 +173,7 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-pub fn is_api_error(e: &anyhow::Error) -> bool {
+pub(crate) fn is_api_error(e: &anyhow::Error) -> bool {
     e.chain().any(|c| c.is::<ApiError>())
 }
 

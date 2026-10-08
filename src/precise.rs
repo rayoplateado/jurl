@@ -9,10 +9,10 @@ use crate::extract::{Block, Kind};
 /// page, which is also its index in `Extracted::blocks`). A table cell carries its row and column as `label`, which is
 /// what Jev is shown ("30 s (CPU time · Paid)"); the answer is still just the cell.
 #[derive(Debug, Clone)]
-pub struct Span {
-    pub block: usize,
-    pub range: Range<usize>,
-    pub label: Option<String>,
+pub(crate) struct Span {
+    pub(crate) block: usize,
+    pub(crate) range: Range<usize>,
+    pub(crate) label: Option<String>,
 }
 
 /// More than this and the request stops being one cheap call.
@@ -26,7 +26,7 @@ const CURRENCY: &[&str] = &["$", "€", "£", "¥", "US$", "USD", "EUR", "GBP"];
 
 /// Candidate spans from `blocks`, taken from each block in turn so a long one (a big table) can't use up the
 /// whole budget. Every span is a substring of its block's text, and names that block by its `i`.
-pub fn candidates(blocks: &[&Block]) -> Vec<Span> {
+pub(crate) fn candidates(blocks: &[&Block]) -> Vec<Span> {
     let mut queues: Vec<std::vec::IntoIter<(Range<usize>, Option<String>)>> = blocks
         .iter()
         .map(|b| {
@@ -341,18 +341,18 @@ fn only_separators(gap: &str) -> bool {
 /// names and short phrases stay whole: "5,000 requests per hour" (4 words), "629.88 K (356.73 °C, 674.11 °F)" (7).
 const REFINE_WORDS: usize = 8;
 /// At most this many pieces of a winner are scored, in one more call.
-pub const MAX_REFINE: usize = 100;
+pub(crate) const MAX_REFINE: usize = 100;
 
 /// Whether the winning span is long enough that a part of it could be the answer: a line, clause or sentence of
 /// prose, not a value, a name or a table cell (those are labelled, or short).
-pub fn refinable(text: &str, span: &Span) -> bool {
+pub(crate) fn refinable(text: &str, span: &Span) -> bool {
     span.label.is_none() && text[span.range.clone()].split_whitespace().count() > REFINE_WORDS
 }
 
 /// Contiguous pieces of `text[range]`, each trimmed like any candidate and never the whole span: first those that
 /// start and end at punctuation or a link's edge, never cutting a link or parenthesis ("…: [A](…), [B](…)" → "[A](…)", "[A](…), [B](…)"), then any
 /// run of words, longest first. At most `MAX_REFINE`.
-pub fn refinements(text: &str, range: &Range<usize>) -> Vec<Range<usize>> {
+pub(crate) fn refinements(text: &str, range: &Range<usize>) -> Vec<Range<usize>> {
     let words: Vec<Range<usize>> =
         tokens(&text[range.clone()]).into_iter().map(|t| range.start + t.start..range.start + t.end).collect();
     let n = words.len();
@@ -509,7 +509,7 @@ fn trim(text: &str, r: Range<usize>) -> Option<Range<usize>> {
 
 /// A link that opens the page highlighting the answer, with a few words either side as context so the
 /// browser finds the right occurrence.
-pub fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
+pub(crate) fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
     let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
     // Context is up to three words next to the answer, as the browser shows them: markdown emphasis is
     // dropped, and a word that is markup (a table's `|`, an HTML tag, a link) ends the context there.

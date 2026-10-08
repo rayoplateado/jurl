@@ -18,7 +18,7 @@ pub(crate) struct Rendered {
 /// The page or site was read fine and has nothing to print: no answer, no image like that, nothing above the
 /// threshold. Exits 1, the way grep does when nothing matches, so a script can tell it from a failure.
 #[derive(Debug)]
-pub(crate) struct NotFound {
+struct NotFound {
     message: String,
     /// With --precise, what came closest: `--json` still prints it, with `"answer": null`.
     closest: Option<Rendered>,
