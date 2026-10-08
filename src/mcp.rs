@@ -7,12 +7,14 @@
 //! `jurl` would print. A miss ("the page doesn't say") is a normal result, as exit code 1 is; a failure (the page
 //! couldn't be read, a bad key, no credits) is a tool error, as exit code 2 is.
 
+use std::future::Future;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use futures::{StreamExt, stream::FuturesUnordered};
 use reqwest::Client;
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::{Args, NotFound, Rendered, Timer, config::Config};
 
@@ -346,32 +348,55 @@ fn text(r: &Rendered) -> String {
     text
 }
 
-/// Serve until the client closes stdin. Tool calls run side by side: an agent may ask about several pages at once.
+/// Serve until the client closes stdin, then answer the calls still running. Tool calls run side by side: an agent
+/// may ask about several pages at once.
 pub async fn serve(client: Client) -> Result<()> {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut stdout = tokio::io::stdout();
+    let client = &client;
+    drive(BufReader::new(tokio::io::stdin()), tokio::io::stdout(), move |argv: Vec<String>| async move {
+        run(client, &argv).await
+    })
+    .await
+}
+
+/// The loop behind `serve`, over any reader and writer, so a test can run it with a fake `call`.
+async fn drive<R, W, F, Fut>(input: R, mut output: W, call: F) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: Fn(Vec<String>) -> Fut,
+    Fut: Future<Output = Value>,
+{
+    let mut lines = input.lines();
+    let call = &call;
+    let mut open = true;
     let mut calls = FuturesUnordered::new();
     loop {
+        // Once stdin has closed, only the calls still running are left to answer.
+        if !open && calls.is_empty() {
+            return Ok(());
+        }
         let reply = tokio::select! {
-            line = lines.next_line() => match line.context("reading stdin")? {
+            line = lines.next_line(), if open => match line.context("reading stdin")? {
                 Some(line) if line.trim().is_empty() => continue,
                 Some(line) => match handle(&line) {
                     Reply::Now(reply) => reply,
                     Reply::Run { id, argv } => {
-                        let client = &client;
-                        calls.push(async move { response(id, run(client, &argv).await) });
+                        calls.push(async move { response(id, call(argv).await) });
                         continue;
                     }
                 },
-                None => return Ok(()),
+                None => {
+                    open = false;
+                    continue;
+                }
             },
             Some(reply) = calls.next(), if !calls.is_empty() => Some(reply),
         };
         if let Some(reply) = reply {
             let mut line = serde_json::to_vec(&reply)?;
             line.push(b'\n');
-            stdout.write_all(&line).await?;
-            stdout.flush().await?;
+            output.write_all(&line).await?;
+            output.flush().await?;
         }
     }
 }
@@ -530,5 +555,40 @@ mod tests {
             text(&r),
             "$10 per user/month\n\n…\n\nFound by following https://linear.app/ → https://linear.app/pricing"
         );
+    }
+
+    /// One JSON-RPC request, as a line.
+    fn request(id: u64, method: &str, params: Value) -> String {
+        format!("{}\n", json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+    }
+
+    /// The replies in `out`, one JSON value per line.
+    fn lines_of(out: &[u8]) -> Vec<Value> {
+        String::from_utf8(out.to_vec()).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+
+    /// A tool call that takes many polls, so it is still running when the input, which is all in memory, has ended.
+    async fn slow_call(_argv: Vec<String>) -> Value {
+        for _ in 0..1000 {
+            tokio::task::yield_now().await;
+        }
+        json!({ "content": [{ "type": "text", "text": "ok" }] })
+    }
+
+    #[tokio::test]
+    async fn replies_still_arrive_after_stdin_closes() {
+        // `printf '<initialize>\n<tools/call>\n' | jurl mcp`: the call is still running when the input ends.
+        let input = [
+            request(1, "initialize", json!({ "protocolVersion": "2025-06-18" })),
+            request(2, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } })),
+        ]
+        .concat();
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, slow_call).await.unwrap();
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 2, "{replies:?}");
+        assert_eq!(replies[0]["id"], 1);
+        assert_eq!(replies[1]["id"], 2);
+        assert_eq!(replies[1]["result"]["content"][0]["text"], "ok");
     }
 }
