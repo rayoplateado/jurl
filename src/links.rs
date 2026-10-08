@@ -90,12 +90,11 @@ pub async fn score(ctx: &Ctx<'_>, links: &[Link], what: &str, field: bool) -> Re
                 state["host"] = json!(h);
             }
             Item {
-                id: format!("l{}", l.i),
                 state,
-                question: Some(noul(format!(
-                    "{what} with i={} is the page that answers this question, or leads to it: {q}",
-                    l.i
-                ))),
+                questions: vec![(
+                    format!("l{}", l.i),
+                    noul(format!("{what} with i={} is the page that answers this question, or leads to it: {q}", l.i)),
+                )],
             }
         })
         .collect();
@@ -103,13 +102,15 @@ pub async fn score(ctx: &Ctx<'_>, links: &[Link], what: &str, field: bool) -> Re
         let mut more = Vec::new();
         for l in links {
             more.push(Item {
-                id: format!("f{}", l.i),
                 state: json!({ "i": l.i, "text": l.text, "path": l.url.path() }),
-                question: Some(noul(format!(
-                    "{what} with i={} is about the same field of knowledge as the answer to this question \
-                     (chemistry, astronomy, literature, medicine…): {q}",
-                    l.i
-                ))),
+                questions: vec![(
+                    format!("f{}", l.i),
+                    noul(format!(
+                        "{what} with i={} is about the same field of knowledge as the answer to this question \
+                         (chemistry, astronomy, literature, medicine…): {q}",
+                        l.i
+                    )),
+                )],
             });
         }
         items.extend(more);

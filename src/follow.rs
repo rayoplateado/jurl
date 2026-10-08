@@ -313,9 +313,8 @@ async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Option<(Vec<usize>, f64)> 
         .iter()
         .enumerate()
         .map(|(i, l)| Item {
-            id: format!("o{i}"),
             state: serde_json::json!({ "i": i, "text": l.text, "path": l.url.path(), "found_on": l.path.last().map(|u| u.path()) }),
-            question: None,
+            questions: Vec::new(),
         })
         .collect();
     let mut criteria = Map::new();

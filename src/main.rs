@@ -172,12 +172,11 @@ struct Ctx<'a> {
     owner: Option<String>,
 }
 
-/// A candidate for Jev: its entry in the state, plus a question if it is being judged
-/// (headings ride along as context without one).
+/// A candidate for Jev: its entry in the state, plus the questions asked about it, each under its id (a heading has
+/// none and rides along as context). The questions of an item always share a request.
 struct Item {
-    id: String,
     state: Value,
-    question: Option<Value>,
+    questions: Vec<(String, Value)>,
 }
 
 impl<'a> Ctx<'a> {
@@ -265,27 +264,27 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// Splits items into the requests `judge` sends. A question opens a new request when it would take the open one past
-/// MAX_QUESTIONS (`extra` counts; it goes in the first) or past MAX_STATE_CHARS. Headings never open one.
+/// Splits items into the requests `judge` sends. An item goes with all its questions in one request: they open a new
+/// one when they would take the open request past MAX_QUESTIONS (`extra` counts; it goes in the first) or past
+/// MAX_STATE_CHARS. Items without questions (headings) never open one.
 fn chunks(items: Vec<Item>, extra: Map<String, Value>) -> Vec<(Vec<Value>, Map<String, Value>)> {
     let mut requests: Vec<(Vec<Value>, Map<String, Value>)> = vec![(Vec::new(), extra)];
     let mut size = 0;
     for item in items {
         let len = item.state.to_string().len();
+        let n = item.questions.len();
         let full = {
             let qs = &requests.last().unwrap().1;
-            !qs.is_empty() && (qs.len() >= MAX_QUESTIONS || size + len > MAX_STATE_CHARS)
+            !qs.is_empty() && (qs.len() + n > MAX_QUESTIONS || size + len > MAX_STATE_CHARS)
         };
-        if item.question.is_some() && full {
+        if n > 0 && full {
             requests.push((Vec::new(), Map::new()));
             size = 0;
         }
         let (state, qs) = requests.last_mut().unwrap();
         size += len;
         state.push(item.state);
-        if let Some(q) = item.question {
-            qs.insert(item.id, q);
-        }
+        qs.extend(item.questions);
     }
     requests.retain(|(_, qs)| !qs.is_empty());
     requests
@@ -600,9 +599,12 @@ async fn score_blocks(
         .blocks
         .iter()
         .map(|b| Item {
-            id: format!("b{}", b.i),
             state: json!({ "i": b.i, "kind": b.kind, "text": b.text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
-            question: is_candidate(b).then(|| ctx.question(&format!("The block in `blocks` with i={}", b.i), default)),
+            questions: if is_candidate(b) {
+                vec![(format!("b{}", b.i), ctx.question(&format!("The block in `blocks` with i={}", b.i), default))]
+            } else {
+                Vec::new()
+            },
         })
         .collect();
     let extra = Map::from_iter([(
@@ -711,9 +713,8 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, f64)], t: &
     let items: Vec<Item> = top
         .iter()
         .map(|b| Item {
-            id: format!("ctx{}", b.i),
             state: json!({ "block": b.i, "text": b.text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
-            question: None,
+            questions: Vec::new(),
         })
         .collect();
     let mut criteria = Map::new();
@@ -761,9 +762,8 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, f64)], t: &
     let text = top[best.block].text.as_str();
     let context = || {
         vec![Item {
-            id: "ctx".to_string(),
             state: json!({ "block": top[best.block].i, "text": text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
-            question: None,
+            questions: Vec::new(),
         }]
     };
     if p >= threshold && top[best.block].kind != Kind::Code && precise::refinable(text, best) {
@@ -875,13 +875,16 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered>
             .links
             .iter()
             .map(|l| Item {
-                id: format!("l{}", l.i),
                 state: json!({ "i": l.i, "text": l.text, "context": l.context, "host": l.url.host_str() }),
-                question: Some(ctx.question(
-                    &format!("The link in `links` with i={}", l.i),
-                    "points to something a reader of this page would want to follow — referenced articles, sources, \
-                     docs, downloads or related content — not site navigation, login, social sharing, legal pages or ads.",
-                )),
+                questions: vec![(
+                    format!("l{}", l.i),
+                    ctx.question(
+                        &format!("The link in `links` with i={}", l.i),
+                        "points to something a reader of this page would want to follow — referenced articles, \
+                         sources, docs, downloads or related content — not site navigation, login, social sharing, \
+                         legal pages or ads.",
+                    ),
+                )],
             })
             .collect();
         let a = ctx.judge("links", items, Map::new()).await?;
@@ -926,7 +929,6 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
         .images
         .iter()
         .map(|i| Item {
-            id: format!("img{}", i.i),
             state: json!({
                 "i": i.i,
                 "file": i.url.path_segments().and_then(|mut s| s.next_back()).unwrap_or(""),
@@ -935,17 +937,20 @@ async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> R
                 "width": i.width,
                 "height": i.height,
             }),
-            question: Some(match &ctx.args.ask {
-                Some(q) => noul(format!(
-                    "Judging by its file name, alt text and caption, the image in `images` with i={} shows: {q}",
-                    i.i
-                )),
-                None => noul(format!(
-                    "The image in `images` with i={} is meaningful content of this page (photo, diagram, chart, \
-                     screenshot, illustration or product shot), not a logo, icon, avatar, ad, badge or decoration.",
-                    i.i
-                )),
-            }),
+            questions: vec![(
+                format!("img{}", i.i),
+                match &ctx.args.ask {
+                    Some(q) => noul(format!(
+                        "Judging by its file name, alt text and caption, the image in `images` with i={} shows: {q}",
+                        i.i
+                    )),
+                    None => noul(format!(
+                        "The image in `images` with i={} is meaningful content of this page (photo, diagram, chart, \
+                         screenshot, illustration or product shot), not a logo, icon, avatar, ad, badge or decoration.",
+                        i.i
+                    )),
+                },
+            )],
         })
         .collect();
     let query = ctx.args.ask.as_deref().filter(|_| ctx.args.vision);
@@ -1218,7 +1223,10 @@ mod tests {
 
     /// A block as `judge` gets it: its number, and a question unless it is a heading.
     fn block(i: usize, question: bool) -> Item {
-        Item { id: format!("b{i}"), state: json!({ "i": i }), question: question.then(|| noul("?")) }
+        Item {
+            state: json!({ "i": i }),
+            questions: question.then(|| (format!("b{i}"), noul("?"))).into_iter().collect(),
+        }
     }
 
     /// A state that is exactly `len` bytes of JSON, for the size budget.
@@ -1300,5 +1308,28 @@ mod tests {
 
         // Headings alone ask nothing, so they make no request.
         assert!(chunks(vec![block(0, false)], Map::new()).is_empty());
+    }
+
+    #[test]
+    fn a_pair_of_questions_shares_its_request() {
+        // An item can carry two questions, as a link does (its leads and its field): 60 pairs fill a request, and the
+        // 61st opens one.
+        let pair = |i: usize| Item {
+            state: json!({ "i": i }),
+            questions: vec![(format!("l{i}"), noul("?")), (format!("f{i}"), noul("?"))],
+        };
+        let lens = |n: usize, extra: Map<String, Value>| -> Vec<usize> {
+            chunks((0..n).map(pair).collect(), extra).iter().map(|r| numbers(r).len()).collect()
+        };
+        assert_eq!(lens(60, Map::new()), vec![60]);
+        assert_eq!(lens(61, Map::new()), vec![60, 1]);
+        // The extra is one of the 120 questions, so with it the first request holds one pair less.
+        assert_eq!(lens(60, pick()), vec![59, 1]);
+
+        // A pair that would overflow the request moves whole: both its questions open the next one.
+        let items: Vec<Item> = (0..119).map(|i| block(i, true)).chain([pair(119)]).collect();
+        let got = chunks(items, Map::new());
+        assert_eq!(got.iter().map(|r| numbers(r).len()).collect::<Vec<_>>(), vec![119, 1]);
+        assert_eq!(asked(&got[1]), vec!["f119", "l119"]);
     }
 }
