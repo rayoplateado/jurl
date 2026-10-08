@@ -10,7 +10,6 @@ use std::{
 };
 
 use anyhow::Result;
-use encoding_rs::Encoding;
 use futures::future::join_all;
 use reqwest::{Client, header};
 use serde_json::Map;
@@ -23,7 +22,7 @@ use crate::{
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Link},
-    judge::{Ctx, Item},
+    judge::{Ctx, Item, is_block_page},
     links::{self, FieldScores},
     load,
     output::{Rendered, missed, not_found},
@@ -223,13 +222,6 @@ fn hex_value(digit: u8) -> u8 {
     (digit as char).to_digit(16).unwrap_or_default() as u8
 }
 
-/// Whether a read failed because the page is a block page (a rate limit, bot check or access denied standing in for
-/// it): the error `Ctx::judge` gives one. judge.rs writes that message, so this matches its text. A typed error there
-/// would be the proper check.
-fn is_block_page(e: &anyhow::Error) -> bool {
-    format!("{e:#}").contains("served a block page")
-}
-
 /// The key a host's `robots.txt` is kept under: the host without `www.`, as [`Site`] counts hosts.
 fn host_key(u: &Url) -> Option<&str> {
     u.host_str().map(|h| h.trim_start_matches("www."))
@@ -284,8 +276,7 @@ async fn small_text(client: &Client, url: &Url) -> Option<String> {
     small_text_within(client, url, SMALL_TEXT_MAX).await
 }
 
-/// [`small_text`] with its cap given. The body is read with fetch.rs's capped reader and decoded as fetch.rs decodes a
-/// page (see [`decode`]).
+/// [`small_text`] with its cap given. The body is read and decoded as fetch.rs reads and decodes a page.
 async fn small_text_within(client: &Client, url: &Url, max: usize) -> Option<String> {
     let mut res = client.get(url.as_str()).timeout(SMALL_TEXT_TIMEOUT).send().await.ok()?;
     if !res.status().is_success() {
@@ -294,25 +285,8 @@ async fn small_text_within(client: &Client, url: &Url, max: usize) -> Option<Str
     let content_type =
         res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
     let bytes = crate::fetch::read_capped(&mut res, max).await.ok().flatten()?;
-    let body = decode(&content_type, &bytes);
+    let body = crate::fetch::decode(&content_type, &bytes);
     (!body.trim_start().starts_with('<') || body.contains("<urlset") || body.contains("<sitemapindex")).then_some(body)
-}
-
-/// The text of a body as fetch.rs decodes a page: the charset its Content-Type names, UTF-8 when it names none, and a
-/// byte order mark over both.
-fn decode(content_type: &str, bytes: &[u8]) -> String {
-    charset_of(content_type).decode(bytes).0.into_owned()
-}
-
-/// The encoding a Content-Type names. A copy of `charset_of` in fetch.rs, which is private there: the two must agree.
-fn charset_of(content_type: &str) -> &'static Encoding {
-    content_type
-        .split(';')
-        .skip(1)
-        .filter_map(|param| param.split_once('='))
-        .find(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
-        .and_then(|(_, label)| Encoding::for_label(label.trim().trim_matches('"').as_bytes()))
-        .unwrap_or(encoding_rs::UTF_8)
 }
 
 /// The pages the site lists itself: `llms.txt` (written for exactly this) and `sitemap.xml`, shallowest first. A page
@@ -964,7 +938,7 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{answer::PRECISE_THRESHOLD, fetch::test_server};
+    use crate::{answer::PRECISE_THRESHOLD, fetch::test_server, judge::BlockPage};
 
     #[test]
     fn menus_are_the_links_outside_the_text() {
@@ -1298,21 +1272,17 @@ mod tests {
     }
 
     #[test]
-    fn a_block_page_is_told_apart_by_the_error_judge_gives_it() {
-        let block = anyhow::anyhow!(
-            "https://x.com/ served a block page (rate limit, bot check or access denied), not its content (p=0.95)"
-        );
-        assert!(is_block_page(&block));
-        assert!(!is_block_page(&anyhow::anyhow!("no readable content in https://x.com/")));
+    fn a_block_page_is_told_apart_by_its_error_type_not_its_message() {
+        let block = anyhow::Error::from(BlockPage("https://x.com/ served a block page".into()));
+        assert!(is_block_page(&block.context("reading https://x.com/")));
+        assert!(!is_block_page(&anyhow::anyhow!("https://x.com/ served a block page")));
     }
 
     #[test]
     fn a_block_page_read_later_is_skipped_and_leads_nothing() {
         // The interstitial's links are not the site's: nothing is absorbed, and the search goes on as it was.
         let mut s = search();
-        let block = anyhow::anyhow!(
-            "https://x.com/next served a block page (rate limit, bot check or access denied), not its content (p=0.95)"
-        );
+        let block = BlockPage("https://x.com/next served a block page".into()).into();
         s.absorb_batch(vec![lead(0.5)], vec![Err(block)], false).expect("the search goes on");
         assert_eq!(s.pages, 1);
         assert!(s.leads.is_empty());

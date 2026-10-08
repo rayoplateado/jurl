@@ -41,10 +41,7 @@ async fn fetch_capped(client: &Client, url: &str, max: usize) -> Result<Page> {
     let Some(bytes) = read_capped(&mut res, max).await? else {
         bail!("{url}: page larger than {}", size_label(max));
     };
-    // Decoded as reqwest's text() decodes a body: the charset the Content-Type names, UTF-8 if it names none, and a byte
-    // order mark over both.
-    let (text, _, _) = charset_of(&ct).decode(&bytes);
-    let body = text.into_owned();
+    let body = decode(&ct, &bytes);
     let is_markdown = served_markdown(&ct, &body);
     Ok(Page { url: final_url, body, is_markdown })
 }
@@ -75,6 +72,12 @@ pub fn size_label(bytes: usize) -> String {
     } else {
         format!("{bytes} bytes")
     }
+}
+
+/// A body's text, decoded as reqwest's text() decodes it: the charset the Content-Type names, UTF-8 if it names none,
+/// and a byte order mark over both.
+pub(crate) fn decode(content_type: &str, bytes: &[u8]) -> String {
+    charset_of(content_type).decode(bytes).0.into_owned()
 }
 
 /// The encoding a Content-Type names, as reqwest's text() reads it: the `charset` parameter's label, or UTF-8 when there

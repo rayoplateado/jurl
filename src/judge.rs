@@ -1,7 +1,7 @@
 //! Asking Jev: each candidate is an item with its questions, chunked into requests that fit the budget.
 //! A block page fails here.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use futures::future::join_all;
 use reqwest::Client;
 use serde_json::{Map, Value, json};
@@ -20,6 +20,23 @@ pub(crate) const STATE_TEXT_CHARS: usize = 1_200;
 const EXCERPT_CHARS: usize = 800;
 /// Past this, the page is a block page (rate limit, bot check…) standing in for the real one.
 const BLOCKED_P: f64 = 0.8;
+
+/// The page is a block page (a rate limit, bot check or access denied) standing in for the real one: a typed error, so
+/// `--follow` can skip such a page without reading the message.
+#[derive(Debug)]
+pub(crate) struct BlockPage(pub(crate) String);
+
+impl std::fmt::Display for BlockPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BlockPage {}
+
+pub(crate) fn is_block_page(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.is::<BlockPage>())
+}
 
 /// Everything a mode needs to talk to Jev about one page.
 pub(crate) struct Ctx<'a> {
@@ -114,10 +131,11 @@ impl<'a> Ctx<'a> {
         }
         if let Some(p) = merged.noul("blocked").filter(|&p| p >= BLOCKED_P) {
             let title = if self.title.is_empty() { String::new() } else { format!(": \"{}\"", self.title) };
-            bail!(
+            return Err(BlockPage(format!(
                 "{} served a block page (rate limit, bot check or access denied), not its content{title} (p={p:.2})",
                 self.url
-            );
+            ))
+            .into());
         }
         Ok(merged)
     }
