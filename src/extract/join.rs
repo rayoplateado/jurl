@@ -48,7 +48,7 @@ pub(super) fn join_short(blocks: Vec<Block>) -> Vec<Block> {
             let text = run.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
             // Items of one list joined are still part of that list ("1 egg" and "Salt" next to each other).
             let list = run[0].list.filter(|l| run.iter().all(|b| b.kind == Kind::Item && b.list == Some(*l)));
-            out.push(Block { i: 0, kind: Kind::Para, level: None, lang: None, text, list });
+            out.push(Block { list, ..Block::new(0, Kind::Para, text) });
             run.clear();
         }
     };

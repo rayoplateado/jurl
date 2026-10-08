@@ -38,6 +38,11 @@ pub struct Block {
 }
 
 impl Block {
+    /// A block with no heading level, code language or list: callers set those with struct update syntax.
+    pub fn new(i: usize, kind: Kind, text: String) -> Block {
+        Block { i, kind, level: None, lang: None, text, list: None }
+    }
+
     pub fn markdown(&self) -> String {
         match self.kind {
             Kind::Heading => format!("{} {}", "#".repeat(self.level.unwrap_or(2) as usize), self.text),

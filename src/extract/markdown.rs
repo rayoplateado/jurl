@@ -38,14 +38,8 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             if body.last().is_some_and(|l| closes_fence(l.trim_start(), &fence)) {
                 body.pop();
             }
-            blocks.push(Block {
-                i,
-                kind: Kind::Code,
-                level: None,
-                lang: Some(lang).filter(|l| !l.is_empty()),
-                text: body.join("\n"),
-                list: None,
-            });
+            let lang = Some(lang).filter(|l| !l.is_empty());
+            blocks.push(Block { lang, ..Block::new(i, Kind::Code, body.join("\n")) });
             return;
         } else if text.starts_with('>') {
             let t = text.lines().map(|l| l.trim_start_matches('>').trim()).collect::<Vec<_>>().join("\n");
@@ -53,7 +47,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         } else {
             (Kind::Para, None, text)
         };
-        blocks.push(Block { i, kind, level, lang: None, text, list: None });
+        blocks.push(Block { level, ..Block::new(i, kind, text) });
     };
 
     // YAML frontmatter: take the title, don't treat it as content.
