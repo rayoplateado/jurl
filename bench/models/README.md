@@ -12,6 +12,8 @@ These scripts measure how often a candidate (another model, or Jev with other se
 - [replay.py](replay.py): sends the recorded requests to a candidate and saves its answers next to Jev's.
 - [compare.py](compare.py): one column per replay. Python's standard library only, like the rest of `bench/`.
 - [diff.py](diff.py): the requests two recordings share, and what differs between them (for a refactor).
+- [cost.py](cost.py): where a recording's Jev input tokens go: by request purpose, by characters of the request, and by search.
+- [rewrite.py](rewrite.py): a recording with its per-item questions worded shorter (`--variant short` or `ref`), so compare.py can show whether Jev's answers depend on the wording.
 
 ## What compare.py counts
 

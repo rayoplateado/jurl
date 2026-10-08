@@ -119,7 +119,7 @@ jurl: found after reading 4 pages: linear.app/ → linear.app/pricing
 
 With `--follow`, a page that doesn't answer isn't the end. It is `--precise` and `--links -q` in a loop: each page is asked for the answer, and its links are scored by how likely they lead to it. jurl reads the site's own map (`llms.txt`, `sitemap.xml`: copies of a page in other languages are skipped) while it reads the first page, then compares the best ten links side by side and opens the two it likes most, keeping on from whichever page looks closest, the way people play the Wikipedia game. On a long search (`--follow 10` and up) Jev also asks of each link whether its page is in the answer's field of knowledge: far from the answer, "leads to the answer" is noise (from Tennis: Birmingham, Philadelphia), while the field points the way (vulcanized rubber, polyester: chemistry, then the elements, then mercury). It plays hot and cold: a link counts for as much as its page is close to the question (a docs index with a link straight to the answer counts as close), so a wrong turn is dropped and the search goes back to the page that was getting warmer. A page that answers is ranked by how sure Jev is of the answer and of the page, and jurl stops only when no page left could beat it by much: the pricing page beats both a home-page FAQ line and an old blog post quoting last year's price. Started from a site's front door (`linear.app`), the question is asked about that site: "the company", "they", "we" or "it" is whoever runs it, not a customer in one of its stories. It stays on the same site (subdomains included), skips what `robots.txt` disallows, and stops after 5 pages (`--follow 10` for more; longer searches open three pages per step). The path comes last, on stderr, or as `path` in `--json`; `-t` shows how warm each page was.
 
-On [18 searches](bench/follow.json), each run 3 times: 24/24 pricing pages found from the bare domain (3 pages, ~2.5 s, ~$0.003 each), 8/9 answers in docs found from the docs' root, 9/9 short Wikipedia games (Medicine → Aspirin: `C9H8O4`), and 9/9 questions the site doesn't answer left empty. Long games with `--follow 15`, 3 to 5 clicks apart: 15/15 on the games it was tuned on (Paris → Aspirin, Tennis → the boiling point of mercury, Jazz → the moons of Mars) and 16/18 on six it had never seen (Volcano → Mona Lisa, Chess → the speed of sound), ~4.5 s and ~$0.035 each.
+On [28 searches](bench/follow.json), run once with this branch: 27 right, against 25 on main. The eight pricing pages are found from the bare domain, 8/8 (about 3 pages, median ~2.6 s, ~$0.0035 each). Answers in docs from the docs' root: 3/3. Short Wikipedia games (Medicine → Aspirin: `C9H8O4`): 3/3. Questions the site doesn't answer, left empty: 3/3. Long games with `--follow 15`, 3 to 5 clicks apart: 10/11, the one miss being Bicycle → the Titanic. Five were tuned on (Paris → Aspirin, Tennis → the boiling point of mercury, Jazz → the moons of Mars, among them) and six never were (Volcano → Mona Lisa, Chess → the speed of sound, among them). Median ~5 s; ~$0.031 each on average (main: ~$0.035). Three runs of each, on earlier builds, are in [bench/README.md](bench/README.md).
 
 ### Just the code
 
@@ -316,16 +316,16 @@ Ten documentation pages, one question each ([bench/](bench) has the tasks, the s
 | | jurl | Claude Code WebFetch | Exa | Tavily |
 | --- | --- | --- | --- | --- |
 | Exact answer | **10/10** | **10/10** | 8/10 | 5/10 |
-| Code lines not on the page | **0 of 60** | 33 of 63 | **0 of 59** | 8 of 36 |
+| Code lines not on the page | **0 of 96** | 33 of 63 | **0 of 59** | 8 of 36 |
 | Cost per 10,000 pages | **$4** | ~$150 | $10 | $16 |
-| Tokens the agent reads | 375 | **148** | 351 | 524 |
-| Time per page | 0.8 s | — | **0.3 s** | 0.5 s |
+| Tokens the agent reads | 300 | **148** | 351 | 524 |
+| Time per page | 0.7 s | — | **0.3 s** | 0.5 s |
 | Finds an image by what it shows | **yes** | no | no | no |
 | Picks the links worth following | **yes** | no | no | no |
 | Just the code | **yes** | no | no | no |
 | Open source, in your terminal | **yes** | no | no | no |
 
-Best in each row in bold. WebFetch hands the agent the fewest tokens because it rewrites what it reads: half the code it hands back isn't on the page, and each call has a small model ($1 per million tokens) read the whole page. Exa is the fastest, but missed both answers that were code. Tavily cut the code out of its extracts. Measured on 2026-10-07.
+Best in each row in bold. WebFetch hands the agent the fewest tokens because it rewrites what it reads: half the code it hands back isn't on the page, and each call has a small model ($1 per million tokens) read the whole page. Exa is the fastest, but missed both answers that were code. Tavily cut the code out of its extracts. Measured on 2026-10-07; jurl again on 2026-10-08, with this branch.
 
 ## Your keys, your data
 
