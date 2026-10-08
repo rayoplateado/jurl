@@ -332,7 +332,7 @@ Best in each row in bold. WebFetch hands the agent the fewest tokens because it 
 
 ## jurl cloud
 
-Don't want to manage API keys? `jurl login` signs this computer in to jurl cloud, and jurl's servers do the reading. The flags and the exit codes stay the same. The text can be plainer than a local run's until the server sends each block's kind, and each precise answer's block and link.
+Don't want to manage API keys? `jurl login` signs this computer in to jurl cloud, and jurl's servers do the reading. The flags and the exit codes stay the same, and the text matches a local run's with two differences. The page's kind line (`· docs (0.84)`) isn't sent by the server, so it isn't printed. And a `--precise` answer's block prints as plain text, since the server doesn't send that block's kind yet.
 
 ```console
 $ jurl login
@@ -361,7 +361,7 @@ A run reads with jurl cloud or with your own keys, by the first of these that ap
 3. A sign-in saved by `jurl login`: jurl cloud.
 4. Otherwise: your own keys.
 
-jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `-r`, `-n`, `-a`, `--threshold`, and `--code` with `--precise`. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
+jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `-r`, and `--code` with `--precise`. `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
 
 `JURL_CLOUD_URL` points jurl at another jurl cloud, such as a self-hosted one: `JURL_CLOUD_URL=http://127.0.0.1:3211 jurl login` saves it. A key only goes over https, or to this computer.
 
@@ -373,7 +373,7 @@ With your own keys, jurl has no server and no account of its own. It talks to th
 - **What leaves your machine:** the text of the page goes to TypeSafe. With `--vision` or `--find`, the images go to Cloudflare too. Keep that in mind for internal or private pages.
 - **What jurl can't read:** it sends no cookies, so pages behind a login are out of reach.
 
-With [jurl cloud](#jurl-cloud), the URL and your question go to jurl cloud, which reads the page on its servers with the same models, and it keeps a log of each read for your organization.
+With [jurl cloud](#jurl-cloud), the URL and your question go to jurl cloud, which reads the page on its servers with the same models. It keeps a private log of each read for your organization, with the retention your organization sets. It also keeps an anonymous, de-identified record of reads of public pages (no account, user or key), used to improve jurl. Your organization can opt out of that record.
 
 ## Update and uninstall
 
