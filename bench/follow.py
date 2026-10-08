@@ -1,4 +1,4 @@
-# --follow on follow.json: every case 3 times, in parallel, with the jurl in $JURL (default: jurl on PATH).
+# --follow on follow.json, or on the cases file in $CASES (a path as given: CASES=bench/follow-real.json): every case 3 times, in parallel, with the jurl in $JURL (default: jurl on PATH).
 # Right = the answer contains one of `expect` (traps: no answer at all). Prints a summary and saves results/follow-<label>.json.
 #   JURL=../target/release/jurl python3 follow.py <label> [runs]
 import json, os, re, subprocess, sys, time
@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 EXE = os.environ.get("JURL", "jurl")
 HERE = os.path.dirname(os.path.abspath(__file__))
-cases = json.load(open(os.path.join(HERE, "follow.json")))
+cases = json.load(open(os.environ.get("CASES") or os.path.join(HERE, "follow.json"), encoding="utf-8"))
 # GROUP=long runs only that group.
 if os.environ.get("GROUP"):
     cases = [c for c in cases if c["group"] == os.environ["GROUP"]]
@@ -63,7 +63,7 @@ for c in cases:
     ok = sum(r["right"] for r in rs)
     ans = " | ".join(sorted({(r["answer"] or "∅").replace("\n", " / ")[:18] for r in rs}))
     print(f"{(c['start'] + ' · ' + c['q'])[:58]:58} {ok}/{len(rs)}   {med([r['pages'] for r in rs])!s:>4}  {med([r['tokens'] for r in rs])!s:>7}  {med([r['ms'] for r in rs])/1000:5.1f}s  {ans}")
-for g in ["pricing", "docs", "wikipedia", "long", "heldout", "trap"]:
+for g in dict.fromkeys(c["group"] for c in cases):
     rs = [r for r in results if r["group"] == g]
     if not rs:
         continue

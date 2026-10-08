@@ -161,6 +161,10 @@ Headquarters and founding year from more front doors, once each with main and af
 | vercel.com, headquarters | "San Francisco" (a press release's dateline) | "San Francisco" (the same) |
 | vercel.com, founded | no answer | no answer |
 
+#### Real-world searches
+
+[follow-real.json](follow-real.json) holds 30 searches people type at a company's or a project's site, each from its front door or docs root: company facts, support, product limits, docs, Spanish sites, and five questions the site doesn't answer (expect null). Every answer was checked against its page with curl; [follow-real.notes.md](follow-real.notes.md) has each one's URL, snippet and clicks. The set is held out: nothing in `--follow` was tuned on it, so use it to compare versions, not to tune against. Run it from the repo root with `CASES=bench/follow-real.json python3 bench/follow.py <label>`; `GROUP=es` still runs one group.
+
 ## Another decision model in Jev's place
 
 [models/](models) records what jurl asks Jev, replays it to another model with the same contract (`JURL_JEV_URL`) and counts how often they decide alike, against Jev's agreement with itself.
