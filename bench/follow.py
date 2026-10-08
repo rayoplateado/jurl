@@ -10,6 +10,9 @@ cases = json.load(open(os.path.join(HERE, "follow.json")))
 # GROUP=long runs only that group.
 if os.environ.get("GROUP"):
     cases = [c for c in cases if c["group"] == os.environ["GROUP"]]
+# POOL searches at a time (6), each given TIMEOUT seconds (180): POOL=1 TIMEOUT=1800 for a slow self-hosted model.
+POOL = int(os.environ.get("POOL", "6"))
+TIMEOUT = int(os.environ.get("TIMEOUT", "180"))
 label = sys.argv[1] if len(sys.argv) > 1 else "run"
 runs = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 
@@ -17,7 +20,14 @@ runs = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 def one(case):
     argv = [EXE, "-t", "--json", "--precise", "--follow", str(case.get("pages", 5)), "-q", case["q"], case["start"]]
     t = time.time()
-    p = subprocess.run(argv, capture_output=True, text=True, timeout=180, stdin=subprocess.DEVNULL)
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        # a search that runs out of time is wrong, traps included
+        return {
+            "start": case["start"], "q": case["q"], "group": case["group"], "answer": None, "right": False,
+            "pages": None, "tokens": None, "ms": int((time.time() - t) * 1000), "path": [], "timeout": True,
+        }
     ms = int((time.time() - t) * 1000)
     answer = None
     path = []
@@ -38,7 +48,7 @@ def one(case):
 
 
 jobs = [c for c in cases for _ in range(runs)]
-with ThreadPoolExecutor(6) as pool:
+with ThreadPoolExecutor(POOL) as pool:
     results = list(pool.map(one, jobs))
 os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
 json.dump(results, open(os.path.join(HERE, "results", f"follow-{label}.json"), "w"), indent=1, ensure_ascii=False)
