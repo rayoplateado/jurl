@@ -38,6 +38,36 @@ const MAX_CALLS: usize = 4;
 const VERBATIM: &str = "Everything returned is copied from the page, verbatim, with its links: jurl never writes, \
                         summarizes or guesses. When the page doesn't have it, the result says so (\"Not found\").";
 
+/// The tools, in the order `tools/list` shows them. A call names one by `name()`, and `command` matches on the enum, so a
+/// tool without a command line is a compile error, and a misspelt name can't reach one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tool {
+    ReadPage,
+    Answer,
+    FindLinks,
+    FindCode,
+    FindImage,
+}
+
+impl Tool {
+    const ALL: [Tool; 5] = [Tool::ReadPage, Tool::Answer, Tool::FindLinks, Tool::FindCode, Tool::FindImage];
+
+    /// The name a client calls the tool by, as `tools/list` shows it.
+    fn name(self) -> &'static str {
+        match self {
+            Tool::ReadPage => "read_page",
+            Tool::Answer => "answer",
+            Tool::FindLinks => "find_links",
+            Tool::FindCode => "find_code",
+            Tool::FindImage => "find_image",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|t| t.name() == name)
+    }
+}
+
 /// The tools, as `tools/list` shows them. Their input schemas are also what each call's arguments are checked against.
 fn tools() -> Value {
     let url = json!({
@@ -56,7 +86,7 @@ fn tools() -> Value {
     let read_only = json!({ "readOnlyHint": true, "openWorldHint": true });
     json!([
         {
-            "name": "read_page",
+            "name": Tool::ReadPage.name(),
             "title": "Read a page",
             "description": format!(
                 "Read a web page: its title, what kind of page it is, and the blocks that carry it (paragraphs, list \
@@ -77,7 +107,7 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
-            "name": "answer",
+            "name": Tool::Answer.name(),
             "title": "Answer a question from a page",
             "description": format!(
                 "The exact answer to a question, in the page's own words: a short span copied from the page (a \
@@ -110,7 +140,7 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
-            "name": "find_links",
+            "name": Tool::FindLinks.name(),
             "title": "Find links worth following",
             "description": format!(
                 "The links on a page worth following, best first, one URL per line. Without `question`: content links \
@@ -131,7 +161,7 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
-            "name": "find_code",
+            "name": Tool::FindCode.name(),
             "title": "Find code on a page",
             "description": format!(
                 "The code blocks on a page (examples, commands, snippets), each under its heading, exactly as \
@@ -151,7 +181,7 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
-            "name": "find_image",
+            "name": Tool::FindImage.name(),
             "title": "Find images on a page",
             "description": format!(
                 "Image URLs from a page, best first. With `description`, the image that shows it (\"a cathedral\"): \
@@ -180,11 +210,15 @@ fn tools() -> Value {
 /// `tools/list`'s answer, built once: it never changes while the server runs, and every call is checked against it.
 static TOOLS: LazyLock<Value> = LazyLock::new(tools);
 
+/// The schema `tools/list` shows for `tool`: what its arguments are checked against.
+fn input_schema(tool: Tool) -> &'static Value {
+    let entry = TOOLS.as_array().unwrap().iter().find(|t| t["name"] == tool.name());
+    &entry.expect("every tool is listed")["inputSchema"]
+}
+
 /// The jurl command line a tool call stands for, after checking its arguments against the tool's schema.
-fn command(name: &str, args: &Value) -> Result<Vec<String>, String> {
-    let tool =
-        TOOLS.as_array().unwrap().iter().find(|t| t["name"] == name).ok_or_else(|| format!("unknown tool {name}"))?;
-    let schema = &tool["inputSchema"];
+fn command(tool: Tool, args: &Value) -> Result<Vec<String>, String> {
+    let schema = input_schema(tool);
     let args = match args {
         Value::Null => &Map::new(),
         Value::Object(a) => a,
@@ -194,16 +228,16 @@ fn command(name: &str, args: &Value) -> Result<Vec<String>, String> {
 
     let str = |k: &str| args.get(k).and_then(Value::as_str).map(String::from);
     let mut argv = vec!["jurl".to_string()];
-    match name {
-        "answer" => argv.push("--precise".into()),
-        "find_links" => argv.push("--links".into()),
-        "find_code" => argv.push("--code".into()),
-        "find_image" => match str("description") {
+    match tool {
+        Tool::ReadPage => {}
+        Tool::Answer => argv.push("--precise".into()),
+        Tool::FindLinks => argv.push("--links".into()),
+        Tool::FindCode => argv.push("--code".into()),
+        Tool::FindImage => match str("description") {
             Some(what) => argv.push(format!("--find={what}")),
             None if args.get("vision") == Some(&Value::Bool(true)) => argv.push("--vision".into()),
             None => argv.push("--image".into()),
         },
-        _ => {}
     }
     // `--ask=…`, so a question that starts with "-" is still the question.
     if let Some(q) = str("question") {
@@ -306,13 +340,13 @@ fn handle(line: &str) -> Reply {
         "tools/list" => json!({ "tools": TOOLS.clone() }),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or_default();
-            if !TOOLS.as_array().unwrap().iter().any(|t| t["name"] == name) {
+            let Some(tool) = Tool::from_name(name) else {
                 return Reply::Now(Some(error(id, -32602, &format!("unknown tool: {name}"))));
-            }
+            };
             // Bad arguments are the model's to fix, so they come back as a tool error it can read.
-            return match command(name, &params["arguments"]) {
+            return match command(tool, &params["arguments"]) {
                 Ok(argv) => Reply::Run { id, argv },
-                Err(e) => Reply::Now(Some(response(id, tool_error(&format!("{name}: {e}"))))),
+                Err(e) => Reply::Now(Some(response(id, tool_error(&format!("{}: {e}", tool.name()))))),
             };
         }
         _ => return Reply::Now(Some(error(id, -32601, &format!("method not found: {method}")))),
@@ -690,5 +724,17 @@ mod tests {
         assert_eq!(replies[1]["id"], Value::Null);
         assert_eq!(replies[2]["id"], 3);
         assert_eq!(replies[3]["id"], 1);
+    }
+
+    #[test]
+    fn tool_enum_matches_the_list_in_order_and_parses_back() {
+        let listed: Vec<&str> = TOOLS.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = Tool::ALL.iter().map(|t| t.name()).collect();
+        assert_eq!(listed, names);
+        for tool in Tool::ALL {
+            assert_eq!(Tool::from_name(tool.name()), Some(tool));
+            assert_eq!(input_schema(tool)["type"], "object");
+        }
+        assert_eq!(Tool::from_name("summarize"), None);
     }
 }
