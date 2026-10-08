@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Result, bail};
-use serde_json::{Map, json};
+use serde_json::{Map, Value, json};
 
 use crate::{
     answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, precise_pick, render_precise},
@@ -95,7 +95,20 @@ pub(crate) async fn score_blocks(
             },
         })
         .collect();
-    let extra = Map::from_iter([(
+    let a = ctx.judge("blocks", items, page_questions(args.precise)).await?;
+    t.lap(a.label());
+    let kind = a.choice("page_kind");
+    let scores: Vec<Option<f64>> = ex.blocks.iter().map(|b| a.noul(&format!("b{}", b.i))).collect();
+    Ok((scores, kind))
+}
+
+/// The questions about the whole page, asked with its blocks. `page_kind` is what the plain output prints: --precise
+/// prints only the answer, so it doesn't ask for the kind (one question fewer in each of its requests).
+fn page_questions(precise: bool) -> Map<String, Value> {
+    if precise {
+        return Map::new();
+    }
+    Map::from_iter([(
         "page_kind".to_string(),
         choice(
             "What kind of page is this?",
@@ -109,12 +122,7 @@ pub(crate) async fn score_blocks(
                 "other": null,
             }),
         ),
-    )]);
-    let a = ctx.judge("blocks", items, extra).await?;
-    t.lap(a.label());
-    let kind = a.choice("page_kind");
-    let scores: Vec<Option<f64>> = ex.blocks.iter().map(|b| a.noul(&format!("b{}", b.i))).collect();
-    Ok((scores, kind))
+    )])
 }
 
 /// The kept blocks in page order, each with its heading, as markdown and JSON. `path` is how --follow got here.
@@ -201,5 +209,12 @@ mod tests {
         assert_eq!(top(&scores, 0.4, 10), vec![(2, 0.9), (0, 0.5), (3, 0.5), (5, 0.5), (6, 0.4)]);
         assert_eq!(top(&scores, 0.4, 2), vec![(2, 0.9), (0, 0.5)]);
         assert!(top(&scores, 0.95, 10).is_empty());
+    }
+
+    #[test]
+    fn precise_runs_do_not_ask_for_the_page_kind() {
+        // --precise prints the answer, not the kind of page, so Jev isn't asked for the kind.
+        assert!(page_questions(false).contains_key("page_kind"));
+        assert!(page_questions(true).is_empty());
     }
 }
