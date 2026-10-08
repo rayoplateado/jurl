@@ -373,20 +373,38 @@ async fn run(mut args: Args) -> Result<()> {
     if args.timing {
         t.report();
     }
-    let shown = match &done {
-        Ok(r) => Some(r),
-        Err(e) => e.chain().find_map(|c| c.downcast_ref::<NotFound>()).and_then(|n| n.closest.as_ref()),
-    };
-    // A miss prints nothing, except in JSON: what came closest, with `"answer": null`.
-    if let Some(r) = shown {
-        let mut out = stdout().lock();
-        if args.json {
-            writeln!(out, "{}", serde_json::to_string_pretty(&r.json)?)?;
-        } else if done.is_ok() {
-            write!(out, "{}", r.text)?;
-        }
+    if let Some(text) = stdout_for(&args, &done)? {
+        write!(stdout().lock(), "{text}")?;
     }
     done.map(|_| ())
+}
+
+/// What goes to stdout. A miss prints nothing, except in JSON with --precise: what came closest, with
+/// `"answer": null`, or with nothing close, `"closest": null` too, so a script reading stdout always gets an object.
+fn stdout_for(args: &Args, done: &Result<Rendered>) -> Result<Option<String>> {
+    let json = |v: &Value| -> Result<String> { Ok(format!("{}\n", serde_json::to_string_pretty(v)?)) };
+    match done {
+        Ok(r) if args.json => json(&r.json).map(Some),
+        Ok(r) => Ok(Some(r.text.clone())),
+        Err(_) if !args.json => Ok(None),
+        Err(e) => match e.chain().find_map(|c| c.downcast_ref::<NotFound>()) {
+            Some(NotFound { closest: Some(r), .. }) => json(&r.json).map(Some),
+            Some(n) if args.precise => json(&no_answer(args, &n.message)).map(Some),
+            _ => Ok(None),
+        },
+    }
+}
+
+/// A --precise miss with nothing close enough to show (no block worth searching for the answer).
+fn no_answer(args: &Args, message: &str) -> Value {
+    json!({
+        "url": url::Url::parse(&args.url).map_or_else(|_| args.url.clone(), String::from),
+        "ask": args.ask.as_deref().unwrap_or_default(),
+        "answer": null,
+        "closest": null,
+        "p": null,
+        "error": message,
+    })
 }
 
 /// The URL and flags made whole and checked: `--find` is a question for `--vision`, a bare domain gets https://.
@@ -723,6 +741,51 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>,
         .filter(|s| s.block == best.block && s.range != best.range)
         .filter(|s| s.range.start >= best.range.start && s.range.end <= best.range.end)
         .collect();
+    let text = top[best.block].text.as_str();
+    let context = || {
+        vec![Item {
+            id: "ctx".to_string(),
+            state: json!({ "block": top[best.block].i, "text": text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
+            question: None,
+        }]
+    };
+    if p >= threshold && top[best.block].kind != Kind::Code && precise::refinable(text, best) {
+        // A long winner (a line, clause or sentence) may hold the answer and more. Its pieces, the shorter
+        // candidates inside it and the winner itself are scored once more with the same question; a piece wins
+        // only when Jev likes it at least as much as the whole, and at the answer's own threshold.
+        let mut options: Vec<std::ops::Range<usize>> = vec![best.range.clone()];
+        for r in inside.iter().map(|s| s.range.clone()).chain(precise::refinements(text, &best.range)) {
+            if !options.contains(&r) && options.len() <= precise::MAX_REFINE {
+                options.push(r);
+            }
+        }
+        let mut criteria = Map::new();
+        for (k, r) in options.iter().enumerate() {
+            criteria.insert(format!("o{k}"), json!(&text[r.clone()]));
+        }
+        criteria.insert("none".to_string(), json!("None of these is exactly the answer"));
+        let refine = choice(
+            &format!(
+                "Which of these spans from the block is exactly the answer to this question, with nothing missing \
+                 and nothing extra? {q}"
+            ),
+            Value::Object(criteria),
+        );
+        let b = ctx.judge("blocks", context(), Map::from_iter([("refine".to_string(), refine)])).await?;
+        t.lap(b.label());
+        let probs = b.probabilities("refine").unwrap_or_default();
+        let whole = probs.get("o0").copied().unwrap_or(0.0);
+        let piece = (1..options.len())
+            .map(|k| (k, probs.get(&format!("o{k}")).copied().unwrap_or(0.0)))
+            .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
+        if let Some((k, pk)) = piece
+            && pk >= PRECISE_THRESHOLD
+            && pk >= whole
+        {
+            return Ok(Pick { block: top[best.block].i, range: options[k].clone(), p });
+        }
+        return Ok(Pick { block: top[best.block].i, range: best.range.clone(), p });
+    }
     if p >= threshold && !inside.is_empty() {
         let options: Vec<&precise::Span> = std::iter::once(best).chain(inside).collect();
         let mut criteria = Map::new();
@@ -736,12 +799,7 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>,
             ),
             Value::Object(criteria),
         );
-        let context = vec![Item {
-            id: "ctx".to_string(),
-            state: json!({ "block": top[best.block].i, "text": top[best.block].text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
-            question: None,
-        }];
-        let b = ctx.judge("blocks", context, Map::from_iter([("tighter".to_string(), tighter)])).await?;
+        let b = ctx.judge("blocks", context(), Map::from_iter([("tighter".to_string(), tighter)])).await?;
         t.lap(b.label());
         if let Some((k, c)) = b.choice("tighter")
             && c >= 0.5
@@ -1079,5 +1137,27 @@ mod tests {
         assert_eq!(exit_code(&missed("no answer".into(), Rendered { text: String::new(), json: json!({}) })), 1);
         assert_eq!(exit_code(&anyhow!("https://x.com returned HTTP 404 Not Found")), 2);
         assert_eq!(exit_code(&anyhow!("api.typesafe.ai → HTTP 402: no credits")), 2);
+    }
+
+    #[test]
+    fn a_precise_miss_still_prints_json() {
+        let mut args = Args::parse_from(["jurl", "--precise", "--json", "-q", "books?", "jurl.dev"]);
+        prepare(&mut args).unwrap();
+        // Nothing worth searching on the page: no closest, still an object with a null answer.
+        let miss: Result<Rendered> = Err(not_found("nothing in https://jurl.dev/ answers that".into()));
+        let out = stdout_for(&args, &miss).unwrap().expect("JSON on a miss");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["answer"], Value::Null);
+        assert_eq!(v["closest"], Value::Null);
+        assert_eq!(v["url"], "https://jurl.dev/");
+        assert_eq!(v["ask"], "books?");
+        // A miss with a closest candidate prints that.
+        let close = Rendered { text: String::new(), json: json!({ "answer": null, "closest": "x" }) };
+        let out = stdout_for(&args, &Err(missed("no answer".into(), close))).unwrap().unwrap();
+        assert!(out.contains("\"closest\": \"x\""), "{out}");
+        // Failures (exit 2) print nothing, and neither does a text-mode miss.
+        assert_eq!(stdout_for(&args, &Err(anyhow!("HTTP 404"))).unwrap(), None);
+        args.json = false;
+        assert_eq!(stdout_for(&args, &Err(not_found("nothing".into()))).unwrap(), None);
     }
 }

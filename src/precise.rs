@@ -221,13 +221,196 @@ fn prose_spans(text: &str) -> Vec<Range<usize>> {
     }
     out.extend(names);
 
-    // Lines, clauses, then sentences.
-    out.extend(split(text, |c, _| c == '\n'));
+    // Lines, clauses, then sentences; before them, the lists inside lines and sentences.
+    let lines = split(text, |c, _| c == '\n');
+    let sentences =
+        split(text, |c, next| matches!(c, '.' | '!' | '?') && next.is_none_or(|n| n.is_whitespace() || n == '['));
+    out.extend(lines.iter().chain(&sentences).filter_map(|r| enumeration(text, r.clone())));
+    out.extend(link_runs(text));
+    out.extend(lines);
     out.extend(split(text, |c, next| matches!(c, ',' | ';' | ':' | '—' | '–') && next.is_none_or(char::is_whitespace)));
-    out.extend(split(text, |c, next| {
-        matches!(c, '.' | '!' | '?') && next.is_none_or(|n| n.is_whitespace() || n == '[')
-    }));
+    out.extend(sentences);
     out
+}
+
+/// The list a line or sentence ends with, after its last colon: "Available in three colours: red, green and blue"
+/// → "red, green and blue". Only when what follows splits into two or more items (on `,` `;` `·`, "and", "or"),
+/// counted outside brackets, so a link's URL or "(en español)" doesn't split an item.
+fn enumeration(text: &str, r: Range<usize>) -> Option<Range<usize>> {
+    let s = &text[r.clone()];
+    let mut colon = None;
+    let mut depth = 0i32;
+    let mut cuts = 0;
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let next = chars.peek().map(|&(_, n)| n);
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ':' if depth == 0 && next.is_some_and(char::is_whitespace) => {
+                colon = Some(i + 1);
+                cuts = 0;
+            }
+            ',' | ';' | '·' if depth == 0 && colon.is_some() => cuts += 1,
+            _ if depth == 0 && colon.is_some() && c.is_whitespace() => {
+                let word = s[i..].split_whitespace().next().unwrap_or("");
+                if (word == "and" || word == "or") && s[i + c.len_utf8()..].starts_with(word) {
+                    cuts += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    let colon = colon?;
+    // Each cut sits between two items: something on both sides of the last one too.
+    (cuts >= 1 && s[colon..].trim().len() > 1).then(|| r.start + colon..r.end)
+}
+
+/// Markdown links one after another, separated only by commas, `·`, "and"/"or" or a parenthesis about the one
+/// before ("[La Única Verdad](…) (en español), [The Only Truth](…) (in English)"): a list of books or pages.
+fn link_runs(text: &str) -> Vec<Range<usize>> {
+    let links = md_links(text);
+    let mut out = Vec::new();
+    let mut first = 0;
+    for n in 1..=links.len() {
+        let joined = n < links.len() && only_separators(&text[links[n - 1].end..links[n].start]);
+        if !joined {
+            if n - first > 1 {
+                // The run keeps a parenthesis right after its last link: "(in English)".
+                let mut end = links[n - 1].end;
+                let after = &text[end..];
+                let lead = after.len() - after.trim_start_matches([' ', '\t']).len();
+                if after[lead..].starts_with('(')
+                    && let Some(close) = after[lead..].find(')')
+                    && !after[lead..lead + close].contains(['\n', '['])
+                {
+                    end += lead + close + 1;
+                }
+                out.push(links[first].start..end);
+            }
+            first = n;
+        }
+    }
+    out
+}
+
+/// `[text](url)` links in `text`, as byte ranges.
+fn md_links(text: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(open) = text[at..].find('[').map(|i| at + i) {
+        let Some(mid) = text[open..].find("](").map(|i| open + i) else { break };
+        let label = &text[open + 1..mid];
+        if label.contains(['[', '\n']) {
+            at = open + 1;
+            continue;
+        }
+        let Some(close) = text[mid + 2..].find([')', ' ', '\n']).map(|i| mid + 2 + i) else { break };
+        if !text[close..].starts_with(')') {
+            at = mid + 2;
+            continue;
+        }
+        out.push(open..close + 1);
+        at = close + 1;
+    }
+    out
+}
+
+/// What can sit between two items of one list: commas, `·`, "and"/"or", and a parenthesis without a link in it.
+fn only_separators(gap: &str) -> bool {
+    let mut rest = gap.trim();
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix([',', ';', '·', '|', '/']) {
+            rest = r.trim_start();
+        } else if let Some(r) = rest.strip_prefix("and ").or_else(|| rest.strip_prefix("or ")) {
+            rest = r.trim_start();
+        } else if rest.starts_with('(')
+            && let Some(close) = rest.find(')')
+            && !rest[..close].contains(['[', '\n'])
+        {
+            rest = rest[close + 1..].trim_start();
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// A winner longer than this many words may carry more than the answer, and gets its own pieces scored. Values,
+/// names and short phrases stay whole: "5,000 requests per hour" (4 words), "629.88 K (356.73 °C, 674.11 °F)" (7).
+const REFINE_WORDS: usize = 8;
+/// At most this many pieces of a winner are scored, in one more call.
+pub const MAX_REFINE: usize = 100;
+
+/// Whether the winning span is long enough that a part of it could be the answer: a line, clause or sentence of
+/// prose, not a value, a name or a table cell (those are labelled, or short).
+pub fn refinable(text: &str, span: &Span) -> bool {
+    span.label.is_none() && text[span.range.clone()].split_whitespace().count() > REFINE_WORDS
+}
+
+/// Contiguous pieces of `text[range]`, each trimmed like any candidate and never the whole span: first those that
+/// start and end at punctuation or a link's edge, never cutting a link or parenthesis ("…: [A](…), [B](…)" → "[A](…)", "[A](…), [B](…)"), then any
+/// run of words, longest first. At most `MAX_REFINE`.
+pub fn refinements(text: &str, range: &Range<usize>) -> Vec<Range<usize>> {
+    let words: Vec<Range<usize>> =
+        tokens(&text[range.clone()]).into_iter().map(|t| range.start + t.start..range.start + t.end).collect();
+    let n = words.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    // Where an item can start: the first word, a word after one ending in punctuation, a link's `[`.
+    let opens = |k: usize| {
+        k == 0
+            || text[words[k].clone()].starts_with('[')
+            || text[words[k - 1].clone()].ends_with([',', ';', ':', '.', '·', ')'])
+            || text[words[k - 1].clone()] == *"·"
+    };
+    // Where an item can end: the last word, a word ending in punctuation or closing a link.
+    let closes = |k: usize| {
+        k + 1 == n
+            || text[words[k].clone()].ends_with([',', ';', ':', '.', ')'])
+            || text[words[k + 1].clone()] == *"·"
+            || text[words[k + 1].clone()].starts_with('(')
+    };
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for a in (0..n).filter(|&a| opens(a)) {
+        for b in (a..n).filter(|&b| closes(b)) {
+            pairs.push((a, b));
+        }
+    }
+    let mut runs: Vec<(usize, usize)> = (0..n).flat_map(|a| (a + 1..n).map(move |b| (a, b))).collect();
+    runs.sort_by_key(|&(a, b)| (a as isize - b as isize, a));
+    let mut out: Vec<Range<usize>> = Vec::new();
+    let whole = trim(text, range.clone());
+    for (a, b) in pairs.into_iter().chain(runs) {
+        let Some(r) = trim(text, words[a].start..words[b].end) else { continue };
+        if Some(&r) == whole.as_ref()
+            || out.contains(&r)
+            || text[r.clone()].chars().count() > MAX_SPAN_CHARS
+            || !balanced(&text[r.clone()])
+        {
+            continue;
+        }
+        out.push(r);
+        if out.len() >= MAX_REFINE {
+            break;
+        }
+    }
+    out
+}
+
+/// Every bracket closed, in order: a piece never cuts a link or a parenthesis in half.
+fn balanced(s: &str) -> bool {
+    let mut open = Vec::new();
+    for c in s.chars() {
+        match c {
+            '(' | '[' => open.push(c),
+            ')' if open.pop() != Some('(') => return false,
+            ']' if open.pop() != Some('[') => return false,
+            _ => {}
+        }
+    }
+    open.is_empty()
 }
 
 /// "Spotify." or "Spotify.[289]": a name doesn't run past it.
@@ -504,6 +687,81 @@ mod tests {
     fn parentheses_stay_balanced() {
         let t = texts(&block(Kind::Para, "The tower is 330 metres (1,083 ft) tall."));
         assert!(t.contains(&"330 metres (1,083 ft)".to_string()), "{t:?}");
+    }
+
+    const FOOTER: &str = "Made with love in Murcia by Ray García. jurl can't make things up. Ray can: he saves it for his \
+        novels: [La Única Verdad](https://www.amazon.es/dp/B08LQYLVLK) (en español), [La Única Realidad](https://www.amazon.es/dp/B0BMJH7MF6) \
+        (en español), [The Only Truth](https://www.amazon.com/dp/B0C8TSVW7F) (in English).";
+
+    #[test]
+    fn the_list_after_a_colon() {
+        let t = texts(&block(Kind::Para, FOOTER));
+        let books = "[La Única Verdad](https://www.amazon.es/dp/B08LQYLVLK) (en español), [La Única Realidad](https://www.amazon.es/dp/B0BMJH7MF6) \
+            (en español), [The Only Truth](https://www.amazon.com/dp/B0C8TSVW7F) (in English)";
+        assert!(t.contains(&books.to_string()), "{t:?}");
+        // Only after the last colon: "he saves it for his novels: …" isn't the list.
+        assert!(!t.iter().any(|s| s.starts_with("he saves it for his novels: [")), "{t:?}");
+        let t = texts(&block(Kind::Para, "Available in three colours: red, green and blue. Ships in a week."));
+        assert!(t.contains(&"red, green and blue".to_string()), "{t:?}");
+        // One thing after a colon isn't a list.
+        let t = texts(&block(Kind::Para, "Founded: San Francisco."));
+        assert_eq!(t.iter().filter(|s| s.as_str() == "San Francisco").count(), 1, "{t:?}");
+    }
+
+    #[test]
+    fn links_in_a_row() {
+        let text =
+            "[Blog](https://b.example) · [X](https://x.com/r) · [LinkedIn](https://linkedin.com/in/r) · r@example.com";
+        let t = texts(&block(Kind::Para, text));
+        assert!(
+            t.contains(
+                &"[Blog](https://b.example) · [X](https://x.com/r) · [LinkedIn](https://linkedin.com/in/r)".to_string()
+            ),
+            "{t:?}"
+        );
+        // A list ending on a bare link keeps the link's closing parenthesis.
+        let t = texts(&block(Kind::Para, "Read more: [one](https://a.example/1), [two](https://a.example/2)."));
+        assert!(t.contains(&"[one](https://a.example/1), [two](https://a.example/2)".to_string()), "{t:?}");
+        // Links with words between them are not one list.
+        let t =
+            texts(&block(Kind::Para, "See [one](https://a.example/1) for setup and the [guide](https://a.example/2)."));
+        assert!(!t.iter().any(|s| s.starts_with("[one]") && s.ends_with("2)")), "{t:?}");
+    }
+
+    #[test]
+    fn short_winners_stay_whole() {
+        for text in ["5,000 requests per hour", "629.88 K (356.73 °C, 674.11 °F)", "count back from the last item"] {
+            let span = Span { block: 0, range: 0..text.len(), label: None };
+            assert!(!refinable(text, &span), "{text}");
+        }
+        let text = "| Limit | Free | Paid |";
+        let cell = Span { block: 0, range: 0..text.len(), label: Some("x".into()) };
+        assert!(!refinable(text, &cell));
+        assert!(refinable(FOOTER, &Span { block: 0, range: 0..FOOTER.len(), label: None }));
+    }
+
+    #[test]
+    fn pieces_of_a_long_winner() {
+        let start = FOOTER.find("Ray can").unwrap();
+        let r = start..FOOTER.len();
+        let pieces: Vec<&str> = refinements(FOOTER, &r).iter().map(|p| &FOOTER[p.clone()]).collect();
+        assert!(pieces.len() <= MAX_REFINE);
+        // The list, each book, and never the whole span; every piece is the page's own text.
+        let books = &FOOTER[FOOTER.find("[La Única Verdad]").unwrap()..FOOTER.rfind('.').unwrap()];
+        assert!(pieces.contains(&books), "{pieces:?}");
+        assert!(pieces.contains(&"[The Only Truth](https://www.amazon.com/dp/B0C8TSVW7F) (in English)"), "{pieces:?}");
+        assert!(pieces.contains(&"[La Única Verdad](https://www.amazon.es/dp/B08LQYLVLK)"), "{pieces:?}");
+        assert!(!pieces.contains(&&FOOTER[trim(FOOTER, r.clone()).unwrap()]), "{pieces:?}");
+        // Punctuation-aligned pieces come first.
+        let first = pieces.iter().position(|p| *p == books).unwrap();
+        assert!(first < 30, "{first}: {pieces:?}");
+        for p in refinements(FOOTER, &r) {
+            assert!(FOOTER.get(p.clone()).is_some() && p.start >= r.start && p.end <= r.end, "{p:?}");
+            // A link's markdown is never cut in half.
+            let s = &FOOTER[p];
+            assert_eq!(s.matches('(').count(), s.matches(')').count(), "{s}");
+        }
+        assert!(refinements("one", &(0..3)).is_empty());
     }
 
     #[test]

@@ -36,7 +36,12 @@ impl Block {
     pub fn markdown(&self) -> String {
         match self.kind {
             Kind::Heading => format!("{} {}", "#".repeat(self.level.unwrap_or(2) as usize), self.text),
-            Kind::Code => format!("```{}\n{}\n```", self.lang.as_deref().unwrap_or(""), self.text.trim_end()),
+            Kind::Code => {
+                // Longer than any fence inside, so code that shows a ``` block prints as one block.
+                let inner = self.text.lines().map(|l| l.trim_start().chars().take_while(|&c| c == '`').count()).max();
+                let fence = "`".repeat(inner.unwrap_or(0).max(2) + 1);
+                format!("{fence}{}\n{}\n{fence}", self.lang.as_deref().unwrap_or(""), self.text.trim_end())
+            }
             Kind::Quote => self.text.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n"),
             Kind::Item => format!("- {}", self.text),
             Kind::Para | Kind::Table => self.text.clone(),
@@ -332,7 +337,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         let t = line.trim_start();
         if let Some(f) = &fence {
             cur.push(line);
-            if t.starts_with(f.as_str()) {
+            if closes_fence(t, f) {
                 fence = None;
                 flush(&mut cur, &mut blocks);
             }
@@ -340,7 +345,8 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         }
         if t.starts_with("```") || t.starts_with("~~~") {
             flush(&mut cur, &mut blocks);
-            fence = Some(t[..3].to_string());
+            let c = t.chars().next().unwrap_or('`');
+            fence = Some(t.chars().take_while(|&x| x == c).collect());
             cur.push(line);
         } else if t.is_empty() || t.starts_with('#') {
             flush(&mut cur, &mut blocks);
@@ -371,6 +377,14 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
     }
     let site_links = links.clone();
     Extracted { title, blocks: join_short(blocks), images, links, site_links, app_shell: false }
+}
+
+/// A fence closes on a line of the same character, at least as long, and nothing else: a ```` block can show
+/// a ```js block inside it, and "```js" never closes anything.
+fn closes_fence(line: &str, fence: &str) -> bool {
+    let Some(c) = fence.chars().next() else { return false };
+    let run = line.chars().take_while(|&x| x == c).count();
+    run >= fence.chars().count() && line[run * c.len_utf8()..].trim().is_empty()
 }
 
 struct Walker<'a> {
@@ -1049,6 +1063,24 @@ mod tests {
             "useEffect(() => {\n  const c = connect();\n\n  return () => {\n    c.disconnect();\n  };\n}, []);"
         );
         assert_eq!(code.lang.as_deref(), Some("js"));
+    }
+
+    #[test]
+    fn markdown_fence_closes_on_its_own_length() {
+        let md = "Intro\n\n````\n$ jurl -q x\n```js\nlet a = 1;\n```\n````\n\nAfter: red, green and blue.\n\n```\n$ ls\n```\n\nThe end.\n";
+        let ex = markdown(md, &base());
+        let code: Vec<&Block> = ex.blocks.iter().filter(|b| b.kind == Kind::Code).collect();
+        assert_eq!(code.len(), 2, "{:?}", ex.blocks);
+        assert_eq!(code[0].text, "$ jurl -q x\n```js\nlet a = 1;\n```");
+        assert_eq!(code[1].text, "$ ls");
+        assert!(code[0].markdown().starts_with("````\n") && code[0].markdown().ends_with("\n````"));
+        assert_eq!(code[1].markdown(), "```\n$ ls\n```");
+        assert!(
+            ex.blocks.iter().any(|b| b.kind == Kind::Para && b.text == "After: red, green and blue."),
+            "{:?}",
+            ex.blocks
+        );
+        assert!(ex.blocks.iter().any(|b| b.kind == Kind::Para && b.text == "The end."), "{:?}", ex.blocks);
     }
 
     #[test]
