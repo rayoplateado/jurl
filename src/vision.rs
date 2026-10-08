@@ -146,20 +146,17 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         .iter()
         .map(|img| {
             let p_text = a.noul(&format!("img{}", img.i)).unwrap_or(0.0);
-            let p = match looks.get(img.i) {
-                // Searching: Clef saw the pixels *and* the alt/caption, so it decides.
-                Some(Ok(p_pixels)) if query.is_some() => *p_pixels,
-                // Pixels say what it is; Jev's page context says whether it belongs here.
-                Some(Ok(p_pixels)) => (p_pixels + p_text) / 2.0,
+            let pixels = match looks.get(img.i) {
+                Some(Ok(p_pixels)) => Some(*p_pixels),
                 Some(Err(e)) => {
                     if ctx.args.timing {
                         eprintln!("jurl: clef skipped {}: {e:#}", img.url);
                     }
-                    p_text
+                    None
                 }
-                None => p_text,
+                None => None,
             };
-            (img, p)
+            (img, blend(p_text, pixels, query.is_some()))
         })
         .collect();
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -192,6 +189,18 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         .collect();
     let text = kept.iter().map(|(i, _)| format!("{}\n", i.url)).collect();
     Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }) })
+}
+
+/// An image's score from Jev's text score and, when Clef answered, its pixel score. Without an answer the text score
+/// stands.
+fn blend(p_text: f64, pixels: Option<f64>, searching: bool) -> f64 {
+    match pixels {
+        // Searching: Clef saw the pixels *and* the alt/caption, so it decides.
+        Some(p_pixels) if searching => p_pixels,
+        // Pixels say what it is; Jev's page context says whether it belongs here.
+        Some(p_pixels) => (p_pixels + p_text) / 2.0,
+        None => p_text,
+    }
 }
 
 /// Clef's answers for the images it looked at, by image index (`Image::i`), lowest index first.
@@ -316,6 +325,22 @@ mod tests {
         };
         let got = hedged(call, Duration::from_millis(100)).await;
         (got, calls.into_inner())
+    }
+
+    #[test]
+    fn searching_takes_the_pixel_score_alone() {
+        assert_eq!(blend(0.75, Some(0.25), true), 0.25);
+    }
+
+    #[test]
+    fn otherwise_the_pixel_and_text_scores_average() {
+        assert_eq!(blend(0.75, Some(0.25), false), 0.5);
+    }
+
+    #[test]
+    fn without_a_pixel_score_the_text_score_stands() {
+        assert_eq!(blend(0.75, None, true), 0.75);
+        assert_eq!(blend(0.75, None, false), 0.75);
     }
 
     #[test]
