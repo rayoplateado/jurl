@@ -879,11 +879,12 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered>
         t.lap(format!("{} links", candidates.len()));
         (candidates, scores.into_iter().map(Some).collect())
     } else {
-        if ex.links.is_empty() {
+        // Footnote marks and image-only links are left out, as with -q: they open a note or a photo, not the topic.
+        let candidates: Vec<Link> = ex.links.iter().filter(|l| !l.marginal).cloned().collect();
+        if candidates.is_empty() {
             return Err(not_found(format!("no links found in {}", ctx.url)));
         }
-        let items = ex
-            .links
+        let items = candidates
             .iter()
             .map(|l| Item {
                 state: json!({ "i": l.i, "text": l.text, "context": l.context, "host": l.url.host_str() }),
@@ -900,7 +901,8 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered>
             .collect();
         let a = ctx.judge("links", items, Map::new()).await?;
         t.lap(a.label());
-        (ex.links.clone(), ex.links.iter().map(|l| a.noul(&format!("l{}", l.i))).collect())
+        let scores = candidates.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
+        (candidates, scores)
     };
     let kept = top(&scores, ctx.args.threshold(), ctx.args.limit(20));
     if kept.is_empty() {
