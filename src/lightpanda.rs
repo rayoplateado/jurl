@@ -5,7 +5,7 @@
 use std::{
     env, fs,
     io::{IsTerminal, Write, stderr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -79,6 +79,11 @@ pub async fn ensure(configured: Option<String>) -> Result<PathBuf> {
     Ok(dest)
 }
 
+/// Where a download is written before it is verified: `lightpanda-1.0.0.part`. `with_extension` would replace the `.0`.
+fn part_path(dest: &Path) -> PathBuf {
+    dest.with_added_extension("part")
+}
+
 async fn download(name: &str, sha: &str, dest: &PathBuf) -> Result<()> {
     let url = format!("https://github.com/lightpanda-io/browser/releases/download/{VERSION}/{name}");
     // No overall timeout: this is a big file on an unknown connection.
@@ -90,7 +95,7 @@ async fn download(name: &str, sha: &str, dest: &PathBuf) -> Result<()> {
     eprint!("jurl: this page needs JavaScript; downloading Lightpanda {VERSION} ({} MB, once)…", mb(total));
 
     fs::create_dir_all(dest.parent().unwrap())?;
-    let part = dest.with_extension("part");
+    let part = part_path(dest);
     let mut file = fs::File::create(&part)?;
     let mut hash = Sha256::new();
     let mut got = 0u64;
@@ -122,4 +127,14 @@ async fn download(name: &str, sha: &str, dest: &PathBuf) -> Result<()> {
     fs::rename(&part, dest)?;
     eprintln!(" done");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_download_keeps_the_full_name() {
+        assert_eq!(part_path(Path::new("/cache/lightpanda-1.0.0")), PathBuf::from("/cache/lightpanda-1.0.0.part"));
+    }
 }
