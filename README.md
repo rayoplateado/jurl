@@ -402,7 +402,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | `src/precise.rs` | `--precise`: candidate spans and the link to them |
 | `src/links.rs` | `--links` and `--links -q` (ranked by the answer), `--follow`: which links lead to the answer |
 | `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
-| `src/extract.rs` | HTML and markdown → blocks, links, images |
+| `src/extract/mod.rs` · `src/extract/html.rs` · `src/extract/markdown.rs` · `src/extract/join.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
 | `src/setup.rs` · `src/config.rs` | First-run key prompt, `jurl init`, key storage |
