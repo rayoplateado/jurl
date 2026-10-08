@@ -4,7 +4,7 @@
 //! page looks closest, backtracking when a trail goes cold (hot and cold). The site's own map (`llms.txt`,
 //! `sitemap.xml`) is read alongside the first page: it often names the right page outright.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use futures::future::join_all;
@@ -78,16 +78,17 @@ impl Site {
     }
 }
 
-/// `robots.txt` for every crawler (`User-agent: *`): the paths jurl won't open. Patterns with wildcards are left out
-/// rather than guessed at.
+/// `robots.txt` for every crawler (`User-agent: *`) on one host: the paths jurl won't open. Patterns with wildcards are
+/// left out rather than guessed at.
 #[derive(Default)]
 struct Robots {
     disallow: Vec<String>,
 }
 
 impl Robots {
-    async fn load(client: &Client, start: &Url) -> Self {
-        let Ok(url) = start.join("/robots.txt") else { return Self::default() };
+    /// The rules in the `robots.txt` of `u`'s host. No file, or none within 4 s: no rules.
+    async fn load(client: &Client, u: &Url) -> Self {
+        let Ok(url) = u.join("/robots.txt") else { return Self::default() };
         let Some(body) = small_text(client, &url).await else { return Self::default() };
         Self::parse(&body)
     }
@@ -122,6 +123,49 @@ impl Robots {
 
     fn allows(&self, u: &Url) -> bool {
         !self.disallow.iter().any(|d| u.path().starts_with(d.as_str()))
+    }
+}
+
+/// The key a host's `robots.txt` is kept under: the host without `www.`, as [`Site`] counts hosts.
+fn host_key(u: &Url) -> Option<&str> {
+    u.host_str().map(|h| h.trim_start_matches("www."))
+}
+
+/// Each host's `robots.txt`, by [`host_key`]. A host's file is read the first time one of its leads is among the best
+/// few, so a host the search never gets to costs no request, and a subdomain's pages are checked against its own file.
+/// A host with no usable file is kept with no rules, so it isn't asked again.
+#[derive(Default)]
+struct RobotsByHost {
+    by_host: HashMap<String, Robots>,
+}
+
+impl RobotsByHost {
+    /// Whether `u`'s host's rules allow it. A host not read yet allows it: its leads stay in the list until its file is
+    /// read, and only then can a rule drop them.
+    fn allows(&self, u: &Url) -> bool {
+        host_key(u).and_then(|h| self.by_host.get(h)).is_none_or(|r| r.allows(u))
+    }
+
+    fn insert(&mut self, u: &Url, robots: Robots) {
+        if let Some(host) = host_key(u) {
+            self.by_host.insert(host.to_string(), robots);
+        }
+    }
+
+    /// Reads the `robots.txt` of each host of `urls` that has none yet, all at once. Returns how many it read.
+    async fn load_for(&mut self, client: &Client, urls: &[Url]) -> usize {
+        let mut new: Vec<&Url> = Vec::new();
+        for u in urls {
+            let Some(host) = host_key(u) else { continue };
+            if !self.by_host.contains_key(host) && !new.iter().any(|v| host_key(v) == Some(host)) {
+                new.push(u);
+            }
+        }
+        let read = join_all(new.iter().map(|u| Robots::load(client, u))).await;
+        for (u, robots) in new.iter().zip(read) {
+            self.insert(u, robots);
+        }
+        new.len()
     }
 }
 
@@ -390,10 +434,11 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     };
     let mut known = HashSet::new();
     let mut field_scores = FieldScores::new();
-    let (first, hints, robots) = tokio::join!(
+    let mut robots = RobotsByHost::default();
+    let (first, hints, _) = tokio::join!(
         visit(args, cfg, client, key, &start, &site, &known, &field_scores),
         hints,
-        Robots::load(client, &start)
+        robots.load_for(client, std::slice::from_ref(&start)),
     );
     let mut first = first?;
     let hints = hints?;
@@ -474,8 +519,24 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         let mut seen = HashSet::new();
         leads.retain(|l| {
             let k = self::key(&l.url);
-            !visited.contains(&k) && robots.allows(&l.url) && seen.insert(k)
+            !visited.contains(&k) && seen.insert(k)
         });
+        // The leads that can be picked this step are the best few, each checked against its own host's robots.txt
+        // first. A lead the rules drop brings the next one up, which may be on a host not read yet: so this goes round
+        // until the best few are all read and checked. Leads further down wait in the list.
+        let mut read = 0;
+        loop {
+            leads.retain(|l| robots.allows(&l.url));
+            let best: Vec<Url> = leads.iter().take(SHORTLIST).map(|l| l.url.clone()).collect();
+            let n = robots.load_for(client, &best).await;
+            if n == 0 {
+                break;
+            }
+            read += n;
+        }
+        if read > 0 {
+            t.lap(format!("robots {read}"));
+        }
         // Done when no page left could beat what's been found: each lead's score is the most it could rank.
         let best_found = found.iter().map(|f| f.0).fold(0.0, f64::max);
         if !found.is_empty() && leads.first().is_none_or(|l| l.score <= best_found + BETTER_BY) {
@@ -626,6 +687,34 @@ mod tests {
         assert!(!r.allows(&Url::parse("https://x.com/admin/users").unwrap()));
         assert!(r.allows(&Url::parse("https://x.com/g/page").unwrap()));
         assert!(r.allows(&Url::parse("https://x.com/pricing").unwrap()));
+    }
+
+    #[test]
+    fn each_host_is_checked_against_its_own_robots_txt() {
+        let url = |s: &str| Url::parse(s).unwrap();
+        let mut robots = RobotsByHost::default();
+        // Not read yet: allowed, so its leads wait in the list until its file is read.
+        assert!(robots.allows(&url("https://docs.x.com/admin")));
+        robots.insert(&url("https://docs.x.com/"), Robots::parse("User-agent: *\nDisallow: /admin\n"));
+        assert!(!robots.allows(&url("https://docs.x.com/admin")));
+        // A host's rules are not another host's: x.com's file doesn't speak for docs, nor docs' for x.com.
+        assert!(robots.allows(&url("https://x.com/admin")));
+        robots.insert(&url("https://x.com/"), Robots::parse("User-agent: *\nDisallow: /private\n"));
+        assert!(!robots.allows(&url("https://x.com/private/plans")));
+        assert!(robots.allows(&url("https://docs.x.com/private/plans")));
+        assert!(!robots.allows(&url("https://docs.x.com/admin")));
+    }
+
+    #[test]
+    fn www_is_the_same_host_and_no_file_allows_everything() {
+        let url = |s: &str| Url::parse(s).unwrap();
+        let mut robots = RobotsByHost::default();
+        robots.insert(&url("https://www.x.com/"), Robots::parse("User-agent: *\nDisallow: /admin\n"));
+        assert!(!robots.allows(&url("https://x.com/admin")));
+        assert!(!robots.allows(&url("https://www.x.com/admin")));
+        // A host with no file (or none within 4 s) is kept with no rules: allowed, and it stays that way.
+        robots.insert(&url("https://docs.x.com/"), Robots::default());
+        assert!(robots.allows(&url("https://docs.x.com/admin")));
     }
 
     #[test]
