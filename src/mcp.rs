@@ -7,7 +7,7 @@
 //! `jurl` would print. A miss ("the page doesn't say") is a normal result, as exit code 1 is; a failure (the page
 //! couldn't be read, a bad key, no credits) is a tool error, as exit code 2 is.
 
-use std::{collections::VecDeque, future::Future};
+use std::{collections::VecDeque, future::Future, sync::LazyLock};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -177,11 +177,13 @@ fn tools() -> Value {
     ])
 }
 
+/// `tools/list`'s answer, built once: it never changes while the server runs, and every call is checked against it.
+static TOOLS: LazyLock<Value> = LazyLock::new(tools);
+
 /// The jurl command line a tool call stands for, after checking its arguments against the tool's schema.
 fn command(name: &str, args: &Value) -> Result<Vec<String>, String> {
-    let tools = tools();
     let tool =
-        tools.as_array().unwrap().iter().find(|t| t["name"] == name).ok_or_else(|| format!("unknown tool {name}"))?;
+        TOOLS.as_array().unwrap().iter().find(|t| t["name"] == name).ok_or_else(|| format!("unknown tool {name}"))?;
     let schema = &tool["inputSchema"];
     let args = match args {
         Value::Null => &Map::new(),
@@ -301,10 +303,10 @@ fn handle(line: &str) -> Reply {
             })
         }
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools() }),
+        "tools/list" => json!({ "tools": TOOLS.clone() }),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or_default();
-            if !tools().as_array().unwrap().iter().any(|t| t["name"] == name) {
+            if !TOOLS.as_array().unwrap().iter().any(|t| t["name"] == name) {
                 return Reply::Now(Some(error(id, -32602, &format!("unknown tool: {name}"))));
             }
             // Bad arguments are the model's to fix, so they come back as a tool error it can read.
