@@ -373,7 +373,8 @@ where
     F: Fn(Vec<String>) -> Fut,
     Fut: Future<Output = Value>,
 {
-    let mut lines = input.lines();
+    // Lines are read as bytes: one that isn't UTF-8 is answered, not allowed to end the loop with calls in flight.
+    let mut segments = input.split(b'\n');
     let mut open = true;
     let mut pending = VecDeque::new();
     let mut calls = FuturesUnordered::new();
@@ -389,14 +390,18 @@ where
             return Ok(());
         }
         let reply = tokio::select! {
-            line = lines.next_line(), if open => match line.context("reading stdin")? {
-                Some(line) if line.trim().is_empty() => continue,
-                Some(line) => match handle(&line) {
-                    Reply::Now(reply) => reply,
-                    Reply::Run { id, argv } => {
-                        pending.push_back((id, argv));
-                        continue;
-                    }
+            segment = segments.next_segment(), if open => match segment.context("reading stdin")? {
+                Some(bytes) => match std::str::from_utf8(&bytes) {
+                    Ok(line) if line.trim().is_empty() => continue,
+                    Ok(line) => match handle(line) {
+                        Reply::Now(reply) => reply,
+                        Reply::Run { id, argv } => {
+                            pending.push_back((id, argv));
+                            continue;
+                        }
+                    },
+                    // Not text, so not JSON: there's no id to answer, and serving goes on for the calls in flight.
+                    Err(_) => Some(error(Value::Null, -32700, "parse error: not valid UTF-8")),
                 },
                 None => {
                     open = false;
@@ -654,5 +659,24 @@ mod tests {
         let mut ids: Vec<u64> = replies[1..].iter().map(|r| r["id"].as_u64().unwrap()).collect();
         ids.sort();
         assert_eq!(ids, (1..=10).collect::<Vec<u64>>());
+    }
+
+    #[tokio::test]
+    async fn a_line_that_is_not_utf8_is_a_parse_error_and_serving_goes_on() {
+        // The tool call is still running when the bad line arrives: its reply comes last, after both pings.
+        let mut input =
+            request(1, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } })).into_bytes();
+        input.extend_from_slice(request(2, "ping", json!({})).as_bytes());
+        input.extend_from_slice(b"\xff\xfe not text\n");
+        input.extend_from_slice(request(3, "ping", json!({})).as_bytes());
+        let mut out = Vec::new();
+        drive(input.as_slice(), &mut out, slow_call).await.unwrap();
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 4, "{replies:?}");
+        assert_eq!(replies[0]["id"], 2);
+        assert_eq!(replies[1]["error"]["code"], -32700);
+        assert_eq!(replies[1]["id"], Value::Null);
+        assert_eq!(replies[2]["id"], 3);
+        assert_eq!(replies[3]["id"], 1);
     }
 }
