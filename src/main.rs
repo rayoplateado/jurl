@@ -373,7 +373,7 @@ async fn run(mut args: Args) -> Result<()> {
     if args.timing {
         t.report();
     }
-    if let Some(text) = stdout_for(&args, &done)? {
+    if let Some(text) = stdout_for(&args, &done, &decide::USAGE)? {
         write!(stdout().lock(), "{text}")?;
     }
     done.map(|_| ())
@@ -381,8 +381,15 @@ async fn run(mut args: Args) -> Result<()> {
 
 /// What goes to stdout. A miss prints nothing, except in JSON with --precise: what came closest, with
 /// `"answer": null`, or with nothing close, `"closest": null` too, so a script reading stdout always gets an object.
-fn stdout_for(args: &Args, done: &Result<Rendered>) -> Result<Option<String>> {
-    let json = |v: &Value| -> Result<String> { Ok(format!("{}\n", serde_json::to_string_pretty(v)?)) };
+/// The JSON carries the run's `usage` either way, so a miss can be costed too.
+fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::Usage) -> Result<Option<String>> {
+    let json = |v: &Value| -> Result<String> {
+        let mut v = v.clone();
+        if let Some(o) = v.as_object_mut() {
+            o.insert("usage".to_string(), usage.json());
+        }
+        Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
+    };
     match done {
         Ok(r) if args.json => json(&r.json).map(Some),
         Ok(r) => Ok(Some(r.text.clone())),
@@ -499,6 +506,7 @@ async fn load(
     let mut ex =
         if page.is_markdown { extract::markdown(&page.body, &page.url) } else { extract::html(&page.body, &page.url) };
     t.lap(if page.is_markdown { "extract(md)" } else { "extract" });
+    decide::USAGE.pages.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     // A JS app with (almost) no server-rendered text: render it instead of giving up.
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
@@ -1143,9 +1151,10 @@ mod tests {
     fn a_precise_miss_still_prints_json() {
         let mut args = Args::parse_from(["jurl", "--precise", "--json", "-q", "books?", "jurl.dev"]);
         prepare(&mut args).unwrap();
+        let usage = decide::Usage::new();
         // Nothing worth searching on the page: no closest, still an object with a null answer.
         let miss: Result<Rendered> = Err(not_found("nothing in https://jurl.dev/ answers that".into()));
-        let out = stdout_for(&args, &miss).unwrap().expect("JSON on a miss");
+        let out = stdout_for(&args, &miss, &usage).unwrap().expect("JSON on a miss");
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["answer"], Value::Null);
         assert_eq!(v["closest"], Value::Null);
@@ -1153,11 +1162,39 @@ mod tests {
         assert_eq!(v["ask"], "books?");
         // A miss with a closest candidate prints that.
         let close = Rendered { text: String::new(), json: json!({ "answer": null, "closest": "x" }) };
-        let out = stdout_for(&args, &Err(missed("no answer".into(), close))).unwrap().unwrap();
+        let out = stdout_for(&args, &Err(missed("no answer".into(), close)), &usage).unwrap().unwrap();
         assert!(out.contains("\"closest\": \"x\""), "{out}");
         // Failures (exit 2) print nothing, and neither does a text-mode miss.
-        assert_eq!(stdout_for(&args, &Err(anyhow!("HTTP 404"))).unwrap(), None);
+        assert_eq!(stdout_for(&args, &Err(anyhow!("HTTP 404")), &usage).unwrap(), None);
         args.json = false;
-        assert_eq!(stdout_for(&args, &Err(not_found("nothing".into()))).unwrap(), None);
+        assert_eq!(stdout_for(&args, &Err(not_found("nothing".into())), &usage).unwrap(), None);
+    }
+
+    #[test]
+    fn json_says_what_the_run_cost() {
+        let mut args = Args::parse_from(["jurl", "--precise", "--json", "-q", "price?", "jurl.dev"]);
+        prepare(&mut args).unwrap();
+        let usage = decide::Usage::new();
+        usage.pages.fetch_add(3, std::sync::atomic::Ordering::Relaxed);
+        usage.jev(&Answers { requests: 4, input_tokens: 5321, ..Answers::default() });
+        let want = json!({
+            "pages": 3,
+            "jev": { "requests": 4, "input_tokens": 5321 },
+            "clef": { "requests": 0, "input_tokens": 0, "images": 0 },
+        });
+        let usage_of = |done: Result<Rendered>| {
+            let out = stdout_for(&args, &done, &usage).unwrap().expect("JSON");
+            serde_json::from_str::<Value>(&out).unwrap()["usage"].clone()
+        };
+        // Found, a miss with something close and a miss with nothing close all carry it.
+        let found = Rendered { text: String::new(), json: json!({ "answer": "$8" }) };
+        assert_eq!(usage_of(Ok(found)), want);
+        let close = Rendered { text: String::new(), json: json!({ "answer": null, "closest": "x" }) };
+        assert_eq!(usage_of(Err(missed("no answer".into(), close))), want);
+        assert_eq!(usage_of(Err(not_found("nothing".into()))), want);
+        // The text a person reads doesn't change.
+        args.json = false;
+        let found = Rendered { text: "$8\n".into(), json: json!({ "answer": "$8" }) };
+        assert_eq!(stdout_for(&args, &Ok(found), &usage).unwrap().as_deref(), Some("$8\n"));
     }
 }
