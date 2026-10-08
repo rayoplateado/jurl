@@ -315,7 +315,8 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         }
         let i = blocks.len();
         let (kind, level, text) = if let Some(rest) = text.strip_prefix('#') {
-            let level = 1 + rest.chars().take_while(|&c| c == '#').count() as u8;
+            // Six levels, as in HTML: a longer run of #s is still a heading, at level 6.
+            let level = (1 + rest.chars().take_while(|&c| c == '#').count()).min(6) as u8;
             (Kind::Heading, Some(level), rest.trim_start_matches('#').trim().to_string())
         } else if text.starts_with("```") || text.starts_with("~~~") {
             let mut lines = text.lines();
@@ -1161,6 +1162,20 @@ mod tests {
         assert_eq!(ex.title, "Pricing");
         let texts: Vec<_> = ex.blocks.iter().map(|b| b.text.as_str()).collect();
         assert_eq!(texts, ["- Free plan\n- Pro plan"]);
+    }
+
+    #[test]
+    fn a_seventh_hash_is_a_level_six_heading() {
+        let ex = markdown("####### Deep\n", &base());
+        assert_eq!((ex.blocks[0].kind, ex.blocks[0].level), (Kind::Heading, Some(6)));
+        assert_eq!(ex.blocks[0].text, "Deep");
+    }
+
+    #[test]
+    fn a_run_of_hashes_longer_than_a_byte_is_not_an_overflow() {
+        let ex = markdown(&format!("{} Deep\n", "#".repeat(256)), &base());
+        assert_eq!((ex.blocks[0].kind, ex.blocks[0].level), (Kind::Heading, Some(6)));
+        assert_eq!(ex.blocks[0].text, "Deep");
     }
 
     #[test]
