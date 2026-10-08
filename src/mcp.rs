@@ -9,7 +9,7 @@
 
 use std::{collections::VecDeque, future::Future, sync::LazyLock};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use futures::{StreamExt, stream::FuturesUnordered};
 use reqwest::Client;
@@ -424,6 +424,8 @@ where
     // Lines are read as bytes: one that isn't UTF-8 is answered, not allowed to end the loop with calls in flight.
     let mut segments = input.split(b'\n');
     let mut open = true;
+    // A read error stops the input, not the answers: the calls already sent are answered, then the error is returned.
+    let mut failed: Option<anyhow::Error> = None;
     let mut pending = VecDeque::new();
     let mut calls = FuturesUnordered::new();
     loop {
@@ -435,11 +437,11 @@ where
         }
         // Once stdin has closed, only the calls still running are left to answer.
         if !open && calls.is_empty() {
-            return Ok(());
+            return failed.map_or(Ok(()), Err);
         }
         let reply = tokio::select! {
-            segment = segments.next_segment(), if open => match segment.context("reading stdin")? {
-                Some(bytes) => match std::str::from_utf8(&bytes) {
+            segment = segments.next_segment(), if open => match segment {
+                Ok(Some(bytes)) => match std::str::from_utf8(&bytes) {
                     Ok(line) if line.trim().is_empty() => continue,
                     Ok(line) => match handle(line) {
                         Reply::Now(reply) => reply,
@@ -458,7 +460,12 @@ where
                     // Not text, so not JSON: there's no id to answer, and serving goes on for the calls in flight.
                     Err(_) => Some(error(Value::Null, -32700, "parse error: not valid UTF-8")),
                 },
-                None => {
+                Ok(None) => {
+                    open = false;
+                    continue;
+                }
+                Err(e) => {
+                    failed = Some(anyhow::Error::new(e).context("reading stdin"));
                     open = false;
                     continue;
                 }
@@ -788,5 +795,50 @@ mod tests {
         // The refused call never ran; the accepted ones ran in arrival order.
         let urls: Vec<String> = (1..=accepted).map(|i| format!("x{i}.com")).collect();
         assert_eq!(*started.lock().unwrap(), urls);
+    }
+
+    /// A stdin that delivers `bytes`, then fails, as a pipe does when its read errors.
+    struct BrokenStdin(Vec<u8>);
+
+    impl tokio::io::AsyncRead for BrokenStdin {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.0.is_empty() {
+                return std::task::Poll::Ready(Err(std::io::Error::other("stdin broke")));
+            }
+            let n = self.0.len().min(buf.remaining());
+            buf.put_slice(&self.0[..n]);
+            self.0.drain(..n);
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stdin_read_error_answers_the_call_already_sent_and_is_then_returned() {
+        let line = request(1, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } }));
+        let mut out = Vec::new();
+        let err = drive(BufReader::new(BrokenStdin(line.into_bytes())), &mut out, slow_call).await.unwrap_err();
+        assert_eq!(format!("{err:#}"), "reading stdin: stdin broke");
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(replies[0]["id"], 1);
+        assert_eq!(replies[0]["result"]["content"][0]["text"], "ok");
+    }
+
+    #[tokio::test]
+    async fn a_stdin_read_error_answers_the_calls_waiting_for_a_slot_too() {
+        // More calls than slots, so some are still waiting when the read fails: all of them are answered.
+        let calls = MAX_CALLS + 2;
+        let input: String = (1..=calls as u64)
+            .map(|i| request(i, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } })))
+            .collect();
+        let mut out = Vec::new();
+        assert!(drive(BufReader::new(BrokenStdin(input.into_bytes())), &mut out, slow_call).await.is_err());
+        let mut ids: Vec<u64> = lines_of(&out).iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, (1..=calls as u64).collect::<Vec<u64>>());
     }
 }
