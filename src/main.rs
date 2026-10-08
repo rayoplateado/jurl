@@ -1097,7 +1097,9 @@ async fn look(
     Ok(CONTENT_KINDS.iter().filter_map(|k| probs.get(*k)).sum())
 }
 
-/// Start `call`; if it hasn't finished after `after`, start a second one and take whichever wins.
+/// Start `call`; if it hasn't finished after `after`, start a second one and take whichever answers first.
+/// Once both are running, a copy that fails doesn't end the race: the other one's answer still counts.
+/// When both fail, the later error is returned.
 async fn hedged<F, Fut, T>(call: F, after: Duration) -> Result<T>
 where
     F: Fn() -> Fut,
@@ -1111,10 +1113,12 @@ where
     }
     let second = call();
     tokio::pin!(second);
-    tokio::select! {
-        r = &mut first => r,
-        r = &mut second => r,
-    }
+    // The first copy to finish, unless it failed: then the other copy's result (if both failed, the later error).
+    let (done, other) = tokio::select! {
+        r = &mut first => (r, second),
+        r = &mut second => (r, first),
+    };
+    if done.is_ok() { done } else { other.await }
 }
 
 /// The `max` best scores at or above `threshold` as (index, score), best first. Ties go to the lower index, so the
@@ -1143,6 +1147,8 @@ async fn thumbnail(client: &Client, url: &url::Url) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     #[test]
@@ -1358,5 +1364,47 @@ mod tests {
         assert!(write_out(&mut Gone(ErrorKind::BrokenPipe), "$8\n").is_ok());
         // Any other write error still is one.
         assert!(write_out(&mut Gone(ErrorKind::PermissionDenied), "$8\n").is_err());
+    }
+
+    /// Two copies of a call, hedged after 100 ms. Each answers its value, or fails (`None`), after its own delay in ms.
+    /// Returns the result and how many copies were started.
+    async fn hedge(first: (u64, Option<u32>), second: (u64, Option<u32>)) -> (Result<u32>, usize) {
+        let calls = AtomicUsize::new(0);
+        let call = || {
+            let (ms, answer) = if calls.fetch_add(1, Ordering::SeqCst) == 0 { first } else { second };
+            async move {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                answer.ok_or_else(|| anyhow!("failed after {ms} ms"))
+            }
+        };
+        let got = hedged(call, Duration::from_millis(100)).await;
+        (got, calls.into_inner())
+    }
+
+    #[tokio::test]
+    async fn an_answer_before_the_hedge_starts_no_second_copy() {
+        let (got, calls) = hedge((0, Some(1)), (0, Some(2))).await;
+        assert_eq!(got.unwrap(), 1);
+        assert_eq!(calls, 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_first_copy_hands_the_race_to_the_second() {
+        let (got, calls) = hedge((300, None), (300, Some(2))).await;
+        assert_eq!(got.unwrap(), 2);
+        assert_eq!(calls, 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_second_copy_hands_the_race_to_the_first() {
+        let (got, _) = hedge((500, Some(1)), (200, None)).await;
+        assert_eq!(got.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn when_both_copies_fail_the_later_error_is_returned() {
+        let (got, calls) = hedge((300, None), (500, None)).await;
+        assert_eq!(got.unwrap_err().to_string(), "failed after 500 ms");
+        assert_eq!(calls, 2);
     }
 }
