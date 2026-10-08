@@ -311,8 +311,9 @@ struct Lead {
 
 /// Jev compares the best leads side by side ("which of these is the next step?"): scores given to links on different
 /// pages one at a time aren't on the same scale. Returns the shortlist reordered by Jev's choice, and the share that
-/// went to "none of these" (an option so the others aren't forced to look good).
-async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Option<(Vec<usize>, f64)> {
+/// went to "none of these" (an option so the others aren't forced to look good). `None` when Jev gives no choice: the
+/// leads keep their own order. An API error ends the search.
+async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Result<Option<(Vec<usize>, f64)>> {
     let q = ctx.ask();
     let items: Vec<Item> = leads
         .iter()
@@ -335,14 +336,18 @@ async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Option<(Vec<usize>, f64)> 
         ),
         serde_json::Value::Object(criteria),
     );
-    let a = ctx.judge("links", items, Map::from_iter([("next".to_string(), pick)])).await.ok()?;
-    let probs = a.probabilities("next")?;
+    let a = match ctx.judge("links", items, Map::from_iter([("next".to_string(), pick)])).await {
+        Ok(a) => a,
+        Err(e) if is_api_error(&e) => return Err(e),
+        Err(_) => return Ok(None),
+    };
+    let Some(probs) = a.probabilities("next") else { return Ok(None) };
     let mut order: Vec<usize> = (0..leads.len()).collect();
     order.sort_by(|&x, &y| {
         let p = |i: usize| probs.get(&format!("o{i}")).copied().unwrap_or(0.0);
         p(y).total_cmp(&p(x))
     });
-    Some((order, probs.get("none").copied().unwrap_or(0.0)))
+    Ok(Some((order, probs.get("none").copied().unwrap_or(0.0))))
 }
 
 pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: Url, t: &mut Timer) -> Result<Rendered> {
@@ -376,11 +381,12 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             app_shell: false,
         };
         let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &start, &empty) };
-        let scores = links::score(&ctx, &links, "The page at the URL in `links`", None)
-            .await
-            .map(|(scores, _)| scores)
-            .unwrap_or_else(|_| vec![0.0; links.len()]);
-        links.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect::<Vec<_>>()
+        let scores = match links::score(&ctx, &links, "The page at the URL in `links`", None).await {
+            Ok((scores, _)) => scores,
+            Err(e) if is_api_error(&e) => return Err(e),
+            Err(_) => vec![0.0; links.len()],
+        };
+        Ok(links.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect::<Vec<_>>())
     };
     let mut known = HashSet::new();
     let mut field_scores = FieldScores::new();
@@ -390,6 +396,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         Robots::load(client, &start)
     );
     let mut first = first?;
+    let hints = hints?;
     known.extend(first.menus.iter().cloned());
     field_scores.extend(std::mem::take(&mut first.new_field_scores));
     t.lap(format!("page 1 + site map ({} pages listed)", hints.len()));
@@ -483,7 +490,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         let short: Vec<&Lead> = leads.iter().take(SHORTLIST).collect();
         // On a long trail (`--follow 10` and up) no page "is the next step" to something far away, so Jev's side-by-side
         // pick only adds noise there: the leads' own scores decide.
-        let order = if short.len() > n && max < 10 { shortlist(&site_ctx, &short).await } else { None };
+        let order = if short.len() > n && max < 10 { shortlist(&site_ctx, &short).await? } else { None };
         t.lap("next");
         // "None of these leads anywhere" isn't a reason to stop: on a long trail (Paris → … → Aspirin) no single step
         // looks like it leads to the answer. It only orders the shortlist.
