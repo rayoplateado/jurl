@@ -216,12 +216,32 @@ pub const SHORT_BLOCK_CHARS: usize = 25;
 /// A run of joined short blocks stops growing here.
 const JOINED_MAX_CHARS: usize = 400;
 
+/// A heading that is only a price, so it joins its card: it starts with a currency sign, or it is figures, currency
+/// signs and separators with letters only as unit words ("$12", "€9.50", "12 €", "$10/mo", "10 per user/month").
+/// "Step 2" is a section title.
+fn is_price(text: &str) -> bool {
+    const CURRENCY: &[char] = &['$', '€', '£', '¥', '₹', '₩', '₽', '₺'];
+    const SEPARATORS: &[char] = &['.', ',', '/', '-', '–', '|', '·'];
+    // A unit word also matches with a trailing "s" ("users").
+    const UNITS: &[&str] = &["a", "per", "mo", "month", "yr", "year", "user", "seat"];
+    let t = text.trim();
+    if !t.chars().any(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let figure = |c: char| c.is_ascii_digit() || c.is_whitespace() || CURRENCY.contains(&c) || SEPARATORS.contains(&c);
+    let only_figures = t.chars().all(|c| c.is_alphabetic() || figure(c));
+    let only_units = t
+        .split(|c: char| !c.is_alphabetic())
+        .all(|w| w.is_empty() || UNITS.contains(&w.to_lowercase().trim_end_matches('s')));
+    t.starts_with(CURRENCY) || (only_figures && only_units)
+}
+
 /// Consecutive short paragraphs and list items become one block, a line each, as the page shows them: a pricing
 /// card built from bare `<div>`s is then one block that says "Basic / $10 / per user/month" instead of pieces too
-/// short to judge. Headings, code, tables and quotes are never joined.
+/// short to judge. Headings, code, tables and quotes are never joined, except a heading that is a price.
 fn join_short(blocks: Vec<Block>) -> Vec<Block> {
-    // A short heading with a figure in it ("### $12") is a value set big, not a section title.
-    let value = |b: &Block| b.kind == Kind::Heading && b.text.chars().any(|c| c.is_ascii_digit());
+    // A heading that is a price ("### $12") is a figure set big on its card, not a section title.
+    let value = |b: &Block| b.kind == Kind::Heading && is_price(&b.text);
     let short = |b: &Block| {
         (matches!(b.kind, Kind::Para | Kind::Item) || value(b)) && b.text.chars().count() < SHORT_BLOCK_CHARS
     };
@@ -902,6 +922,41 @@ mod tests {
         let ex = markdown("### Teams\n\nYEARLY\n\n### $12\n\nper user/month\n\nSave 25%\n", &base());
         let texts: Vec<_> = ex.blocks.into_iter().map(|b| b.text).collect();
         assert_eq!(texts, ["Teams", "YEARLY\n$12\nper user/month\nSave 25%"]);
+    }
+
+    #[test]
+    fn a_numbered_heading_is_not_a_price() {
+        let want = [
+            (Kind::Heading, Some(2), "Step 2"),
+            (Kind::Para, None, "Install it."),
+            (Kind::Heading, Some(2), "Step 3"),
+            (Kind::Para, None, "Run it."),
+        ];
+        let md = markdown("## Step 2\n\nInstall it.\n\n## Step 3\n\nRun it.\n", &base());
+        let page = html("<body><h2>Step 2</h2><p>Install it.</p><h2>Step 3</h2><p>Run it.</p></body>", &base());
+        for ex in [md, page] {
+            let got: Vec<_> = ex.blocks.iter().map(|b| (b.kind, b.level, b.text.as_str())).collect();
+            assert_eq!(got, want);
+        }
+    }
+
+    #[test]
+    fn price_headings_of_each_shape_join_their_card() {
+        for price in ["€9.50", "12 €", "$10/mo"] {
+            let ex = markdown(&format!("### {price}\n\nper user/month\n"), &base());
+            let texts: Vec<_> = ex.blocks.into_iter().map(|b| b.text).collect();
+            assert_eq!(texts, [format!("{price}\nper user/month")], "{price}");
+        }
+    }
+
+    #[test]
+    fn only_figures_and_units_are_prices() {
+        for price in ["$12", "€9.50", "12 €", "$10/mo", "10 per user/month", "$10 Pro"] {
+            assert!(is_price(price), "{price}");
+        }
+        for title in ["Step 2", "Version 3", "Top 10 tips", "COVID-19", "2FA", "Save 25%", "100%", "Free"] {
+            assert!(!is_price(title), "{title}");
+        }
     }
 
     #[test]
