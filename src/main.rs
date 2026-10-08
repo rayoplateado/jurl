@@ -1,3 +1,6 @@
+//! The entry point: check the flags, load the page (rendering it when it needs JavaScript), then run the
+//! mode they ask for.
+
 mod answer;
 mod blocks;
 mod cli;
