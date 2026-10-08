@@ -268,6 +268,14 @@ struct Visit {
     new_field_scores: FieldScores,
 }
 
+/// A page that answers: `rank` is how sure jurl is of the answer and of the page, times the score of the lead that led
+/// to it. `path` is how jurl got there.
+struct Ranked {
+    rank: f64,
+    visit: Visit,
+    path: Vec<Url>,
+}
+
 /// A page's links outside its text: menus and footers, which a site repeats on every page.
 fn menus(ex: &Extracted) -> HashSet<String> {
     let text: HashSet<String> = ex.links.iter().map(|l| links::key(&l.url)).collect();
@@ -466,9 +474,9 @@ pub async fn run(
     // budget `--follow N` stops at, so a page that fails to load still takes its step.
     let mut pages = 1;
     let mut opened = 1;
-    let mut closest: Option<(f64, Visit, Vec<Url>)> = None;
+    let mut closest: Option<Ranked> = None;
     let mut leads: Vec<Lead> = Vec::new();
-    let mut found: Vec<(f64, Visit, Vec<Url>)> = Vec::new();
+    let mut found: Vec<Ranked> = Vec::new();
     // How well the start page fits the question as a page, from the same scoring as the site map's pages. A home page
     // answering in passing (a FAQ line) counts for less than a pricing page that the site lists. The start page is
     // always the first hint (inserted above), so it's taken out here.
@@ -479,40 +487,36 @@ pub async fn run(
     // can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
     // What each page was like, for -t: how warm, how sure of an answer.
     let mut log: Vec<(Url, f64, f64)> = Vec::new();
-    let mut take = |v: Visit,
-                    lead: f64,
-                    lead_p: f64,
-                    path: Vec<Url>,
-                    leads: &mut Vec<Lead>,
-                    found: &mut Vec<(f64, Visit, Vec<Url>)>| {
-        log.push((v.url.clone(), v.warmth, v.score));
-        // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
-        // the search goes back to the leads of a page that was getting warmer.
-        // The page you started from is never cold: its links are all there is to go on.
-        // A hub page (a docs index, a category) says nothing itself but links straight to the answer: it's as warm
-        // as its best link. And warmth is relative: far from the answer (Paris → … → Aspirin) every page is cold,
-        // but one whose best link looks better than the link that led here is getting warmer.
-        let best_link = v.links.iter().map(|l| l.p).fold(0.0, f64::max);
-        let warmer = (best_link / lead_p.max(0.05)).min(1.0);
-        let heat =
-            if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link).max(warmer) };
-        let decay = HOP_DECAY.powi(path.len() as i32 - 1);
-        for l in &v.links {
-            leads.push(Lead {
-                url: l.url.clone(),
-                text: l.text.clone(),
-                score: l.p * decay * heat,
-                p: l.p,
-                path: path.clone(),
-            });
-        }
-        let rank = v.score * lead;
-        if v.found.is_some() && v.score >= threshold {
-            found.push((rank, v, path));
-        } else if v.found.is_some() && closest.as_ref().is_none_or(|(r, _, _)| rank > *r) {
-            closest = Some((rank, v, path));
-        }
-    };
+    let mut take =
+        |v: Visit, lead: f64, lead_p: f64, path: Vec<Url>, leads: &mut Vec<Lead>, found: &mut Vec<Ranked>| {
+            log.push((v.url.clone(), v.warmth, v.score));
+            // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
+            // the search goes back to the leads of a page that was getting warmer.
+            // The page you started from is never cold: its links are all there is to go on.
+            // A hub page (a docs index, a category) says nothing itself but links straight to the answer: it's as warm
+            // as its best link. And warmth is relative: far from the answer (Paris → … → Aspirin) every page is cold,
+            // but one whose best link looks better than the link that led here is getting warmer.
+            let best_link = v.links.iter().map(|l| l.p).fold(0.0, f64::max);
+            let warmer = (best_link / lead_p.max(0.05)).min(1.0);
+            let heat =
+                if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link).max(warmer) };
+            let decay = HOP_DECAY.powi(path.len() as i32 - 1);
+            for l in &v.links {
+                leads.push(Lead {
+                    url: l.url.clone(),
+                    text: l.text.clone(),
+                    score: l.p * decay * heat,
+                    p: l.p,
+                    path: path.clone(),
+                });
+            }
+            let rank = v.score * lead;
+            if v.found.is_some() && v.score >= threshold {
+                found.push(Ranked { rank, visit: v, path });
+            } else if v.found.is_some() && closest.as_ref().is_none_or(|c| rank > c.rank) {
+                closest = Some(Ranked { rank, visit: v, path });
+            }
+        };
     let first_path = vec![first.url.clone()];
     take(first, start_fit, 1.0, first_path, &mut leads, &mut found);
     for l in hints {
@@ -553,7 +557,7 @@ pub async fn run(
             t.lap(format!("robots {read}"));
         }
         // Done when no page left could beat what's been found: each lead's score is the most it could rank.
-        let best_found = found.iter().map(|f| f.0).fold(0.0, f64::max);
+        let best_found = found.iter().map(|f| f.rank).fold(0.0, f64::max);
         if !found.is_empty() && leads.first().is_none_or(|l| l.score <= best_found + BETTER_BY) {
             break;
         }
@@ -613,14 +617,14 @@ pub async fn run(
         let tokens = crate::decide::USAGE.jev_tokens.load(std::sync::atomic::Ordering::Relaxed);
         eprintln!("   {pages} pages · {tokens} tokens");
     }
-    found.sort_by(|a, b| b.0.total_cmp(&a.0));
+    found.sort_by(|a, b| b.rank.total_cmp(&a.rank));
     let trail = |path: &[Url]| {
         path.iter().map(|u| u.as_str().trim_start_matches("https://").to_string()).collect::<Vec<_>>().join(" → ")
     };
     let (v, path, missed_by) = match found.into_iter().next() {
-        Some((_, v, path)) => (v, path, None),
+        Some(Ranked { visit: v, path, .. }) => (v, path, None),
         None => match closest {
-            Some((_, v, path)) => {
+            Some(Ranked { visit: v, path, .. }) => {
                 let what = match &v.found {
                     Some(Found::Precise(pick)) if pick.p >= PRECISE_BLOCK_FLOOR => {
                         format!(
