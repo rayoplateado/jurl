@@ -796,7 +796,7 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, f64)], t: &
             .map(|k| (k, probs.get(&format!("o{k}")).copied().unwrap_or(0.0)))
             .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
         if let Some((k, pk)) = piece
-            && pk >= PRECISE_THRESHOLD
+            && pk >= threshold
             && pk >= whole
         {
             return Ok(Pick { block: top[best.block].i, range: options[k].clone(), p });
