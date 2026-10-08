@@ -32,8 +32,9 @@ use crate::{
 const PARALLEL: usize = 2;
 /// A long search (`--follow 10` and up) goes wider: a long trail needs more than one or two guesses per step.
 const PARALLEL_LONG: usize = 3;
-/// URLs from the site map scored, like a page's links: at most this many, besides the start page.
-const MAX_HINTS: usize = 300;
+/// URLs from the site map scored, like a page's links: at most this many besides the start page, the ones most like the
+/// question (see [`rank::most_relevant`]).
+const MAX_HINTS: usize = 150;
 /// A link's score is discounted per hop, so a good lead near the start beats a slightly better one deep down.
 const HOP_DECAY: f64 = 0.85;
 /// Hot or cold: a link is worth as much as the page it's on is close to the answer. A page with nothing on the
