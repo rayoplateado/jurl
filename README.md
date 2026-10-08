@@ -283,7 +283,7 @@ Keys live in `~/.config/jurl/env`. Environment variables take precedence over th
 
 `--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
 
-`JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none. [bench/models](bench/models) compares such a server's answers with Jev's.
+`JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none, and only over https or to localhost: plain http to another host is refused. [bench/models](bench/models) compares such a server's answers with Jev's.
 
 ### Exit codes
 

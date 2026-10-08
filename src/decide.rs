@@ -176,8 +176,24 @@ pub fn is_api_error(e: &anyhow::Error) -> bool {
     e.chain().any(|c| c.is::<ApiError>())
 }
 
+/// Plain http to another host: anyone on the network path could read a key sent there.
+fn plain_http_off_loopback(url: &str) -> bool {
+    let Ok(u) = url::Url::parse(url) else { return false };
+    let loopback = match u.host() {
+        Some(url::Host::Domain(d)) => d == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    u.scheme() == "http" && !loopback
+}
+
 /// POST with a short backoff on 429/529, honouring `Retry-After`.
 async fn post(client: &Client, url: &str, bearer: &str, body: &Value) -> Result<Value> {
+    if !bearer.is_empty() && plain_http_off_loopback(url) {
+        let msg = format!("not sending a key over plain http to {url}: use https, or localhost");
+        return Err(ApiError(msg).into());
+    }
     let mut attempt = 0;
     loop {
         let mut req = client.post(url).json(body);
@@ -246,6 +262,31 @@ mod tests {
         assert_eq!(non_empty(Some("  ".into())), None);
         let url = "http://127.0.0.1:8000/v1/systemone";
         assert_eq!(non_empty(Some(url.into())).as_deref(), Some(url));
+    }
+
+    #[test]
+    fn a_key_goes_only_over_https_or_to_loopback() {
+        for url in [
+            "https://api.typesafe.ai/v1/systemone",
+            "https://10.0.0.5:8000/v1",
+            "http://127.0.0.1:8000/v1/systemone",
+            "http://127.0.0.2:8000/v1",
+            "http://localhost:18100/v1",
+            "http://LOCALHOST:8000/v1",
+            "http://[::1]:8000/v1",
+            "not a url", // unparseable: reqwest fails it before sending
+        ] {
+            assert!(!plain_http_off_loopback(url), "{url}");
+        }
+        for url in [
+            "http://10.0.0.5:8000/v1/systemone",
+            "http://example.com/v1",
+            "http://localhost.example.com/v1",
+            "http://127.0.0.1.nip.io/v1",
+            "http://[2001:db8::1]:8000/v1",
+        ] {
+            assert!(plain_http_off_loopback(url), "{url}");
+        }
     }
 
     #[test]
