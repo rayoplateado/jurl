@@ -511,7 +511,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         for (url, warmth, score) in &log {
             eprintln!("   warmth {warmth:.2} · answer {score:.2} · {url}");
         }
-        let tokens = crate::decide::JEV_TOKENS.load(std::sync::atomic::Ordering::Relaxed);
+        let tokens = crate::decide::USAGE.jev_tokens.load(std::sync::atomic::Ordering::Relaxed);
         eprintln!("   {pages} pages · {tokens} tokens");
     }
     found.sort_by(|a, b| b.0.total_cmp(&a.0));

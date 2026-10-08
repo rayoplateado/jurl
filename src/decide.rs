@@ -1,7 +1,11 @@
 //! Clients for System One–style decision models. Jev (TypeSafe) and Clef
 //! (Cloudflare Workers AI) share the `{state, questions} → {answers}` contract.
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    time::Duration,
+};
 
 use anyhow::Result;
 use reqwest::{Client, StatusCode};
@@ -9,9 +13,55 @@ use serde_json::{Map, Value, json};
 
 pub const JEV_MODEL: &str = "jev-1.13.0";
 
-/// Every Jev input token this run, across all requests: what a --follow search cost.
-pub static JEV_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub const CLEF_MODEL: &str = "clef-flash";
+
+/// Everything this run asked of Jev and Clef, and the pages it read: what it cost, as `usage` in `--json`. Counted
+/// per process, so `jurl mcp` (calls side by side) doesn't report it.
+pub static USAGE: Usage = Usage::new();
+
+/// Requests that came back with answers. A hedged Clef call that lost the race isn't counted: its answer never came.
+#[derive(Debug, Default)]
+pub struct Usage {
+    pub pages: AtomicU64,
+    pub jev_requests: AtomicU64,
+    pub jev_tokens: AtomicU64,
+    pub clef_requests: AtomicU64,
+    pub clef_tokens: AtomicU64,
+    pub clef_images: AtomicU64,
+}
+
+impl Usage {
+    pub const fn new() -> Self {
+        Usage {
+            pages: AtomicU64::new(0),
+            jev_requests: AtomicU64::new(0),
+            jev_tokens: AtomicU64::new(0),
+            clef_requests: AtomicU64::new(0),
+            clef_tokens: AtomicU64::new(0),
+            clef_images: AtomicU64::new(0),
+        }
+    }
+
+    pub fn jev(&self, a: &Answers) {
+        self.jev_requests.fetch_add(a.requests as u64, Relaxed);
+        self.jev_tokens.fetch_add(a.input_tokens, Relaxed);
+    }
+
+    pub fn clef(&self, a: &Answers, images: usize) {
+        self.clef_requests.fetch_add(a.requests as u64, Relaxed);
+        self.clef_tokens.fetch_add(a.input_tokens, Relaxed);
+        self.clef_images.fetch_add(images as u64, Relaxed);
+    }
+
+    pub fn json(&self) -> Value {
+        let n = |c: &AtomicU64| c.load(Relaxed);
+        json!({
+            "pages": n(&self.pages),
+            "jev": { "requests": n(&self.jev_requests), "input_tokens": n(&self.jev_tokens) },
+            "clef": { "requests": n(&self.clef_requests), "input_tokens": n(&self.clef_tokens), "images": n(&self.clef_images) },
+        })
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct Answers {
@@ -52,7 +102,7 @@ pub async fn jev(client: &Client, key: &str, state: Value, questions: Map<String
     let body = json!({ "state": state, "model": JEV_MODEL, "questions": questions });
     let v = post(client, "https://api.typesafe.ai/v1/systemone", key, &body).await?;
     let a = parse(&v);
-    JEV_TOKENS.fetch_add(a.input_tokens, std::sync::atomic::Ordering::Relaxed);
+    USAGE.jev(&a);
     Ok(a)
 }
 
@@ -67,10 +117,21 @@ pub async fn clef(
     let url = format!("https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/cloudflare/{CLEF_MODEL}");
     let mut body = json!({ "model": CLEF_MODEL, "state": state, "questions": questions });
     if !images.is_empty() {
-        body["images"] = json!(images);
+        body["images"] = json!(&images);
     }
     let v = post(client, &url, token, &body).await?;
-    Ok(parse(v.get("result").unwrap_or(&v)))
+    let a = clef_answers(&v);
+    USAGE.clef(&a, images.len());
+    Ok(a)
+}
+
+/// Workers AI wraps the model's reply in `result`; its usage may sit inside it or beside it.
+fn clef_answers(v: &Value) -> Answers {
+    let mut a = parse(v.get("result").unwrap_or(v));
+    if a.input_tokens == 0 {
+        a.input_tokens = v.pointer("/usage/input_tokens").and_then(Value::as_u64).unwrap_or(0);
+    }
+    a
 }
 
 fn parse(v: &Value) -> Answers {
@@ -127,5 +188,28 @@ async fn post(client: &Client, url: &str, bearer: &str, body: &Value) -> Result<
         }
         let text = res.text().await.unwrap_or_default();
         return Err(ApiError(format!("{url} → HTTP {status}: {}", text.chars().take(400).collect::<String>())).into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_adds_up_jev_and_clef() {
+        let u = Usage::new();
+        u.pages.fetch_add(2, Relaxed);
+        u.jev(&parse(&json!({ "answers": {}, "usage": { "input_tokens": 1200 } })));
+        u.jev(&Answers { requests: 3, input_tokens: 800, ..Answers::default() });
+        u.clef(&clef_answers(&json!({ "result": { "answers": {}, "usage": { "input_tokens": 90 } } })), 1);
+        u.clef(&clef_answers(&json!({ "result": { "answers": {} }, "usage": { "input_tokens": 70 } })), 1);
+        assert_eq!(
+            u.json(),
+            json!({
+                "pages": 2,
+                "jev": { "requests": 4, "input_tokens": 2000 },
+                "clef": { "requests": 2, "input_tokens": 160, "images": 2 },
+            })
+        );
     }
 }
