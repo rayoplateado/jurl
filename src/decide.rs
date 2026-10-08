@@ -98,9 +98,16 @@ pub fn choice(instructions: &str, criteria: Value) -> Value {
     json!({ "type": "choice", "instructions": instructions, "criteria": criteria })
 }
 
+/// Jev's endpoint. `JURL_JEV_URL` points jurl at another server with the same contract (a self-hosted model).
+pub fn jev_url() -> String {
+    std::env::var("JURL_JEV_URL").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| JEV_URL.to_string())
+}
+
+const JEV_URL: &str = "https://api.typesafe.ai/v1/systemone";
+
 pub async fn jev(client: &Client, key: &str, state: Value, questions: Map<String, Value>) -> Result<Answers> {
     let body = json!({ "state": state, "model": JEV_MODEL, "questions": questions });
-    let v = post(client, "https://api.typesafe.ai/v1/systemone", key, &body).await?;
+    let v = post(client, &jev_url(), key, &body).await?;
     let a = parse(&v);
     USAGE.jev(&a);
     Ok(a)
@@ -164,13 +171,11 @@ pub fn is_api_error(e: &anyhow::Error) -> bool {
 async fn post(client: &Client, url: &str, bearer: &str, body: &Value) -> Result<Value> {
     let mut attempt = 0;
     loop {
-        let res = client
-            .post(url)
-            .bearer_auth(bearer)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| ApiError(format!("{url}: {e}")))?;
+        let mut req = client.post(url).json(body);
+        if !bearer.is_empty() {
+            req = req.bearer_auth(bearer);
+        }
+        let res = req.send().await.map_err(|e| ApiError(format!("{url}: {e}")))?;
         let status = res.status();
         if status.is_success() {
             return Ok(res.json().await?);

@@ -17,7 +17,10 @@ pub fn interactive() -> bool {
 
 /// The TypeSafe key, asking for it when running in a terminal and it is missing.
 pub async fn typesafe_key(cfg: &mut Config, client: &Client) -> Result<String> {
-    if !interactive() || cfg.get("TYPESAFE_API_KEY").is_some() {
+    if !interactive()
+        || cfg.get("TYPESAFE_API_KEY").is_some()
+        || std::env::var("JURL_JEV_URL").is_ok_and(|u| !u.is_empty())
+    {
         return saved_key(cfg);
     }
     eprintln!("jurl reads pages with Jev, TypeSafe's decision model. It needs your API key, once.");
@@ -29,6 +32,8 @@ pub async fn typesafe_key(cfg: &mut Config, client: &Client) -> Result<String> {
 pub fn saved_key(cfg: &Config) -> Result<String> {
     match cfg.get("TYPESAFE_API_KEY") {
         Some(k) => Ok(k),
+        // a self-hosted endpoint (`JURL_JEV_URL`) may need no key
+        None if std::env::var("JURL_JEV_URL").is_ok_and(|u| !u.is_empty()) => Ok(String::new()),
         None => bail!("missing TypeSafe API key: run `jurl init`, or set TYPESAFE_API_KEY (get one at {TYPESAFE_URL})"),
     }
 }
