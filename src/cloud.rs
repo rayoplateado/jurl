@@ -13,11 +13,13 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::{
+    blocks::{DEFAULT_ASK_BLOCKS, DEFAULT_BLOCKS, DEFAULT_CODE_BLOCKS},
     cli::Args,
     config::Config,
     decide,
     extract::{Block, Kind},
     follow,
+    links::DEFAULT_LINKS,
     output::{Rendered, missed, not_found},
     timing::Timer,
 };
@@ -29,6 +31,8 @@ pub(crate) const DEFAULT_BASE: &str = "https://cloud.jurl.dev";
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 /// The `--follow` lengths jurl cloud reads.
 const FOLLOW_PAGES: [usize; 3] = [5, 10, 15];
+/// The most results a read asks for (`-n`). The server refuses more, so a run past it uses your own keys.
+const MAX_RESULTS: usize = 50;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// The account a read is made with: where jurl cloud is, and the key.
@@ -122,10 +126,33 @@ pub(crate) async fn get<T: DeserializeOwned>(client: &Client, cloud: &Cloud, pat
         .with_context(|| format!("jurl cloud's {path} reply is not one this jurl understands"))
 }
 
-/// The request body for a read: the mode the flags pick (`precise`, `ask`, `links` or `code`, or `gist` for the default
-/// blocks), the question, and how many pages `--follow` reads.
+/// The request body for a read: the mode the flags pick, the question, how many pages `--follow` reads, and how many
+/// results. A mode with a count sends it: `-n`, or the mode's local default, since the server's own defaults are fewer
+/// than a local run prints. `-a` keeps every result above the threshold and wins over `-n`, as it does locally. The
+/// threshold goes only when `--threshold` gives one, since the server's defaults are the local ones.
 pub(crate) fn body(args: &Args) -> Value {
-    let mode = if args.precise {
+    let mode = mode_of(args);
+    let mut body = json!({ "url": args.url, "mode": mode });
+    if let Some(question) = &args.ask {
+        body["question"] = json!(question);
+    }
+    if let Some(pages) = args.follow {
+        body["follow"] = json!(pages);
+    }
+    if args.all {
+        body["all"] = json!(true);
+    } else if let Some(max) = args.max.or(default_max(mode)) {
+        body["max"] = json!(max);
+    }
+    if let Some(threshold) = args.threshold {
+        body["threshold"] = json!(threshold);
+    }
+    body
+}
+
+/// The mode the flags pick: `precise`, `code`, `links`, `ask` (with `-q`), or `gist`, the default blocks.
+fn mode_of(args: &Args) -> &'static str {
+    if args.precise {
         "precise"
     } else if args.code {
         "code"
@@ -135,26 +162,32 @@ pub(crate) fn body(args: &Args) -> Value {
         "ask"
     } else {
         "gist"
-    };
-    let mut body = json!({ "url": args.url, "mode": mode });
-    if let Some(question) = &args.ask {
-        body["question"] = json!(question);
     }
-    if let Some(pages) = args.follow {
-        body["follow"] = json!(pages);
-    }
-    body
 }
 
-/// Why jurl cloud can't do this read, when it can't: the things it doesn't read (images, rendering) and the search
-/// options it doesn't take, or a `--follow` length it doesn't follow. A run that needs one of them uses the own keys.
+/// How many results a local run prints in a mode when `-n` doesn't say. Precise prints one answer, so it has no count.
+fn default_max(mode: &str) -> Option<usize> {
+    match mode {
+        "gist" => Some(DEFAULT_BLOCKS),
+        "ask" => Some(DEFAULT_ASK_BLOCKS),
+        "code" => Some(DEFAULT_CODE_BLOCKS),
+        "links" => Some(DEFAULT_LINKS),
+        _ => None,
+    }
+}
+
+/// Why jurl cloud can't do this read, when it can't: the things it doesn't read (images, rendering), a `-n` or
+/// `--threshold` outside the range it takes, or a `--follow` it doesn't follow. A run that needs one of them uses the
+/// own keys.
 pub(crate) fn unsupported(args: &Args) -> Option<String> {
     if args.image || args.vision || args.find.is_some() {
         Some("jurl cloud doesn't read images yet (--image, --vision, --find)".into())
     } else if args.render {
         Some("jurl cloud doesn't render JavaScript yet (-r)".into())
-    } else if args.max.is_some() || args.all || args.threshold.is_some() {
-        Some("jurl cloud doesn't take -n, -a or --threshold yet".into())
+    } else if args.threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
+        Some("jurl cloud takes --threshold from 0 to 1".into())
+    } else if !args.all && args.max.is_some_and(|n| !(1..=MAX_RESULTS).contains(&n)) {
+        Some(format!("jurl cloud takes -n from 1 to {MAX_RESULTS}"))
     } else if args.code && args.precise {
         Some("jurl cloud doesn't take --code with --precise yet".into())
     } else if let Some(pages) = args.follow {
@@ -212,6 +245,12 @@ struct ReadReply {
     answer: Option<String>,
     closest: Option<String>,
     quote: Option<String>,
+    // The quoted block's index on the page. Its kind, level and language are read from a precise answer when the server
+    // sends them. It doesn't yet, so the quote prints as text (see the README).
+    block: Option<usize>,
+    kind: Option<String>,
+    level: Option<u8>,
+    lang: Option<String>,
     link: Option<String>,
     p: Option<f64>,
     blocks: Option<Vec<ReplyBlock>>,
@@ -261,7 +300,8 @@ fn rendered(args: &Args, r: &ReadReply) -> Result<Rendered> {
     }
 }
 
-/// The answer on its own line, then the block it's in and a link to it, when the server sends them.
+/// The answer on its own line, then the block it's in as markdown, as a local run prints it, then a link to it. The block
+/// and the link are there when the server sends them.
 fn precise_answer(args: &Args, r: &ReadReply, path: Option<&Value>) -> Result<Rendered> {
     let doc = |answer: Option<&str>, closest: Option<&str>| {
         let mut doc = json!({
@@ -272,7 +312,7 @@ fn precise_answer(args: &Args, r: &ReadReply, path: Option<&Value>) -> Result<Re
             "closest": closest,
             "p": r.p,
             "quote": r.quote,
-            "block": null,
+            "block": r.block,
             "link": r.link,
         });
         if let Some(path) = path {
@@ -284,17 +324,29 @@ fn precise_answer(args: &Args, r: &ReadReply, path: Option<&Value>) -> Result<Re
         (Some(answer), _) => {
             let mut text = format!("{answer}\n");
             if let Some(quote) = &r.quote {
-                text += &format!("\n{quote}\n");
+                // Printed as a local run prints the block: a heading with its level, code fenced with its language.
+                // Without a kind from the server, it is text.
+                let kind = r.kind.as_deref().and_then(kind_of).unwrap_or(Kind::Para);
+                let block = Block {
+                    level: r.level,
+                    lang: r.lang.clone(),
+                    ..Block::new(r.block.unwrap_or_default(), kind, quote.clone())
+                };
+                text += &format!("\n{}\n", block.markdown());
             }
             if let Some(link) = &r.link {
                 text += &format!("\n<{link}>\n");
             }
             Ok(Rendered { text, json: doc(Some(answer), None) })
         }
-        (None, Some(closest)) => Err(missed(
-            format!("no part of {} is exactly the answer (closest: \"{closest}\")", r.url),
-            Rendered { text: String::new(), json: doc(None, Some(closest)) },
-        )),
+        (None, Some(closest)) => {
+            // The local miss says how sure jurl is of the closest candidate, too.
+            let p = r.p.map(|p| format!(", p={p:.2}")).unwrap_or_default();
+            Err(missed(
+                format!("no part of {} is exactly the answer (closest: \"{closest}\"{p})", r.url),
+                Rendered { text: String::new(), json: doc(None, Some(closest)) },
+            ))
+        }
         (None, None) => Err(not_found(format!("nothing in {} answers that", r.url))),
     }
 }
@@ -460,10 +512,10 @@ mod tests {
 
     #[test]
     fn each_flag_picks_its_mode_and_the_question_and_follow_go_along() {
-        assert_eq!(body(&args(&["jurl", "x.com"])), json!({ "url": "x.com", "mode": "gist" }));
+        assert_eq!(body(&args(&["jurl", "x.com"])), json!({ "url": "x.com", "mode": "gist", "max": 12 }));
         assert_eq!(
             body(&args(&["jurl", "-q", "price?", "x.com"])),
-            json!({ "url": "x.com", "mode": "ask", "question": "price?" })
+            json!({ "url": "x.com", "mode": "ask", "question": "price?", "max": 5 })
         );
         assert_eq!(
             body(&args(&["jurl", "-p", "-q", "price?", "x.com"])),
@@ -473,22 +525,42 @@ mod tests {
             body(&args(&["jurl", "-p", "-q", "price?", "x.com", "--follow"])),
             json!({ "url": "x.com", "mode": "precise", "question": "price?", "follow": 5 })
         );
-        assert_eq!(body(&args(&["jurl", "-c", "x.com"])), json!({ "url": "x.com", "mode": "code" }));
+        assert_eq!(body(&args(&["jurl", "-c", "x.com"])), json!({ "url": "x.com", "mode": "code", "max": 8 }));
         assert_eq!(
             body(&args(&["jurl", "-l", "-q", "pricing?", "x.com"])),
-            json!({ "url": "x.com", "mode": "links", "question": "pricing?" })
+            json!({ "url": "x.com", "mode": "links", "question": "pricing?", "max": 20 })
         );
+    }
+
+    #[test]
+    fn the_count_is_the_local_one_unless_n_or_a_says_otherwise() {
+        // -n replaces a mode's count. Precise prints one answer, so it has no count unless -n gives one.
+        assert_eq!(body(&args(&["jurl", "-n", "3", "x.com"]))["max"], 3);
+        assert_eq!(body(&args(&["jurl", "-p", "-q", "x?", "x.com"])).get("max"), None);
+        assert_eq!(body(&args(&["jurl", "-p", "-q", "x?", "-n", "7", "x.com"]))["max"], 7);
+        // -a keeps every result above the threshold, so no count goes with it, and it wins over -n.
+        let all = body(&args(&["jurl", "-a", "-n", "3", "x.com"]));
+        assert_eq!((all["all"].as_bool(), all.get("max")), (Some(true), None));
+        // The threshold goes only when it is given: the server's defaults are the local ones.
+        assert_eq!(body(&args(&["jurl", "--threshold", "0.7", "x.com"]))["threshold"], 0.7);
+        assert_eq!(body(&args(&["jurl", "x.com"])).get("threshold"), None);
     }
 
     #[test]
     fn what_the_cloud_cannot_read_says_why() {
         assert!(unsupported(&args(&["jurl", "-p", "-q", "x?", "x.com"])).is_none());
         assert!(unsupported(&args(&["jurl", "-p", "-q", "x?", "--follow", "10", "x.com"])).is_none());
+        // -n, -a and --threshold are read within the range the server takes. Outside it, a run uses your own keys.
+        assert!(unsupported(&args(&["jurl", "-n", "50", "x.com"])).is_none());
+        assert!(unsupported(&args(&["jurl", "-a", "-n", "60", "x.com"])).is_none(), "-a wins, so -n isn't checked");
+        assert!(unsupported(&args(&["jurl", "--threshold", "0", "x.com"])).is_none());
+        assert!(unsupported(&args(&["jurl", "-n", "60", "x.com"])).unwrap().contains("-n from 1 to 50"));
+        assert!(unsupported(&args(&["jurl", "-n", "0", "x.com"])).unwrap().contains("-n from 1 to 50"));
+        assert!(unsupported(&args(&["jurl", "--threshold", "1.5", "x.com"])).unwrap().contains("0 to 1"));
+        assert!(unsupported(&args(&["jurl", "--threshold", "nan", "x.com"])).unwrap().contains("--threshold"));
         assert!(unsupported(&args(&["jurl", "-i", "x.com"])).unwrap().contains("images"));
         assert!(unsupported(&args(&["jurl", "--find", "a cathedral", "x.com"])).unwrap().contains("images"));
         assert!(unsupported(&args(&["jurl", "-r", "x.com"])).unwrap().contains("render"));
-        assert!(unsupported(&args(&["jurl", "-n", "3", "x.com"])).unwrap().contains("-n"));
-        assert!(unsupported(&args(&["jurl", "--threshold", "0.7", "x.com"])).unwrap().contains("--threshold"));
         assert!(unsupported(&args(&["jurl", "-q", "x?", "x.com", "--follow"])).unwrap().contains("--precise"));
         assert!(unsupported(&args(&["jurl", "-p", "-q", "x?", "--follow", "7", "x.com"])).unwrap().contains("not 7"));
         assert!(unsupported(&args(&["jurl", "-p", "-c", "-q", "x?", "x.com"])).unwrap().contains("--code"));
@@ -519,20 +591,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_precise_answer_prints_its_block_as_a_local_run_does() {
+        // A heading with its level, and code fenced with its language, when the server sends the kind.
+        let heading = r#"{"url":"https://x.com/","title":"Pricing","answer":"Pro","quote":"Pro","block":4,"kind":"heading","level":3,"link":"https://x.com/#:~:text=Pro","pages":1,"path":["https://x.com/"]}"#;
+        let (base, _) = mock::serve(vec![(200, "", heading)]);
+        let a = args(&["jurl", "-p", "-q", "plan?", "x.com"]);
+        let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
+        assert_eq!(r.text, "Pro\n\n### Pro\n\n<https://x.com/#:~:text=Pro>\n");
+        assert_eq!((r.json["block"].as_u64(), r.json["title"].as_str()), (Some(4), Some("Pricing")));
+
+        let code = r#"{"url":"https://x.com/","answer":"cargo install jurl","quote":"cargo install jurl","block":2,"kind":"code","lang":"sh","link":null,"pages":1,"path":["https://x.com/"]}"#;
+        let (base, _) = mock::serve(vec![(200, "", code)]);
+        let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
+        assert_eq!(r.text, "cargo install jurl\n\n```sh\ncargo install jurl\n```\n");
+
+        // Without a kind, as the server sends a precise answer today, the quote is text, and no link is no line.
+        let plain = r#"{"url":"https://x.com/","answer":"5,000 requests per hour","quote":"Authenticated requests get 5,000 requests per hour.","block":0,"link":null,"pages":1,"path":["https://x.com/"]}"#;
+        let (base, _) = mock::serve(vec![(200, "", plain)]);
+        let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
+        assert_eq!(r.text, "5,000 requests per hour\n\nAuthenticated requests get 5,000 requests per hour.\n");
+    }
+
+    #[tokio::test]
+    async fn the_count_and_the_threshold_are_sent_with_the_read() {
+        let reply = r#"{"url":"https://x.com/","blocks":[{"text":"Run it.","p":0.8}]}"#;
+        let (base, seen) = mock::serve(vec![(200, "", reply)]);
+        let a = args(&["jurl", "-n", "3", "--threshold", "0.7", "x.com"]);
+        read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
+        let sent: Value = serde_json::from_str(&seen.lock().unwrap()[0].body).unwrap();
+        let got = (sent["mode"].as_str(), sent["max"].as_u64(), sent["threshold"].as_f64());
+        assert_eq!(got, (Some("gist"), Some(3), Some(0.7)));
+    }
+
+    #[tokio::test]
     async fn a_precise_miss_is_not_found_and_its_json_has_the_closest_candidate() {
         let (base, _) = mock::serve(vec![(
             200,
             "",
-            r#"{"answered":false,"url":"https://x.com/","path":["https://x.com/"],"answer":null,"closest":"$8 a month","blocks":null,"links":null,"pages":2,"durationMs":1,"usage":{"pageReads":2}}"#,
+            r#"{"answered":false,"url":"https://x.com/","path":["https://x.com/"],"answer":null,"closest":"$8 a month","p":0.31,"blocks":null,"links":null,"pages":2,"durationMs":1,"usage":{"pageReads":2}}"#,
         )]);
         let a = args(&["jurl", "--json", "-p", "-q", "price?", "x.com"]);
         let done: Result<Rendered> = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await;
         let err = done.unwrap_err();
         assert!(crate::output::is_not_found(&err));
+        // The same message a local miss gives, with how sure jurl is of the closest candidate.
+        assert!(format!("{err:#}").contains("(closest: \"$8 a month\", p=0.31)"), "{err:#}");
         let out = stdout_for(&a, &Err(err), &decide::Usage::new()).unwrap().expect("JSON on a miss");
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["answer"], Value::Null);
         assert_eq!(v["closest"], "$8 a month");
+        assert_eq!(v["p"], 0.31);
         assert_eq!(v["usage"]["jev"]["requests"], 0);
     }
 

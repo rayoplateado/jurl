@@ -19,6 +19,8 @@ use crate::{
 
 /// Links scored per page: cheap to score (~45 tokens each).
 pub const MAX_LINKS: usize = 250;
+/// Links printed when `--max` doesn't say.
+pub(crate) const DEFAULT_LINKS: usize = 20;
 /// On a long search, how much a link's field of knowledge counts next to whether it leads to the answer.
 const FIELD_WEIGHT: f64 = 0.3;
 /// A link's field score (see [`score`]), by [`key`]. The question doesn't depend on the page the link is on, so a
@@ -192,7 +194,7 @@ pub(crate) async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Resul
         let scores = candidates.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
         (candidates, scores)
     };
-    let kept = top(&scores, ctx.args.threshold(), ctx.args.limit(20));
+    let kept = top(&scores, ctx.args.threshold(), ctx.args.limit(DEFAULT_LINKS));
     if kept.is_empty() {
         return Err(not_found(format!("no links worth following in {} (try a lower --threshold)", ctx.url)));
     }
