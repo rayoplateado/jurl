@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use serde_json::{Map, json};
 
 use crate::{
-    answer::{PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, precise_pick, render_precise},
+    answer::{PRECISE_BLOCK_FLOOR, precise_pick, render_precise},
     decide::choice,
     extract::{self, Block, Extracted, Kind},
     judge::{Ctx, Item, STATE_TEXT_CHARS},
@@ -37,7 +37,7 @@ pub(crate) async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Resu
         }
         let pick = precise_pick(ctx, ex, &keep, t).await?;
         let rendered = render_precise(ctx, ex, &pick, None);
-        if pick.p < ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD) {
+        if pick.p < ctx.args.threshold_for(true) {
             let answer = &ex.blocks[pick.block].text[pick.range.clone()];
             let message =
                 format!("no part of {} is exactly the answer (closest: \"{answer}\", p={:.2})", ctx.url, pick.p);

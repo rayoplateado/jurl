@@ -35,7 +35,7 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
     let scored = ranked(&spans, &probs);
     let (best, own) = scored[0];
     let p = share(best, own, &scored);
-    let threshold = ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD);
+    let threshold = ctx.args.threshold_for(true);
     let inside = inside_ranges(&spans, best);
     let block = &ex.blocks[best.block];
 
@@ -240,7 +240,7 @@ fn option_scores(probs: &HashMap<String, f64>, prefix: char, n: usize) -> Vec<f6
 /// has it as `closest` instead of `answer`. `path` is how --follow got here.
 pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url::Url]>) -> Rendered {
     let q = ctx.args.ask.as_deref().unwrap_or_default();
-    let threshold = ctx.args.threshold.unwrap_or(PRECISE_THRESHOLD);
+    let threshold = ctx.args.threshold_for(true);
     let block = &ex.blocks[pick.block];
     let answer = &block.text[pick.range.clone()];
     let link = precise::link(ctx.url, &block.text, &pick.range);

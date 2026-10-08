@@ -2,6 +2,8 @@
 
 use clap::Parser;
 
+use crate::answer::PRECISE_THRESHOLD;
+
 /// curl, but it reads the page for you. Jev picks what matters; Clef looks at
 /// the images. Everything printed is literally in the page.
 #[derive(Parser)]
@@ -56,11 +58,32 @@ pub(crate) struct Args {
 }
 
 impl Args {
+    /// The probability a result needs to be kept: `--threshold`, or 0.5.
     pub(crate) fn threshold(&self) -> f64 {
         self.threshold.unwrap_or(0.5)
     }
 
+    /// The same bar for a mode: `precise` is `--precise`, whose answer has its own default (`PRECISE_THRESHOLD`).
+    pub(crate) fn threshold_for(&self, precise: bool) -> f64 {
+        if precise { self.threshold.unwrap_or(PRECISE_THRESHOLD) } else { self.threshold() }
+    }
+
     pub(crate) fn limit(&self, default: usize) -> usize {
         if self.all { usize::MAX } else { self.max.unwrap_or(default) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_mode_has_its_default_bar_and_threshold_overrides_both() {
+        let plain = Args::parse_from(["jurl", "x.com"]);
+        assert_eq!(plain.threshold_for(false), 0.5);
+        assert_eq!(plain.threshold_for(true), PRECISE_THRESHOLD);
+        let given = Args::parse_from(["jurl", "--threshold", "0.7", "x.com"]);
+        assert_eq!(given.threshold_for(false), 0.7);
+        assert_eq!(given.threshold_for(true), 0.7);
     }
 }
