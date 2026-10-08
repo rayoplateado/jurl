@@ -13,7 +13,7 @@ use serde_json::Map;
 use url::Url;
 
 use crate::{
-    answer::{PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, precise_pick, render_precise},
+    answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, precise_pick, render_precise},
     blocks::{render_blocks, score_blocks, top},
     cli::Args,
     config::Config,
@@ -397,7 +397,7 @@ async fn visit(
             };
             let warmth = scores.iter().flatten().copied().fold(0.0, f64::max);
             if args.precise {
-                let keep = top(&scores, PRECISE_BLOCK_FLOOR, 3);
+                let keep = top(&scores, PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS);
                 if keep.is_empty() {
                     return Ok((None, warmth));
                 }
@@ -543,7 +543,7 @@ impl Search {
         t: &mut Timer,
     ) -> Result<Search> {
         let max = args.follow.unwrap_or(5).max(1);
-        let threshold = if args.precise { args.threshold.unwrap_or(PRECISE_THRESHOLD) } else { args.threshold() };
+        let threshold = args.threshold_for(args.precise);
         let site = Site::new(start);
 
         // The first page, the site's own map and robots.txt, all at once.
@@ -797,14 +797,7 @@ async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, si
     for (i, l) in links.iter_mut().enumerate() {
         l.i = i;
     }
-    let empty = Extracted {
-        title: String::new(),
-        blocks: Vec::new(),
-        images: Vec::new(),
-        links: Vec::new(),
-        site_links: Vec::new(),
-        app_shell: false,
-    };
+    let empty = Extracted::default();
     let ctx = site.ctx(args, client, api_key, start, &empty);
     let scores = match links::score(&ctx, &links, "The page at the URL in `links`", None).await {
         Ok((scores, _)) => scores,
@@ -828,14 +821,7 @@ pub async fn run(
     t: &mut Timer,
 ) -> Result<Rendered> {
     let mut search = Search::start(args, cfg, client, api_key, &start, t).await?;
-    let empty = Extracted {
-        title: String::new(),
-        blocks: Vec::new(),
-        images: Vec::new(),
-        links: Vec::new(),
-        site_links: Vec::new(),
-        app_shell: false,
-    };
+    let empty = Extracted::default();
     let site_ctx = search.site.ctx(args, client, api_key, &start, &empty);
     while let Some(batch) = search.next_batch(&site_ctx, t).await? {
         // The pages of a batch are read side by side: each reads the field scores from before the batch, and what it
@@ -855,6 +841,7 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::answer::PRECISE_THRESHOLD;
 
     #[test]
     fn menus_are_the_links_outside_the_text() {
