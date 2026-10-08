@@ -15,7 +15,7 @@ pub(crate) struct Config {
 
 /// The keys `./.env` may supply. A project's `.env` is not the user's: it must not choose the programs jurl runs
 /// (`JURL_LIGHTPANDA`).
-const DOTENV_KEYS: &[&str] = &["TYPESAFE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_TOKEN"];
+const DOTENV_KEYS: &[&str] = &["TYPESAFE_API_KEY", "JURL_JEV_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_TOKEN"];
 
 impl Config {
     pub(crate) fn load() -> Self {
