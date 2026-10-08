@@ -37,6 +37,8 @@ const MAX_CALLS: usize = 4;
 /// Tool calls that may wait for one of the `MAX_CALLS` slots. Past this a call is refused at once (see `drive`), so a
 /// client that sends faster than calls finish can't grow the queue, or its own wait, without bound.
 const MAX_PENDING: usize = 64;
+/// JSON-RPC's error code for a message that is not a valid request.
+const INVALID_REQUEST: i64 = -32600;
 
 const VERBATIM: &str = "Everything returned is copied from the page, verbatim, with its links: jurl never writes, \
                         summarizes or guesses. When the page doesn't have it, the result says so (\"Not found\").";
@@ -313,13 +315,20 @@ fn handle(line: &str) -> Reply {
     if msg.is_array() {
         return Reply::Now(Some(error(
             Value::Null,
-            -32600,
+            INVALID_REQUEST,
             "Invalid Request: batches aren't supported, send one message per line",
         )));
     }
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
-        // A response to a request we never send, or junk: nothing to answer.
-        return Reply::Now(None);
+        // A reply to a request we never sent has a result or an error and no method: nothing to answer. Any other
+        // message with an id is an invalid request, which JSON-RPC answers under that id. Without one, it is junk.
+        let is_reply = msg.get("result").is_some() || msg.get("error").is_some();
+        return match msg.get("id") {
+            Some(id) if !is_reply => {
+                Reply::Now(Some(error(id.clone(), INVALID_REQUEST, "Invalid Request: `method` must be a string")))
+            }
+            _ => Reply::Now(None),
+        };
     };
     // Notifications (`notifications/initialized`, `notifications/cancelled`…) have no id and get no reply.
     let Some(id) = msg.get("id").cloned() else { return Reply::Now(None) };
@@ -530,6 +539,18 @@ mod tests {
         assert_eq!(r["id"], "d");
         assert!(reply(json!({ "jsonrpc": "2.0", "id": 4, "result": {} })).is_none());
         assert_eq!(handle_raw("{not json").unwrap()["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn a_request_without_a_string_method_is_an_invalid_request() {
+        // JSON-RPC 2.0 answers an invalid request under its own id, so the client can match the error to it.
+        let r = reply(json!({ "jsonrpc": "2.0", "id": 10, "method": 42 })).expect("an invalid request got no reply");
+        assert_eq!(r["error"]["code"], -32600);
+        assert_eq!(r["id"], 10);
+        assert_eq!(reply(json!({ "jsonrpc": "2.0", "id": "q" })).unwrap()["error"]["code"], -32600);
+        // A reply to a request we never sent (a result or an error, and no method) is not a request: it gets none.
+        assert!(reply(json!({ "jsonrpc": "2.0", "id": 4, "result": {} })).is_none());
+        assert!(reply(json!({ "jsonrpc": "2.0", "id": 4, "error": { "code": -1, "message": "x" } })).is_none());
     }
 
     #[test]
