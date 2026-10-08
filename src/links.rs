@@ -46,7 +46,7 @@ pub fn candidates(ctx: &Ctx<'_>, ex: &Extracted, keep: impl Fn(&Url) -> bool) ->
         .enumerate()
         .map(|(i, l)| Link { i, ..l.clone() })
         .collect();
-    shortlist(ctx.args.ask.as_deref().unwrap_or_default(), all)
+    most_relevant(ctx.args.ask.as_deref().unwrap_or_default(), all, MAX_LINKS)
 }
 
 /// How many of the question's words a link shares (by their first five letters: "limit" finds `/limits/`). Only used to
@@ -63,13 +63,13 @@ pub fn overlap(question: &str, link: &Link) -> usize {
     words(question).iter().filter(|w| !STOP.contains(&w.as_str())).filter(|w| link_words.contains(&stem(w))).count()
 }
 
-/// At most [`MAX_LINKS`]: those that share words with the question first, then in page order.
-fn shortlist(question: &str, links: Vec<Link>) -> Vec<Link> {
+/// At most `max`: those that share words with the question first, then in page order.
+pub fn most_relevant(question: &str, links: Vec<Link>, max: usize) -> Vec<Link> {
     let mut links = links;
-    if links.len() > MAX_LINKS {
+    if links.len() > max {
         let mut ranked: Vec<(usize, Link)> = links.into_iter().map(|l| (overlap(question, &l), l)).collect();
         ranked.sort_by_key(|(o, l)| (std::cmp::Reverse(*o), l.i));
-        links = ranked.into_iter().take(MAX_LINKS).map(|(_, l)| l).collect();
+        links = ranked.into_iter().take(max).map(|(_, l)| l).collect();
     }
     links.into_iter().enumerate().map(|(i, l)| Link { i, ..l }).collect()
 }
@@ -226,7 +226,7 @@ mod tests {
         };
         let mut links: Vec<Link> = (0..MAX_LINKS + 50).map(|i| link(i, &format!("/page/{i}"))).collect();
         links.push(link(MAX_LINKS + 50, "/workers/platform/limits/"));
-        let kept = shortlist("What is the CPU time limit for Workers?", links);
+        let kept = most_relevant("What is the CPU time limit for Workers?", links, MAX_LINKS);
         assert_eq!(kept.len(), MAX_LINKS);
         assert_eq!(kept[0].url.path(), "/workers/platform/limits/");
         assert_eq!(kept[0].i, 0);
