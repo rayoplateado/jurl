@@ -112,6 +112,13 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     // One HTTP/1 connection per Clef call: multiplexing them all over a single HTTP/2
     // connection measured ~2x slower at the tail.
     let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
+    let req = clef_keys.as_ref().map(|keys| LookRequest {
+        http: ctx.client,
+        clef: &clef_client,
+        keys,
+        title: &ex.title,
+        query,
+    });
     let cap = if query.is_some() { FIND_MAX } else { VISION_MAX };
     let (a, looks) = if query.is_some() && ex.images.len() > cap {
         // Too many to look at: Jev shortlists by text, then Clef looks at the shortlist.
@@ -121,20 +128,13 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         let p = |i: &Image| a.noul(&format!("img{}", i.i)).unwrap_or(0.0);
         ranked.sort_by(|x, y| p(y).total_cmp(&p(x)));
         ranked.truncate(cap);
-        let looks = look_all(ctx.client, &clef_client, clef_keys.as_ref(), &ex.title, ranked, query).await;
+        let looks = look_all(req.as_ref(), ranked).await;
         t.lap(format!("clef({} img)", looks.len()));
         (a, looks)
     } else {
         let (a, looks) = tokio::join!(
             ctx.judge("images", items, Map::new()),
-            look_all(
-                ctx.client,
-                &clef_client,
-                clef_keys.as_ref(),
-                &ex.title,
-                ex.images.iter().take(cap).collect(),
-                query
-            )
+            look_all(req.as_ref(), ex.images.iter().take(cap).collect())
         );
         let a = a?;
         t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
@@ -211,21 +211,23 @@ impl Looks {
     }
 }
 
+/// What the looks of one `images` call share: the clients, Clef's keys, the page title and the --find question.
+struct LookRequest<'a> {
+    /// Downloads each thumbnail: the page's own client.
+    http: &'a Client,
+    /// Calls Clef: one HTTP/1 connection per call.
+    clef: &'a Client,
+    keys: &'a ClefKeys,
+    title: &'a str,
+    query: Option<&'a str>,
+}
+
 /// Clef on several images at once, each bounded by the vision deadline.
-async fn look_all(
-    client: &Client,
-    clef_client: &Client,
-    keys: Option<&ClefKeys>,
-    title: &str,
-    imgs: Vec<&Image>,
-    query: Option<&str>,
-) -> Looks {
-    let Some(keys) = keys else { return Looks::default() };
+async fn look_all(req: Option<&LookRequest<'_>>, imgs: Vec<&Image>) -> Looks {
+    let Some(req) = req else { return Looks::default() };
     let deadline = vision_deadline();
     let answers = join_all(imgs.into_iter().map(|img| async move {
-        let look =
-            tokio::time::timeout(deadline, look(client, clef_client, &keys.account, &keys.token, title, img, query))
-                .await;
+        let look = tokio::time::timeout(deadline, look(req, img)).await;
         (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms (JURL_VISION_TIMEOUT_MS)", deadline.as_millis()))))
     }))
     .await;
@@ -233,28 +235,20 @@ async fn look_all(
 }
 
 /// Clef's view of one image: with a query, P(it shows that); without, P(it is content, not chrome).
-#[allow(clippy::too_many_arguments)]
-async fn look(
-    client: &Client,
-    clef_client: &Client,
-    account: &str,
-    token: &str,
-    title: &str,
-    img: &Image,
-    query: Option<&str>,
-) -> Result<f64> {
-    let data = thumbnail(client, &img.preview).await?;
-    let state = json!({ "page_title": title, "alt": img.alt, "caption": img.caption });
+async fn look(req: &LookRequest<'_>, img: &Image) -> Result<f64> {
+    let data = thumbnail(req.http, &img.preview).await?;
+    let state = json!({ "page_title": req.title, "alt": img.alt, "caption": img.caption });
     // Clef answers "what is this?" far better than "does this matter?", so without a query
     // ask the factual question and add up the content classes here.
-    let question = match query {
+    let question = match req.query {
         Some(q) => noul(format!("The attached image shows: {q}")),
         None => choice("What does the attached image show?", VISUAL_KINDS.clone()),
     };
     let qs = Map::from_iter([("q".to_string(), question)]);
-    let call = || decide::clef(clef_client, account, token, state.clone(), qs.clone(), vec![data.clone()]);
+    let call =
+        || decide::clef(req.clef, &req.keys.account, &req.keys.token, state.clone(), qs.clone(), vec![data.clone()]);
     let a = hedged(call, VISION_HEDGE).await?;
-    if query.is_some() {
+    if req.query.is_some() {
         return a.noul("q").context("clef returned no answer");
     }
     let probs = a.probabilities("q").context("clef returned no answer")?;
