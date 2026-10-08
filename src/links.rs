@@ -9,9 +9,9 @@ use serde_json::{Map, json};
 use url::Url;
 
 use crate::{
-    Ctx, Item,
     decide::{Answers, noul},
     extract::{Extracted, Link},
+    judge::{Ctx, Item},
 };
 
 /// Links scored per page: cheap to score (~45 tokens each).

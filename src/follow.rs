@@ -13,11 +13,12 @@ use serde_json::Map;
 use url::Url;
 
 use crate::{
-    Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick,
+    PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick,
     cli::Args,
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Link},
+    judge::{Ctx, Item},
     links::{self, FieldScores, key, overlap},
     load,
     output::{Rendered, missed, not_found},
