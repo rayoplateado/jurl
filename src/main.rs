@@ -12,7 +12,7 @@ mod update;
 
 use std::{
     collections::{HashMap, HashSet},
-    io::{Write, stdout},
+    io::{ErrorKind, Write, stdout},
     process::ExitCode,
     time::{Duration, Instant},
 };
@@ -379,7 +379,7 @@ async fn run(mut args: Args) -> Result<()> {
         t.report();
     }
     if let Some(text) = stdout_for(&args, &done, &decide::USAGE)? {
-        write!(stdout().lock(), "{text}")?;
+        write_out(&mut stdout().lock(), &text)?;
     }
     done.map(|_| ())
 }
@@ -404,6 +404,14 @@ fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::Usage) -> Re
             Some(n) if args.precise => json(&no_answer(args, &n.message)).map(Some),
             _ => Ok(None),
         },
+    }
+}
+
+/// Prints the result. A reader that has stopped (`| head -0`) isn't a failure: the exit code is the run's own.
+fn write_out(out: &mut impl Write, text: &str) -> std::io::Result<()> {
+    match write!(out, "{text}") {
+        Err(e) if e.kind() == ErrorKind::BrokenPipe => Ok(()),
+        r => r,
     }
 }
 
@@ -1331,5 +1339,24 @@ mod tests {
         let got = chunks(items, Map::new());
         assert_eq!(got.iter().map(|r| numbers(r).len()).collect::<Vec<_>>(), vec![119, 1]);
         assert_eq!(asked(&got[1]), vec!["f119", "l119"]);
+    }
+
+    /// A stdout whose reader has gone: every write fails with this kind of error.
+    struct Gone(ErrorKind);
+
+    impl Write for Gone {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_reader_that_stopped_is_not_an_error() {
+        assert!(write_out(&mut Gone(ErrorKind::BrokenPipe), "$8\n").is_ok());
+        // Any other write error still is one.
+        assert!(write_out(&mut Gone(ErrorKind::PermissionDenied), "$8\n").is_err());
     }
 }
