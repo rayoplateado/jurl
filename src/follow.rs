@@ -223,6 +223,13 @@ fn hex_value(digit: u8) -> u8 {
     (digit as char).to_digit(16).unwrap_or_default() as u8
 }
 
+/// Whether a read failed because the page is a block page (a rate limit, bot check or access denied standing in for
+/// it): the error `Ctx::judge` gives one. judge.rs writes that message, so this matches its text. A typed error there
+/// would be the proper check.
+fn is_block_page(e: &anyhow::Error) -> bool {
+    format!("{e:#}").contains("served a block page")
+}
+
 /// The key a host's `robots.txt` is kept under: the host without `www.`, as [`Site`] counts hosts.
 fn host_key(u: &Url) -> Option<&str> {
     u.host_str().map(|h| h.trim_start_matches("www."))
@@ -497,10 +504,11 @@ async fn visit(
         // The answer the way `-q` finds it (score_blocks), and with --precise, the way --precise picks it.
         let answer = async {
             let mut t = Timer::new();
-            // A page with nothing to read is a page without the answer; Jev failing ends the search.
+            // A page with nothing to read is a page without the answer; Jev failing, or the page being a block page,
+            // fails the read.
             let (scores, kind) = match score_blocks(&ctx, &ex, &mut t).await {
                 Ok(s) => s,
-                Err(e) if is_api_error(&e) => return Err(e),
+                Err(e) if is_api_error(&e) || is_block_page(&e) => return Err(e),
                 Err(_) => return Ok((None, 0.0)),
             };
             let warmth = scores.iter().flatten().copied().fold(0.0, f64::max);
@@ -514,7 +522,7 @@ async fn visit(
                         let p = pick.p;
                         Ok((Some((Found::Precise(pick), p)), warmth))
                     }
-                    Err(e) if is_api_error(&e) => Err(e),
+                    Err(e) if is_api_error(&e) || is_block_page(&e) => Err(e),
                     Err(_) => Ok((None, warmth)),
                 }
             } else {
@@ -531,7 +539,7 @@ async fn visit(
         let (answer, warmth) = answer?;
         let (scores, new_field_scores) = match scores {
             Ok(s) => s,
-            Err(e) if is_api_error(&e) => return Err(e),
+            Err(e) if is_api_error(&e) || is_block_page(&e) => return Err(e),
             Err(_) => (vec![0.0; candidates.len()], FieldScores::new()),
         };
         let links = candidates
@@ -805,8 +813,8 @@ impl Search {
         Ok(Some(batch))
     }
 
-    /// Takes the results of a batch, in batch order. A page read is absorbed; one that failed to load is skipped (and
-    /// said so under -t); an API error ends the search.
+    /// Takes the results of a batch, in batch order. A page read is absorbed; one that failed to load, or was a block
+    /// page, is skipped (and said so under -t), its links never become leads; an API error ends the search.
     fn absorb_batch(&mut self, batch: Vec<Lead>, results: Vec<Result<Visit>>, timing: bool) -> Result<()> {
         for (lead, r) in batch.into_iter().zip(results) {
             match r {
@@ -1287,6 +1295,29 @@ mod tests {
         assert_eq!(s.done(), None);
         // No lead at all, and nothing found: cold too.
         assert_eq!(search().done(), Some(Stop::Cold));
+    }
+
+    #[test]
+    fn a_block_page_is_told_apart_by_the_error_judge_gives_it() {
+        let block = anyhow::anyhow!(
+            "https://x.com/ served a block page (rate limit, bot check or access denied), not its content (p=0.95)"
+        );
+        assert!(is_block_page(&block));
+        assert!(!is_block_page(&anyhow::anyhow!("no readable content in https://x.com/")));
+    }
+
+    #[test]
+    fn a_block_page_read_later_is_skipped_and_leads_nothing() {
+        // The interstitial's links are not the site's: nothing is absorbed, and the search goes on as it was.
+        let mut s = search();
+        let block = anyhow::anyhow!(
+            "https://x.com/next served a block page (rate limit, bot check or access denied), not its content (p=0.95)"
+        );
+        s.absorb_batch(vec![lead(0.5)], vec![Err(block)], false).expect("the search goes on");
+        assert_eq!(s.pages, 1);
+        assert!(s.leads.is_empty());
+        assert!(s.log.is_empty());
+        assert!(s.found.is_empty() && s.closest.is_none());
     }
 
     /// The links a site lists for `urls`, in that order, as `site_map` lists them.
