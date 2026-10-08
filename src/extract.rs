@@ -356,7 +356,8 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
                 title = v.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
             }
         }
-        body = rest[end + 4..].trim_start_matches(['-', '\n']);
+        // Only the closing `---` line goes: the body after it stays whole, a leading "- " bullet included.
+        body = rest[end + 4..].split_once('\n').map_or("", |(_, after)| after);
     }
 
     for line in body.lines() {
@@ -1152,6 +1153,14 @@ mod tests {
         assert_eq!(code("```\nline1\nline2\n"), ["line1\nline2"]);
         // "```js" only starts like a closing fence, so it is code too.
         assert_eq!(code("```\nline1\n```js\n"), ["line1\n```js"]);
+    }
+
+    #[test]
+    fn frontmatter_ends_at_its_own_delimiter() {
+        let ex = markdown("---\ntitle: Pricing\n---\n- Free plan\n- Pro plan", &base());
+        assert_eq!(ex.title, "Pricing");
+        let texts: Vec<_> = ex.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, ["- Free plan\n- Pro plan"]);
     }
 
     #[test]
