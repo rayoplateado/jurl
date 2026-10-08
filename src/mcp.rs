@@ -262,6 +262,10 @@ fn handle(line: &str) -> Reply {
         Ok(v) => v,
         Err(e) => return Reply::Now(Some(error(Value::Null, -32700, &format!("parse error: {e}")))),
     };
+    // Batches (MCP 2025-03-26 only) aren't served: say so, rather than drop the line as junk below.
+    if msg.is_array() {
+        return Reply::Now(Some(error(Value::Null, -32600, "batches aren't supported: send one message per line")));
+    }
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
         // A response to a request we never send, or junk: nothing to answer.
         return Reply::Now(None);
@@ -446,6 +450,15 @@ mod tests {
         assert_eq!(r["id"], "d");
         assert!(reply(json!({ "jsonrpc": "2.0", "id": 4, "result": {} })).is_none());
         assert_eq!(handle_raw("{not json").unwrap()["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn a_batch_is_an_invalid_request_not_silence() {
+        for batch in [json!([]), json!([{ "jsonrpc": "2.0", "id": 1, "method": "ping" }])] {
+            let r = reply(batch).expect("a batch got no reply");
+            assert_eq!(r["error"]["code"], -32600);
+            assert_eq!(r["id"], Value::Null);
+        }
     }
 
     #[test]
