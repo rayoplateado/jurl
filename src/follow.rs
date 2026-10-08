@@ -13,13 +13,15 @@ use serde_json::Map;
 use url::Url;
 
 use crate::{
-    Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, Rendered,
+    Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick,
     cli::Args,
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Link},
     links::{self, FieldScores, key, overlap},
-    load, missed, precise_pick, render_blocks, render_precise, score_blocks,
+    load,
+    output::{Rendered, missed, not_found},
+    precise_pick, render_blocks, render_precise, score_blocks,
     timing::Timer,
     top,
 };
@@ -623,17 +625,17 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
                 // JSON says what came closest, as on a single page, and fails like it; text fails with it in the
                 // message.
                 if !(args.json && args.precise) {
-                    return Err(crate::not_found(message));
+                    return Err(not_found(message));
                 }
                 (v, path, Some(message))
             }
             None if cold => {
-                return Err(crate::not_found(format!(
+                return Err(not_found(format!(
                     "read {pages} pages of {} and none answers that; no link left looks promising",
                     site.root
                 )));
             }
-            None => return Err(crate::not_found(format!("read {pages} pages of {} and none answers that", site.root))),
+            None => return Err(not_found(format!("read {pages} pages of {} and none answers that", site.root))),
         },
     };
     let ctx = Ctx::new(args, client, key, &v.url, &v.ex);
