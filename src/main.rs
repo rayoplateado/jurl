@@ -373,20 +373,38 @@ async fn run(mut args: Args) -> Result<()> {
     if args.timing {
         t.report();
     }
-    let shown = match &done {
-        Ok(r) => Some(r),
-        Err(e) => e.chain().find_map(|c| c.downcast_ref::<NotFound>()).and_then(|n| n.closest.as_ref()),
-    };
-    // A miss prints nothing, except in JSON: what came closest, with `"answer": null`.
-    if let Some(r) = shown {
-        let mut out = stdout().lock();
-        if args.json {
-            writeln!(out, "{}", serde_json::to_string_pretty(&r.json)?)?;
-        } else if done.is_ok() {
-            write!(out, "{}", r.text)?;
-        }
+    if let Some(text) = stdout_for(&args, &done)? {
+        write!(stdout().lock(), "{text}")?;
     }
     done.map(|_| ())
+}
+
+/// What goes to stdout. A miss prints nothing, except in JSON with --precise: what came closest, with
+/// `"answer": null`, or with nothing close, `"closest": null` too, so a script reading stdout always gets an object.
+fn stdout_for(args: &Args, done: &Result<Rendered>) -> Result<Option<String>> {
+    let json = |v: &Value| -> Result<String> { Ok(format!("{}\n", serde_json::to_string_pretty(v)?)) };
+    match done {
+        Ok(r) if args.json => json(&r.json).map(Some),
+        Ok(r) => Ok(Some(r.text.clone())),
+        Err(_) if !args.json => Ok(None),
+        Err(e) => match e.chain().find_map(|c| c.downcast_ref::<NotFound>()) {
+            Some(NotFound { closest: Some(r), .. }) => json(&r.json).map(Some),
+            Some(n) if args.precise => json(&no_answer(args, &n.message)).map(Some),
+            _ => Ok(None),
+        },
+    }
+}
+
+/// A --precise miss with nothing close enough to show (no block worth searching for the answer).
+fn no_answer(args: &Args, message: &str) -> Value {
+    json!({
+        "url": url::Url::parse(&args.url).map_or_else(|_| args.url.clone(), String::from),
+        "ask": args.ask.as_deref().unwrap_or_default(),
+        "answer": null,
+        "closest": null,
+        "p": null,
+        "error": message,
+    })
 }
 
 /// The URL and flags made whole and checked: `--find` is a question for `--vision`, a bare domain gets https://.
@@ -1079,5 +1097,27 @@ mod tests {
         assert_eq!(exit_code(&missed("no answer".into(), Rendered { text: String::new(), json: json!({}) })), 1);
         assert_eq!(exit_code(&anyhow!("https://x.com returned HTTP 404 Not Found")), 2);
         assert_eq!(exit_code(&anyhow!("api.typesafe.ai → HTTP 402: no credits")), 2);
+    }
+
+    #[test]
+    fn a_precise_miss_still_prints_json() {
+        let mut args = Args::parse_from(["jurl", "--precise", "--json", "-q", "books?", "jurl.dev"]);
+        prepare(&mut args).unwrap();
+        // Nothing worth searching on the page: no closest, still an object with a null answer.
+        let miss: Result<Rendered> = Err(not_found("nothing in https://jurl.dev/ answers that".into()));
+        let out = stdout_for(&args, &miss).unwrap().expect("JSON on a miss");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["answer"], Value::Null);
+        assert_eq!(v["closest"], Value::Null);
+        assert_eq!(v["url"], "https://jurl.dev/");
+        assert_eq!(v["ask"], "books?");
+        // A miss with a closest candidate prints that.
+        let close = Rendered { text: String::new(), json: json!({ "answer": null, "closest": "x" }) };
+        let out = stdout_for(&args, &Err(missed("no answer".into(), close))).unwrap().unwrap();
+        assert!(out.contains("\"closest\": \"x\""), "{out}");
+        // Failures (exit 2) print nothing, and neither does a text-mode miss.
+        assert_eq!(stdout_for(&args, &Err(anyhow!("HTTP 404"))).unwrap(), None);
+        args.json = false;
+        assert_eq!(stdout_for(&args, &Err(not_found("nothing".into()))).unwrap(), None);
     }
 }
