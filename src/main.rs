@@ -195,20 +195,34 @@ pub(crate) async fn load(
         t.lap("fetch");
         page
     };
-    let mut ex =
-        if page.is_markdown { extract::markdown(&page.body, &page.url) } else { extract::html(&page.body, &page.url) };
+    // Only HTML can carry placeholders: a markdown page has no script to have left them.
+    let (mut ex, placeholders) = if page.is_markdown {
+        (extract::markdown(&page.body, &page.url), false)
+    } else {
+        extract::html_with_placeholders(&page.body, &page.url)
+    };
     t.lap(if page.is_markdown { "extract(md)" } else { "extract" });
     decide::USAGE.pages.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    // A JS app with (almost) no server-rendered text: render it instead of giving up.
+    // A JS app with (almost) no server-rendered text, or a page whose script left template placeholders in its text
+    // (a long text is no proof that the script ran): render it instead of giving up.
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
-    if !args.render && ex.app_shell && text < APP_SHELL_TEXT {
+    let shell = ex.app_shell && text < APP_SHELL_TEXT;
+    if !args.render && (shell || placeholders) {
         match lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await {
             Ok(bin) => {
-                eprintln!("jurl: no text without JavaScript, rendering with Lightpanda…");
-                let rendered = fetch::render(&bin, &page.url).await?;
-                ex = extract::html(&rendered.body, &rendered.url);
-                t.lap("render");
+                let why =
+                    if shell { "no text without JavaScript" } else { "unfilled template placeholders in the text" };
+                eprintln!("jurl: {why}, rendering with Lightpanda…");
+                match fetch::render(&bin, &page.url).await {
+                    Ok(rendered) => {
+                        ex = extract::html(&rendered.body, &rendered.url);
+                        t.lap("render");
+                    }
+                    // An app shell has nothing to read without its render; a page with placeholders is readable anyway.
+                    Err(e) if shell => return Err(e),
+                    Err(e) => eprintln!("jurl: could not render the page, reading it as it is: {e:#}"),
+                }
             }
             Err(e) => eprintln!("jurl: {e:#}"),
         }

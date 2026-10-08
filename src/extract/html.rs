@@ -25,16 +25,25 @@ const LAZY_SRC: &[&str] = &["data-src", "data-lazy-src"];
 const LAZY_FULL_SIZE: &str = "data-original";
 
 pub fn html(body: &str, base: &Url) -> Extracted {
+    extract_doc(&Html::parse_document(body), body, base)
+}
+
+/// `html`, and whether the page is a template its script has not filled in: see [`has_placeholders`].
+pub fn html_with_placeholders(body: &str, base: &Url) -> (Extracted, bool) {
     let doc = Html::parse_document(body);
-    let root = content_root(&doc);
+    (extract_doc(&doc, body, base), has_placeholders(&doc))
+}
+
+fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
+    let root = content_root(doc);
     let in_body = root.value().name() == "body";
     Extracted {
-        title: collapse(&page_title(&doc)),
-        blocks: join_short(walk(&doc, root, in_body)),
-        images: collect_images(&doc, root, in_body, base),
+        title: collapse(&page_title(doc)),
+        blocks: join_short(walk(doc, root, in_body)),
+        images: collect_images(doc, root, in_body, base),
         links: collect_links(root, in_body, base),
-        site_links: collect_site_links(&doc, base),
-        app_shell: is_app_shell(&doc, body),
+        site_links: collect_site_links(doc, base),
+        app_shell: is_app_shell(doc, body),
     }
 }
 
@@ -159,6 +168,57 @@ fn is_app_shell(doc: &Html, body: &str) -> bool {
     doc.select(&sel("script")).next().is_some()
         && (body.len() > 4096
             || doc.select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]")).next().is_some())
+}
+
+/// A sigil before `{name}` makes a template placeholder: MEGA's `!{freePlanStorage}` and `^{price}`, JavaScript's
+/// `${total}`, Ruby's `#{name}`.
+const SIGILS: &[char] = &['!', '^', '$', '#', '%', '@'];
+/// The placeholders in a page's visible text that make it a template its script has not filled in.
+const PLACEHOLDERS_MIN: usize = 2;
+/// Elements whose text is not prose a reader takes in: markup, and code, where braces are what the text is about.
+const NOT_PROSE: &[&str] =
+    &["head", "script", "style", "noscript", "template", "textarea", "pre", "code", "kbd", "samp", "var"];
+
+/// Whether the page is a template its script has not filled in: at least `PLACEHOLDERS_MIN` placeholders in its
+/// visible text, outside code. `{{name}}`, and a sigil before `{name}`, are placeholders; a bare `{name}` is not, since
+/// prose uses it for regex quantifiers and the like. Only a script fills placeholders in, so a page without one is read
+/// as it is.
+fn has_placeholders(doc: &Html) -> bool {
+    if doc.select(&sel("script")).next().is_none() {
+        return false;
+    }
+    let mut found = 0;
+    for node in doc.root_element().descendants() {
+        let Some(text) = node.value().as_text().filter(|t| t.contains('{')) else { continue };
+        if node.ancestors().filter_map(ElementRef::wrap).any(|a| hidden(a) || NOT_PROSE.contains(&a.value().name())) {
+            continue;
+        }
+        found += count_placeholders(text);
+        if found >= PLACEHOLDERS_MIN {
+            return true;
+        }
+    }
+    false
+}
+
+/// The placeholders in `text`: each `{{name}}`, and each `{name}` with a sigil right before it.
+fn count_placeholders(text: &str) -> usize {
+    text.match_indices('{')
+        .filter(|&(at, _)| match text[at + 1..].strip_prefix('{') {
+            Some(inside) => name_then(inside, "}}"),
+            None => {
+                text[..at].chars().next_back().is_some_and(|c| SIGILS.contains(&c)) && name_then(&text[at + 1..], "}")
+            }
+        })
+        .count()
+}
+
+/// Whether `s` starts with a name and then `close`, spaces allowed around the name. A name is an identifier of two or
+/// more characters, dots allowed (`price`, `plan.storage`), so the `n` in `x^{n}` is not one.
+fn name_then(s: &str, close: &str) -> bool {
+    let s = s.trim_start();
+    let len = s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.')).unwrap_or(s.len());
+    len >= 2 && s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && s[len..].trim_start().starts_with(close)
 }
 
 /// Every link on the page, menus and footers included: only hidden links are left out.
@@ -676,6 +736,43 @@ mod tests {
         assert!(html(spa, &base()).app_shell);
         let static_page = "<html><body><div id=\"root\"><p>Server text</p></div></body></html>";
         assert!(!html(static_page, &base()).app_shell);
+    }
+
+    #[test]
+    fn unfilled_template_placeholders_need_a_render() {
+        // MEGA's pricing page: the text is long, but its script has not filled in the placeholders.
+        let page = r#"<body><main><p>Compare the plans and pick the one that fits your team. Every plan includes encrypted
+            storage, file sharing and apps for every device, and you can change plans at any time from your account.</p>
+            <div class="plan-feature">!{freePlanStorage}</div><p>Get {{ planStorage }} free, then save up to ^{price} a month.</p>
+            </main><script src="/app.js"></script></body>"#;
+        assert!(html_with_placeholders(page, &base()).1);
+    }
+
+    #[test]
+    fn braces_in_code_and_bare_braces_in_prose_are_not_placeholders() {
+        let page = r#"<body><article><p>Set <code>${HOME}</code> and <code>{{ name }}</code>, then run the sample.</p>
+            <pre><code>cd ${HOME}/bin
+            echo {name} !{freePlanStorage} !{freePlanStorage}</code></pre>
+            <p>The quantifier {n} repeats the atom, x^{n} is a power, and pass {min} and {max} as the bounds.</p>
+            <p>A stray !{freePlanStorage} is one placeholder, not a template.</p><div hidden>!{freePlanStorage} ^{price}</div>
+            </article><script src="/app.js"></script></body>"#;
+        assert!(!html_with_placeholders(page, &base()).1);
+    }
+
+    #[test]
+    fn placeholders_need_a_script_to_fill_them_in() {
+        let page =
+            r#"<body><p>Plan storage is !{freePlanStorage}, and transfer is !{freePlanTransfer} a month.</p></body>"#;
+        assert!(!html_with_placeholders(page, &base()).1);
+        let with_script = page.replace("</body>", "<script>load()</script></body>");
+        assert!(html_with_placeholders(&with_script, &base()).1);
+    }
+
+    #[test]
+    fn a_placeholder_is_a_sigil_or_double_braces_around_a_name() {
+        assert_eq!(count_placeholders("!{freePlanStorage} ^{price} ${plan.total} {{ name }}"), 4);
+        // Bare braces, one-letter names, digits, empty braces and braces after punctuation are not placeholders.
+        assert_eq!(count_placeholders("{ab} x^{n} {min} !{a} ({ab}) {0} ${}"), 0);
     }
 
     #[test]

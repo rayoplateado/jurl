@@ -11,7 +11,7 @@ mod html;
 mod join;
 mod markdown;
 
-pub use html::html;
+pub use html::{html, html_with_placeholders};
 pub use join::{SHORT_BLOCK_CHARS, short_items_of_kept_lists};
 pub use markdown::markdown;
 

@@ -193,7 +193,7 @@ Images are picked from `<img>` tags (`src`, `srcset` and the usual lazy-loading 
 
 ### JavaScript apps
 
-Some pages arrive empty because their content is built by JavaScript. jurl spots those and renders them in [Lightpanda](https://lightpanda.io), a fast headless browser:
+Some pages arrive empty because their content is built by JavaScript, or with template placeholders in their text (`!{freePlanStorage}`) that the script would have filled in. jurl spots those and renders them in [Lightpanda](https://lightpanda.io), a fast headless browser:
 
 ```console
 $ jurl -n 2 hn.algolia.com
@@ -269,7 +269,7 @@ The tools run the same code as the CLI, with the same keys (`jurl init` or the e
 | `-i, --image` | Content images, judged by file name, alt text and caption |
 | `--vision` | Like `--image`, plus Clef looks at the pixels |
 | `-f, --find "…"` | The image that best matches the description |
-| `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps) |
+| `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps and unfilled template placeholders) |
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
@@ -345,7 +345,7 @@ jurl has no server and no account of its own. It talks to the model APIs directl
 
 ```text
 url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · images
-          └─ empty JavaScript app? ─▶ render in Lightpanda
+          └─ empty JavaScript app or unfilled template? ─▶ render in Lightpanda
                           │
             one yes/no question per candidate
               ┌───────────┴───────────┐
