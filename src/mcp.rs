@@ -2,7 +2,8 @@
 //! and sends one JSON-RPC message per line on stdin; the answers go back one per line on stdout, so nothing else may
 //! write there (jurl's own notes go to stderr, as always).
 //!
-//! This is the small part of MCP a local tool server needs: `initialize`, `ping`, `tools/list` and `tools/call`.
+//! This is the small part of MCP a local tool server needs: `initialize`, `ping`, `tools/list`, `tools/call` and
+//! `notifications/cancelled`.
 //! Each tool is a jurl command line, parsed and run by the same code as the CLI, so a tool answers exactly what
 //! `jurl` would print. A miss ("the page doesn't say") is a normal result, as exit code 1 is; a failure (the page
 //! couldn't be read, a bad key, no credits) is a tool error, as exit code 2 is.
@@ -306,6 +307,8 @@ enum Reply {
     Now(Option<Value>),
     /// A tool call: run this jurl command line, then answer request `id`.
     Run { id: Value, argv: Vec<String> },
+    /// `notifications/cancelled`: the client no longer wants request `request_id` answered (see `drive`).
+    Cancel { request_id: Value },
 }
 
 fn handle(line: &str) -> Reply {
@@ -332,7 +335,14 @@ fn handle(line: &str) -> Reply {
             _ => Reply::Now(None),
         };
     };
-    // Notifications (`notifications/initialized`, `notifications/cancelled`…) have no id and get no reply.
+    // Cancelling is a notification too, but `drive` has to act on it: it drops the call, or stops its reply.
+    if method == "notifications/cancelled" {
+        return match msg["params"]["requestId"].clone() {
+            Value::Null => Reply::Now(None),
+            request_id => Reply::Cancel { request_id },
+        };
+    }
+    // Notifications (`notifications/initialized`…) have no id and get no reply.
     let Some(id) = msg.get("id").cloned() else { return Reply::Now(None) };
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
     let result = match method {
@@ -424,7 +434,8 @@ pub(crate) async fn serve(client: Client) -> Result<()> {
     .await
 }
 
-/// The loop behind `serve`, over any reader and writer, so a test can run it with a fake `call`.
+/// The loop behind `serve`, over any reader and writer, so a test can run it with a fake `call`. A cancelled request
+/// is not answered: see `cancel` and `finished`.
 async fn drive<R, W, F, Fut>(input: R, mut output: W, call: F) -> Result<()>
 where
     R: AsyncBufRead + Unpin,
@@ -437,12 +448,15 @@ where
     let mut open = true;
     // A read error stops the input, not the answers: the calls already sent are answered, then the error is returned.
     let mut failed: Option<anyhow::Error> = None;
-    let mut pending = VecDeque::new();
+    let mut pending: VecDeque<(Value, Vec<String>)> = VecDeque::new();
     let mut calls = FuturesUnordered::new();
+    // The calls running now, by request id, with whether the client has cancelled each one since it started.
+    let mut running: Vec<(Value, bool)> = Vec::new();
     loop {
         // Calls past the cap wait here, in arrival order.
         while calls.len() < MAX_CALLS {
             let Some((id, argv)) = pending.pop_front() else { break };
+            running.push((id.clone(), false));
             let fut = call(argv);
             calls.push(async move { response(id, fut.await) });
         }
@@ -456,6 +470,10 @@ where
                     Ok(line) if line.trim().is_empty() => continue,
                     Ok(line) => match handle(line) {
                         Reply::Now(reply) => reply,
+                        Reply::Cancel { request_id } => {
+                            cancel(&mut pending, &mut running, &request_id);
+                            continue;
+                        }
                         Reply::Run { id, argv } if pending.len() < MAX_PENDING => {
                             pending.push_back((id, argv));
                             continue;
@@ -481,7 +499,7 @@ where
                     continue;
                 }
             },
-            Some(reply) = calls.next(), if !calls.is_empty() => Some(reply),
+            Some(reply) = calls.next(), if !calls.is_empty() => finished(&mut running, reply),
         };
         if let Some(reply) = reply {
             let mut line = serde_json::to_vec(&reply)?;
@@ -490,6 +508,26 @@ where
             output.flush().await?;
         }
     }
+}
+
+/// Stops a request the client cancelled. A call still waiting for a slot is dropped, so it never runs. A call that is
+/// running keeps running, but its reply isn't sent (see `finished`). A request that is neither, because it was
+/// answered already or never came, is left alone.
+fn cancel(pending: &mut VecDeque<(Value, Vec<String>)>, running: &mut [(Value, bool)], request_id: &Value) {
+    if let Some(at) = pending.iter().position(|(id, _)| id == request_id) {
+        pending.remove(at);
+    } else if let Some((_, cancelled)) = running.iter_mut().find(|(id, _)| id == request_id) {
+        *cancelled = true;
+    }
+}
+
+/// A call that has finished: its reply, unless the client cancelled it while it ran. It leaves `running`.
+fn finished(running: &mut Vec<(Value, bool)>, reply: Value) -> Option<Value> {
+    let cancelled = match running.iter().position(|(id, _)| *id == reply["id"]) {
+        Some(at) => running.swap_remove(at).1,
+        None => false,
+    };
+    (!cancelled).then_some(reply)
 }
 
 #[cfg(test)]
@@ -508,6 +546,7 @@ mod tests {
         match handle(line) {
             Reply::Now(r) => r,
             Reply::Run { argv, .. } => panic!("unexpected run: {argv:?}"),
+            Reply::Cancel { request_id } => panic!("unexpected cancel of {request_id}"),
         }
     }
 
@@ -534,6 +573,8 @@ mod tests {
     #[test]
     fn notifications_get_no_reply_and_unknown_methods_an_error() {
         assert!(reply(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).is_none());
+        // A cancellation with no request to cancel is a notification too: nothing to stop, nothing to say.
+        assert!(reply(json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": {} })).is_none());
         assert_eq!(reply(json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" })).unwrap()["result"], json!({}));
         // Newer clients try `server/discover` first and fall back to `initialize` on "method not found".
         let r = reply(json!({ "jsonrpc": "2.0", "id": "d", "method": "server/discover" })).unwrap();
@@ -594,6 +635,7 @@ mod tests {
                 argv[1..].join(" ")
             }
             Reply::Now(r) => panic!("{r:?}"),
+            Reply::Cancel { request_id } => panic!("cancelled {request_id}, not run"),
         };
         assert_eq!(argv("read_page", json!({ "url": "example.com" })), "-- example.com");
         assert_eq!(
@@ -868,5 +910,61 @@ mod tests {
         let mut ids: Vec<u64> = lines_of(&out).iter().map(|r| r["id"].as_u64().unwrap()).collect();
         ids.sort();
         assert_eq!(ids, (1..=calls as u64).collect::<Vec<u64>>());
+    }
+
+    /// `notifications/cancelled` for request `id`, as a line.
+    fn cancelled(id: u64) -> String {
+        let note = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": id } });
+        format!("{note}\n")
+    }
+
+    #[tokio::test]
+    async fn a_call_cancelled_while_it_waits_never_runs_and_gets_no_reply() {
+        // MAX_CALLS run, so the next call waits for a slot, and the client cancels it before a slot frees.
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let recorder = started.clone();
+        let call = move |argv: Vec<String>| {
+            recorder.lock().unwrap().push(argv.last().unwrap().clone());
+            slow_call(argv)
+        };
+        let waiting = MAX_CALLS as u64 + 1;
+        let mut input: String = (1..=waiting)
+            .map(|i| {
+                request(i, "tools/call", json!({ "name": "read_page", "arguments": { "url": format!("x{i}.com") } }))
+            })
+            .collect();
+        input += &cancelled(waiting);
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, call).await.unwrap();
+
+        let mut ids: Vec<u64> = lines_of(&out).iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, (1..=MAX_CALLS as u64).collect::<Vec<u64>>());
+        let urls: Vec<String> = (1..=MAX_CALLS).map(|i| format!("x{i}.com")).collect();
+        assert_eq!(*started.lock().unwrap(), urls);
+    }
+
+    #[tokio::test]
+    async fn a_call_cancelled_while_it_runs_finishes_but_its_reply_is_not_sent() {
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let recorder = started.clone();
+        let call = move |argv: Vec<String>| {
+            recorder.lock().unwrap().push(argv.last().unwrap().clone());
+            slow_call(argv)
+        };
+        let input = [
+            request(1, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } })),
+            cancelled(1),
+            request(2, "ping", json!({})),
+        ]
+        .concat();
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, call).await.unwrap();
+
+        // Only the ping is answered: the cancelled call ran to its end, but the client had stopped waiting for it.
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(replies[0]["id"], 2);
+        assert_eq!(*started.lock().unwrap(), vec!["x.com".to_string()]);
     }
 }
