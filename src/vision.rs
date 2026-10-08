@@ -111,7 +111,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     let limit = ctx.args.limit(if query.is_some() { 1 } else { usize::MAX });
     let kept = keep(scored, ctx.args.threshold(), limit);
     if kept.is_empty() {
-        return Err(nothing_kept(ctx, &looks, query, best));
+        return Err(nothing_kept(ctx.url, &looks, query, best));
     }
     Ok(render(ctx, ex, &kept))
 }
@@ -210,17 +210,25 @@ fn keep(scored: Vec<(&Image, f64)>, threshold: f64, limit: usize) -> Vec<(&Image
 
 /// The error for a run that kept nothing: every look failed, or a query found nothing close enough, or no content
 /// image passed the threshold.
-fn nothing_kept(ctx: &Ctx<'_>, looks: &Looks, query: Option<&str>, best: Option<(url::Url, f64)>) -> anyhow::Error {
-    // Every image failed: an error, not "nothing looks like that". Clef's own errors (a bad token, no credits) say
-    // Clef couldn't look; any other error is about getting the images to Clef at all.
+fn nothing_kept(url: &url::Url, looks: &Looks, query: Option<&str>, best: Option<(url::Url, f64)>) -> anyhow::Error {
+    // Every image failed: an error, not "nothing looks like that".
     if let Some(e) = looks.all_failed() {
-        let what = if is_api_error(e) { "Clef couldn't look at any image" } else { "couldn't download any image" };
-        return anyhow!("{what} in {}: {e:#}", ctx.url);
+        return anyhow!(why_no_look(url, e));
     }
-    if let (Some(q), Some((url, p))) = (query, best) {
-        return not_found(format!("no image in {} looks like \"{q}\" (closest: {url}, p={p:.2})", ctx.url));
+    if let (Some(q), Some((closest, p))) = (query, best) {
+        return not_found(format!("no image in {url} looks like \"{q}\" (closest: {closest}, p={p:.2})"));
     }
-    not_found(format!("no content images in {} (try a lower --threshold)", ctx.url))
+    not_found(format!("no content images in {url} (try a lower --threshold)"))
+}
+
+/// What a run reports when every look failed: a timeout, a Clef error (a bad token, no credits) or a download error
+/// (anything else is about getting the images to Clef at all).
+fn why_no_look(url: &url::Url, e: &anyhow::Error) -> String {
+    if let Some(timeout) = e.chain().find_map(|c| c.downcast_ref::<Timeout>()) {
+        return format!("no image answered within {} ms (JURL_VISION_TIMEOUT_MS) in {url}", timeout.0.as_millis());
+    }
+    let what = if is_api_error(e) { "Clef couldn't look at any image" } else { "couldn't download any image" };
+    format!("{what} in {url}: {e:#}")
 }
 
 /// The result: each kept image's URL on its own line, and the same images as JSON.
@@ -314,13 +322,28 @@ struct LookRequest<'a> {
 async fn look_all(req: Option<&LookRequest<'_>>, imgs: Vec<&Image>) -> Looks {
     let Some(req) = req else { return Looks::default() };
     let deadline = vision_deadline();
-    let answers = join_all(imgs.into_iter().map(|img| async move {
-        let look = tokio::time::timeout(deadline, look(req, img)).await;
-        (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms (JURL_VISION_TIMEOUT_MS)", deadline.as_millis()))))
-    }))
-    .await;
+    let answers =
+        join_all(imgs.into_iter().map(|img| async move { (img.i, within(deadline, look(req, img)).await) })).await;
     Looks(answers.into_iter().collect())
 }
+
+/// `fut`'s answer, or a [`Timeout`] once `deadline` has passed.
+async fn within<T>(deadline: Duration, fut: impl Future<Output = Result<T>>) -> Result<T> {
+    tokio::time::timeout(deadline, fut).await.unwrap_or_else(|_| Err(Timeout(deadline).into()))
+}
+
+/// A look that ran past the vision deadline. It is its own error, so a report can say it timed out rather than that
+/// the download or Clef failed.
+#[derive(Debug)]
+struct Timeout(Duration);
+
+impl std::fmt::Display for Timeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "timed out after {} ms (JURL_VISION_TIMEOUT_MS)", self.0.as_millis())
+    }
+}
+
+impl std::error::Error for Timeout {}
 
 /// What Clef is told about one image: its state (the page title, alt and caption) and the question.
 fn clef_ask(title: &str, img: &Image, query: Option<&str>) -> (Value, Value) {
@@ -514,6 +537,32 @@ mod tests {
         let empty_token = env_of(&[("CLOUDFLARE_ACCOUNT_ID", "acct"), ("CLOUDFLARE_AI_TOKEN", "")]);
         let err = ClefKeys::from_lookup(empty_token).err().expect("empty token");
         assert!(format!("{err:#}").contains("need CLOUDFLARE_AI_TOKEN, which is missing"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_look_past_the_deadline_is_a_timeout() {
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok::<f64, anyhow::Error>(0.5)
+        };
+        let err = within(Duration::from_millis(10), slow).await.unwrap_err();
+        assert!(err.chain().any(|c| c.is::<Timeout>()), "{err:#}");
+        assert_eq!(format!("{err:#}"), "timed out after 10 ms (JURL_VISION_TIMEOUT_MS)");
+    }
+
+    #[test]
+    fn a_timeout_is_reported_as_one_not_as_a_download_error() {
+        let url = url::Url::parse("https://example.test/page").unwrap();
+        let timed_out = anyhow::Error::from(Timeout(Duration::from_millis(2500)));
+        assert_eq!(
+            why_no_look(&url, &timed_out),
+            "no image answered within 2500 ms (JURL_VISION_TIMEOUT_MS) in https://example.test/page"
+        );
+        let download = anyhow!("connection reset");
+        assert_eq!(
+            why_no_look(&url, &download),
+            "couldn't download any image in https://example.test/page: connection reset"
+        );
     }
 
     #[test]
