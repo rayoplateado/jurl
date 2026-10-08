@@ -5,8 +5,9 @@ use std::ops::Range;
 
 use crate::extract::{Block, Kind};
 
-/// A candidate answer: `blocks[block].text[range]`. A table cell carries its row and column as `label`, which is what
-/// Jev is shown ("30 s (CPU time · Paid)"); the answer is still just the cell.
+/// A candidate answer: `range` of the text of block `block`, where `block` is that block's `i` (its number on the
+/// page, which is also its index in `Extracted::blocks`). A table cell carries its row and column as `label`, which is
+/// what Jev is shown ("30 s (CPU time · Paid)"); the answer is still just the cell.
 #[derive(Debug, Clone)]
 pub struct Span {
     pub block: usize,
@@ -24,7 +25,7 @@ const DANGLING: &[&str] =
 const CURRENCY: &[&str] = &["$", "€", "£", "¥", "US$", "USD", "EUR", "GBP"];
 
 /// Candidate spans from `blocks`, taken from each block in turn so a long one (a big table) can't use up the
-/// whole budget. Every span is a substring of its block's text.
+/// whole budget. Every span is a substring of its block's text, and names that block by its `i`.
 pub fn candidates(blocks: &[&Block]) -> Vec<Span> {
     let mut queues: Vec<std::vec::IntoIter<(Range<usize>, Option<String>)>> = blocks
         .iter()
@@ -49,7 +50,7 @@ pub fn candidates(blocks: &[&Block]) -> Vec<Span> {
                 if s.chars().count() > MAX_SPAN_CHARS || !seen.insert(label.clone().unwrap_or_else(|| s.to_string())) {
                     continue;
                 }
-                out.push(Span { block: b, range: r, label });
+                out.push(Span { block: blocks[b].i, range: r, label });
                 live = true;
                 break;
             }
@@ -659,7 +660,7 @@ mod tests {
     fn every_block_gets_a_turn() {
         let big =
             block(Kind::Table, &(0..200).map(|i| format!("| Row {i} | {i} units |")).collect::<Vec<_>>().join("\n"));
-        let small = block(Kind::Para, "Daniel Ek is the CEO.");
+        let small = Block { i: 1, ..block(Kind::Para, "Daniel Ek is the CEO.") };
         let spans = candidates(&[&big, &small]);
         assert!(spans.iter().any(|s| s.block == 1 && small.text[s.range.clone()] == *"Daniel Ek"), "{spans:?}");
     }

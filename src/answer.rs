@@ -45,7 +45,8 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
         .collect();
     let mut criteria = Map::new();
     for (k, s) in spans.iter().enumerate() {
-        criteria.insert(format!("s{k}"), json!(s.label.as_deref().unwrap_or(&top[s.block].text[s.range.clone()])));
+        criteria
+            .insert(format!("s{k}"), json!(s.label.as_deref().unwrap_or(&ex.blocks[s.block].text[s.range.clone()])));
     }
     criteria.insert("none".to_string(), json!("None of these is exactly the answer"));
     let pick = choice(
@@ -85,14 +86,14 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
         .filter(|s| s.block == best.block && s.range != best.range)
         .filter(|s| s.range.start >= best.range.start && s.range.end <= best.range.end)
         .collect();
-    let text = top[best.block].text.as_str();
+    let text = ex.blocks[best.block].text.as_str();
     let context = || {
         vec![Item {
-            state: json!({ "block": top[best.block].i, "text": text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
+            state: json!({ "block": best.block, "text": text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
             questions: Vec::new(),
         }]
     };
-    if p >= threshold && top[best.block].kind != Kind::Code && precise::refinable(text, best) {
+    if p >= threshold && ex.blocks[best.block].kind != Kind::Code && precise::refinable(text, best) {
         // A long winner (a line, clause or sentence) may hold the answer and more. Its pieces, the shorter
         // candidates inside it and the winner itself are scored once more with the same question; a piece wins
         // only when Jev likes it at least as much as the whole, and at the answer's own threshold.
@@ -125,15 +126,15 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
             && pk >= threshold
             && pk >= whole
         {
-            return Ok(Pick { block: top[best.block].i, range: options[k].clone(), p });
+            return Ok(Pick { block: best.block, range: options[k].clone(), p });
         }
-        return Ok(Pick { block: top[best.block].i, range: best.range.clone(), p });
+        return Ok(Pick { block: best.block, range: best.range.clone(), p });
     }
     if p >= threshold && !inside.is_empty() {
         let options: Vec<&precise::Span> = std::iter::once(best).chain(inside).collect();
         let mut criteria = Map::new();
         for (k, s) in options.iter().enumerate() {
-            criteria.insert(format!("o{k}"), json!(&top[s.block].text[s.range.clone()]));
+            criteria.insert(format!("o{k}"), json!(&ex.blocks[s.block].text[s.range.clone()]));
         }
         let tighter = choice(
             &format!(
@@ -152,7 +153,7 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
             best = s;
         }
     }
-    Ok(Pick { block: top[best.block].i, range: best.range.clone(), p })
+    Ok(Pick { block: best.block, range: best.range.clone(), p })
 }
 
 /// The answer on its own line, then the block it's in and a link to it; JSON says how sure, and below the threshold
