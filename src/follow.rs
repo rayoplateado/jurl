@@ -864,4 +864,134 @@ mod tests {
         let xml = "<urlset><url><loc>https://x.com/a?b=1&amp;c=2</loc></url><url><loc> https://x.com/pricing </loc></url></urlset>";
         assert_eq!(locs(xml), ["https://x.com/a?b=1&c=2", "https://x.com/pricing"]);
     }
+
+    fn u(s: &str) -> Url {
+        Url::parse(s).unwrap()
+    }
+
+    /// A page as `visit` returns it, built without the network: `answers` says whether the page has an answer at all,
+    /// and `links` are its links with their own scores.
+    fn visit_of(page: &str, warmth: f64, score: f64, answers: bool, links: &[(&str, f64)]) -> Visit {
+        let url = u(page);
+        Visit {
+            ex: extract::html("", &url),
+            url,
+            found: answers.then(|| Found::Blocks { scores: Vec::new(), keep: Vec::new(), kind: None }),
+            score,
+            warmth,
+            links: links.iter().map(|&(l, p)| ScoredLink { url: u(l), text: String::new(), p }).collect(),
+            menus: HashSet::new(),
+            new_field_scores: FieldScores::new(),
+        }
+    }
+
+    /// A search with nothing read yet.
+    fn search() -> Search {
+        Search {
+            site: Site::new(&u("https://x.com/")),
+            max: 5,
+            threshold: PRECISE_THRESHOLD,
+            pages: 1,
+            opened: 1,
+            leads: Vec::new(),
+            visited: HashSet::new(),
+            known: HashSet::new(),
+            field_scores: FieldScores::new(),
+            robots: RobotsByHost::default(),
+            found: Vec::new(),
+            closest: None,
+            log: Vec::new(),
+            cold: false,
+        }
+    }
+
+    fn lead(score: f64) -> Lead {
+        Lead { url: u("https://x.com/next"), text: String::new(), score, p: score, path: Vec::new() }
+    }
+
+    #[test]
+    fn the_start_page_is_never_cold() {
+        // Its links are all there is to go on: no heat and no hop, so each keeps its own score, however little the
+        // start page says about the question.
+        let start = u("https://x.com/");
+        let mut s = search();
+        let page = visit_of("https://x.com/", 0.0, 0.0, false, &[("https://x.com/a", 0.6)]);
+        s.absorb(page, COLD_PAGE, 1.0, vec![start]);
+        assert_eq!(s.leads.len(), 1);
+        assert_eq!(s.leads[0].score, 0.6);
+    }
+
+    #[test]
+    fn each_hop_discounts_the_links_of_the_page_it_reaches() {
+        // Two hops out, on a page that is hot (warmth 1): its links keep HOP_DECAY twice over.
+        let path = vec![u("https://x.com/"), u("https://x.com/a"), u("https://x.com/b")];
+        let mut s = search();
+        s.absorb(visit_of("https://x.com/b", 1.0, 0.0, false, &[("https://x.com/c", 0.5)]), 0.5, 0.5, path);
+        assert!((s.leads[0].score - 0.5 * HOP_DECAY * HOP_DECAY).abs() < 1e-12, "{}", s.leads[0].score);
+    }
+
+    #[test]
+    fn a_cold_page_is_warm_relative_to_the_lead_that_reached_it() {
+        // Nothing on the question here (warmth 0), but its best link scores 0.5. Reached by a lead of 0.4, the page is
+        // getting warmer, so its links count in full; reached by a lead of 0.9, it is colder, so they count for less.
+        let path = || vec![u("https://x.com/"), u("https://x.com/a")];
+        let page = || visit_of("https://x.com/a", 0.0, 0.0, false, &[("https://x.com/c", 0.5)]);
+        let mut warmer = search();
+        warmer.absorb(page(), 0.4, 0.4, path());
+        let mut colder = search();
+        colder.absorb(page(), 0.9, 0.9, path());
+        assert!((warmer.leads[0].score - 0.5 * HOP_DECAY).abs() < 1e-12);
+        let heat = COLD_PAGE + (1.0 - COLD_PAGE) * (0.5 / 0.9);
+        assert!((colder.leads[0].score - 0.5 * HOP_DECAY * heat).abs() < 1e-12);
+        assert!(warmer.leads[0].score > colder.leads[0].score);
+    }
+
+    #[test]
+    fn a_page_that_answers_is_found_or_else_the_closest() {
+        let start = u("https://x.com/");
+        let mut s = search();
+        // Sure enough (0.9, against the threshold of 0.4): found, ranked 0.9 * 0.5.
+        let a = vec![start.clone(), u("https://x.com/a")];
+        s.absorb(visit_of("https://x.com/a", 0.9, 0.9, true, &[]), 0.5, 0.5, a);
+        // Not sure enough: closest, then a closer-ranked miss replaces it, and a worse one doesn't.
+        let b = vec![start.clone(), u("https://x.com/b")];
+        s.absorb(visit_of("https://x.com/b", 0.9, 0.2, true, &[]), 0.5, 0.5, b);
+        let c = vec![start.clone(), u("https://x.com/c")];
+        s.absorb(visit_of("https://x.com/c", 0.9, 0.2, true, &[]), 0.9, 0.9, c);
+        let d = vec![start.clone(), u("https://x.com/d")];
+        s.absorb(visit_of("https://x.com/d", 0.9, 0.2, true, &[]), 0.3, 0.3, d);
+        // A page with no answer is neither found nor closest.
+        let e = vec![start, u("https://x.com/e")];
+        s.absorb(visit_of("https://x.com/e", 0.9, 0.9, false, &[]), 0.9, 0.9, e);
+        assert_eq!(s.found.len(), 1);
+        assert_eq!(s.found[0].visit.url.path(), "/a");
+        assert_eq!(s.closest.as_ref().map(|c| c.visit.url.path()), Some("/c"));
+    }
+
+    #[test]
+    fn a_found_page_stops_the_search_once_no_lead_could_beat_it_by_better_by() {
+        let mut s = search();
+        let visit = visit_of("https://x.com/a", 0.9, 0.9, true, &[]);
+        s.found.push(Ranked { rank: 0.5, visit, path: Vec::new() });
+        // Within BETTER_BY of the find (0.5 + 0.15): no lead could beat it by enough, so the search stops.
+        s.leads.push(lead(0.6));
+        assert_eq!(s.done(), Some(Stop::Found));
+        // A lead that could beat it by more keeps the search going.
+        s.leads[0].score = 0.7;
+        assert_eq!(s.done(), None);
+        // With no lead left, nothing could beat it.
+        s.leads.clear();
+        assert_eq!(s.done(), Some(Stop::Found));
+    }
+
+    #[test]
+    fn a_trail_whose_best_lead_is_below_cold_trail_is_cold() {
+        let mut s = search();
+        s.leads.push(lead(0.01));
+        assert_eq!(s.done(), Some(Stop::Cold));
+        s.leads[0].score = 0.03;
+        assert_eq!(s.done(), None);
+        // No lead at all, and nothing found: cold too.
+        assert_eq!(search().done(), Some(Stop::Cold));
+    }
 }
