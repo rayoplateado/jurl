@@ -9,60 +9,12 @@ use super::{Block, Extracted, Kind, collapse, push_image, push_link};
 /// Server already sent markdown (`Accept: text/markdown`). Split on blank lines,
 /// keeping fenced code intact.
 pub fn markdown(body: &str, base: &Url) -> Extracted {
+    let (mut title, body) = frontmatter(body);
     let mut blocks = Vec::new();
     let mut images = Vec::new();
     let mut links = Vec::new();
-    let mut title = String::new();
     let mut cur: Vec<&str> = Vec::new();
     let mut fence: Option<String> = None;
-
-    let flush = |cur: &mut Vec<&str>, blocks: &mut Vec<Block>| {
-        let text = cur.join("\n").trim().to_string();
-        cur.clear();
-        if text.is_empty() {
-            return;
-        }
-        let i = blocks.len();
-        let (kind, level, text) = if let Some(rest) = text.strip_prefix('#') {
-            // Six levels, as in HTML: a longer run of #s is still a heading, at level 6.
-            let level = (1 + rest.chars().take_while(|&c| c == '#').count()).min(6) as u8;
-            (Kind::Heading, Some(level), rest.trim_start_matches('#').trim().to_string())
-        } else if text.starts_with("```") || text.starts_with("~~~") {
-            let mut lines = text.lines();
-            let first = lines.next().unwrap_or("");
-            let mark = first.chars().next().unwrap_or('`');
-            let fence: String = first.chars().take_while(|&x| x == mark).collect();
-            let lang = first.trim_matches(|c| c == '`' || c == '~').trim().to_string();
-            let mut body: Vec<_> = lines.collect();
-            // Only a line that closes the fence goes: a fence still open at the end of input keeps its last line.
-            if body.last().is_some_and(|l| closes_fence(l.trim_start(), &fence)) {
-                body.pop();
-            }
-            let lang = Some(lang).filter(|l| !l.is_empty());
-            blocks.push(Block { lang, ..Block::new(i, Kind::Code, body.join("\n")) });
-            return;
-        } else if text.starts_with('>') {
-            let t = text.lines().map(|l| l.trim_start_matches('>').trim()).collect::<Vec<_>>().join("\n");
-            (Kind::Quote, None, t)
-        } else {
-            (Kind::Para, None, text)
-        };
-        blocks.push(Block { level, ..Block::new(i, kind, text) });
-    };
-
-    // YAML frontmatter: take the title, don't treat it as content.
-    let mut body = body;
-    if let Some(rest) = body.strip_prefix("---\n")
-        && let Some(end) = rest.find("\n---")
-    {
-        for line in rest[..end].lines() {
-            if let Some(v) = line.strip_prefix("title:") {
-                title = v.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
-            }
-        }
-        // Only the closing `---` line goes: the body after it stays whole, a leading "- " bullet included.
-        body = rest[end + 4..].split_once('\n').map_or("", |(_, after)| after);
-    }
 
     for line in body.lines() {
         let t = line.trim_start();
@@ -70,20 +22,19 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             cur.push(line);
             if closes_fence(t, f) {
                 fence = None;
-                flush(&mut cur, &mut blocks);
+                push_chunk(&mut cur, &mut blocks);
             }
             continue;
         }
-        if t.starts_with("```") || t.starts_with("~~~") {
-            flush(&mut cur, &mut blocks);
-            let c = t.chars().next().unwrap_or('`');
-            fence = Some(t.chars().take_while(|&x| x == c).collect());
+        if opens_fence(t) {
+            push_chunk(&mut cur, &mut blocks);
+            fence = Some(fence_run(t));
             cur.push(line);
         } else if t.is_empty() || t.starts_with('#') {
-            flush(&mut cur, &mut blocks);
+            push_chunk(&mut cur, &mut blocks);
             if !t.is_empty() {
                 cur.push(line);
-                flush(&mut cur, &mut blocks);
+                push_chunk(&mut cur, &mut blocks);
             }
         } else {
             cur.push(line);
@@ -100,7 +51,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             push_image(&mut images, base, src, None, collapse(alt), String::new(), None, None);
         }
     }
-    flush(&mut cur, &mut blocks);
+    push_chunk(&mut cur, &mut blocks);
     if title.is_empty()
         && let Some(h) = blocks.iter().find(|b| b.kind == Kind::Heading)
     {
@@ -108,6 +59,71 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
     }
     let site_links = links.clone();
     Extracted { title, blocks: join_short(blocks), images, links, site_links, app_shell: false }
+}
+
+/// YAML frontmatter: its `title:` line is the title, and the body after the closing `---` is the content. Only the
+/// closing line goes: the body after it stays whole, a leading "- " bullet included.
+fn frontmatter(body: &str) -> (String, &str) {
+    let mut title = String::new();
+    if let Some(rest) = body.strip_prefix("---\n")
+        && let Some(end) = rest.find("\n---")
+    {
+        for line in rest[..end].lines() {
+            if let Some(v) = line.strip_prefix("title:") {
+                title = v.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+            }
+        }
+        return (title, rest[end + 4..].split_once('\n').map_or("", |(_, after)| after));
+    }
+    (title, body)
+}
+
+/// Turns the lines in `cur` into one block (a heading, a fenced code block, a quote or a paragraph), and empties `cur`.
+fn push_chunk(cur: &mut Vec<&str>, blocks: &mut Vec<Block>) {
+    let text = cur.join("\n").trim().to_string();
+    cur.clear();
+    if text.is_empty() {
+        return;
+    }
+    let i = blocks.len();
+    if let Some(rest) = text.strip_prefix('#') {
+        // Six levels, as in HTML: a longer run of #s is still a heading, at level 6.
+        let level = (1 + rest.chars().take_while(|&c| c == '#').count()).min(6) as u8;
+        let text = rest.trim_start_matches('#').trim().to_string();
+        blocks.push(Block { level: Some(level), ..Block::new(i, Kind::Heading, text) });
+    } else if opens_fence(&text) {
+        blocks.push(fenced_block(i, &text));
+    } else if text.starts_with('>') {
+        let t = text.lines().map(|l| l.trim_start_matches('>').trim()).collect::<Vec<_>>().join("\n");
+        blocks.push(Block::new(i, Kind::Quote, t));
+    } else {
+        blocks.push(Block::new(i, Kind::Para, text));
+    }
+}
+
+/// A fenced code block, from its opening line on: the info string after the fence is its language.
+fn fenced_block(i: usize, text: &str) -> Block {
+    let mut lines = text.lines();
+    let first = lines.next().unwrap_or("");
+    let fence = fence_run(first);
+    let lang = first.trim_matches(|c| c == '`' || c == '~').trim().to_string();
+    let mut body: Vec<_> = lines.collect();
+    // Only a line that closes the fence goes: a fence still open at the end of input keeps its last line.
+    if body.last().is_some_and(|l| closes_fence(l.trim_start(), &fence)) {
+        body.pop();
+    }
+    Block { lang: Some(lang).filter(|l| !l.is_empty()), ..Block::new(i, Kind::Code, body.join("\n")) }
+}
+
+/// Whether a line opens a fenced code block.
+fn opens_fence(line: &str) -> bool {
+    line.starts_with("```") || line.starts_with("~~~")
+}
+
+/// The run of backticks or tildes that starts a line: the fence it opens, which a closing fence must match in length.
+fn fence_run(line: &str) -> String {
+    let mark = line.chars().next().unwrap_or('`');
+    line.chars().take_while(|&x| x == mark).collect()
 }
 
 /// A fence closes on a line of the same character, at least as long, and nothing else: a ```` block can show
