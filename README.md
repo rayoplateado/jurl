@@ -117,9 +117,9 @@ $10 per user/month
 jurl: found after reading 4 pages: linear.app/ → linear.app/pricing
 ```
 
-With `--follow`, a page that doesn't answer isn't the end. It is `--precise` and `--links -q` in a loop: each page is asked for the answer, and its links are scored by how likely they lead to it. jurl reads the site's own map (`llms.txt`, `sitemap.xml`) while it reads the first page, then compares the best ten links side by side and opens the two it likes most, keeping on from whichever page looks closest, the way people play the Wikipedia game. On a long search (`--follow 10` and up) Jev also asks of each link whether its page is in the answer's field of knowledge: far from the answer, "leads to the answer" is noise (from Tennis: Birmingham, Philadelphia), while the field points the way (vulcanized rubber, polyester: chemistry, then the elements, then mercury). It plays hot and cold: a link counts for as much as its page is close to the question (a docs index with a link straight to the answer counts as close), so a wrong turn is dropped and the search goes back to the page that was getting warmer. A page that answers is ranked by how sure Jev is of the answer and of the page, and jurl stops only when no page left could beat it by much: the pricing page beats both a home-page FAQ line and an old blog post quoting last year's price. Started from a site's front door (`linear.app`), the question is asked about that site: "the company", "they", "we" or "it" is whoever runs it, not a customer in one of its stories. It stays on the same site (subdomains included), skips what `robots.txt` disallows, and stops after 5 pages (`--follow 10` for more; longer searches open three pages per step). The path comes last, on stderr, or as `path` in `--json`; `-t` shows how warm each page was.
+With `--follow`, a page that doesn't answer isn't the end. It is `--precise` and `--links -q` in a loop: each page is asked for the answer, and its links are scored by how likely they lead to it. jurl reads the site's own map (`llms.txt`, `sitemap.xml`: copies of a page in other languages are skipped) while it reads the first page, then compares the best ten links side by side and opens the two it likes most, keeping on from whichever page looks closest, the way people play the Wikipedia game. On a long search (`--follow 10` and up) Jev also asks of each link whether its page is in the answer's field of knowledge: far from the answer, "leads to the answer" is noise (from Tennis: Birmingham, Philadelphia), while the field points the way (vulcanized rubber, polyester: chemistry, then the elements, then mercury). It plays hot and cold: a link counts for as much as its page is close to the question (a docs index with a link straight to the answer counts as close), so a wrong turn is dropped and the search goes back to the page that was getting warmer. A page that answers is ranked by how sure Jev is of the answer and of the page, and jurl stops only when no page left could beat it by much: the pricing page beats both a home-page FAQ line and an old blog post quoting last year's price. Started from a site's front door (`linear.app`), the question is asked about that site: "the company", "they", "we" or "it" is whoever runs it, not a customer in one of its stories. It stays on the same site (subdomains included), skips what `robots.txt` disallows, and stops after 5 pages (`--follow 10` for more; longer searches open three pages per step). The path comes last, on stderr, or as `path` in `--json`; `-t` shows how warm each page was.
 
-On [18 searches](bench/follow.json), each run 3 times: 24/24 pricing pages found from the bare domain (3 pages, ~2.5 s, ~$0.003 each), 8/9 answers in docs found from the docs' root, 9/9 short Wikipedia games (Medicine → Aspirin: `C9H8O4`), and 9/9 questions the site doesn't answer left empty. Long games with `--follow 15`, 3 to 5 clicks apart: 15/15 on the games it was tuned on (Paris → Aspirin, Tennis → the boiling point of mercury, Jazz → the moons of Mars) and 16/18 on six it had never seen (Volcano → Mona Lisa, Chess → the speed of sound), ~4.5 s and ~$0.035 each.
+On [28 searches](bench/follow.json), run once each on 2026-10-08: 27 right, against 25 for the build before (7e68b67). The eight pricing pages are found from the bare domain, 8/8 (about 3 pages, median ~2.6 s, ~$0.0035 each). Answers in docs from the docs' root: 3/3. Short Wikipedia games (Medicine → Aspirin: `C9H8O4`): 3/3. Questions the site doesn't answer, left empty: 3/3. Long games with `--follow 15`, 3 to 5 clicks apart: 10/11, the one miss being Bicycle → the Titanic. Five were tuned on (Paris → Aspirin, Tennis → the boiling point of mercury, Jazz → the moons of Mars, among them) and six never were (Volcano → Mona Lisa, Chess → the speed of sound, among them). Median ~5 s; ~$0.031 each on average (before: ~$0.035). Three runs of each, on earlier builds, are in [bench/README.md](bench/README.md).
 
 ### Just the code
 
@@ -187,13 +187,13 @@ $ jurl --find "a carnival parade" en.wikipedia.org/wiki/Cologne
 jurl: no image in https://en.wikipedia.org/wiki/Cologne looks like "a carnival parade" (closest: …, p=0.02)
 ```
 
-The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer: 1 when the page has nothing that answers, 2 when something failed (see [Exit codes](#exit-codes)). With `--json` (`--precise`, with or without `--follow`) a miss still prints its JSON, `"answer": null` plus what came `closest` (`null` too when no block came close), and exits 1 all the same: a script that wants the closest passage reads stdout before checking the exit code. `-t` prints its timings and tokens on a miss too, so a miss can be costed.
+The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer: 1 when the page has nothing that answers, 2 when something failed (see [Exit codes](#exit-codes)). With `--precise --json` (with or without `--follow`) a miss still prints its JSON, `"answer": null` plus what came `closest` (`null` too when no block came close), and exits 1 all the same: a script that wants the closest passage reads stdout before checking the exit code. Without `--precise`, a miss prints nothing on stdout, `--json` or not. `-t` prints its timings and tokens on a miss too, so a miss can be costed.
 
 Images are picked from `<img>` tags (`src`, `srcset` and the usual lazy-loading attributes) and the page's `og:image`. SVG images aren't candidates: they're mostly icons and logos, and Clef only reads raster images, so a post whose diagrams are all SVG (Stripe's engineering blog) has nothing to find.
 
 ### JavaScript apps
 
-Some pages arrive empty because their content is built by JavaScript. jurl spots those and renders them in [Lightpanda](https://lightpanda.io), a fast headless browser:
+Some pages arrive empty because their content is built by JavaScript, or with template placeholders in their text (`!{freePlanStorage}`) that the script would have filled in. jurl spots those and renders them in [Lightpanda](https://lightpanda.io), a fast headless browser:
 
 ```console
 $ jurl -n 2 hn.algolia.com
@@ -269,7 +269,7 @@ The tools run the same code as the CLI, with the same keys (`jurl init` or the e
 | `-i, --image` | Content images, judged by file name, alt text and caption |
 | `--vision` | Like `--image`, plus Clef looks at the pixels |
 | `-f, --find "…"` | The image that best matches the description |
-| `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps) |
+| `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps and unfilled template placeholders) |
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
@@ -279,11 +279,11 @@ The tools run the same code as the CLI, with the same keys (`jurl init` or the e
 | `jurl update` | Install the latest jurl, the same way this one was installed |
 | `jurl mcp` | Serve jurl's tools to an AI agent over MCP (see [above](#use-it-from-an-agent-mcp)) |
 
-Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`.
+Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`. A `.env` in the current directory is read too, for those API keys only.
 
-`--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
+`--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. If Clef looks at none of the images, jurl says so on stderr and the result is from text alone. Images over 15 MB aren't read. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
 
-`JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none. [bench/models](bench/models) compares such a server's answers with Jev's.
+`JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none, and only over https or to localhost: plain http to another host is refused. [bench/models](bench/models) compares such a server's answers with Jev's.
 
 ### Exit codes
 
@@ -292,8 +292,8 @@ As with grep, a script can tell "not there" from "something broke":
 | Code | Meaning |
 | --- | --- |
 | 0 | Something was printed: an answer, blocks, links or images |
-| 1 | The page (or the site, with `--follow`) was read and has nothing that answers: no exact answer, no image that looks like that, nothing above `--threshold`. With `--json`, the JSON is still printed (`"answer": null` and what came `closest`) |
-| 2 | An error: the page couldn't be read (HTTP error, timeout, a block page, no readable text), the API couldn't be asked (a bad key, no credits), or the arguments are wrong |
+| 1 | The page (or the site, with `--follow`) was read and has nothing that answers: no exact answer, no image that looks like that, nothing above `--threshold`. With `--precise --json`, the JSON is still printed (`"answer": null` and what came `closest`); without `--precise`, nothing is printed |
+| 2 | An error: the page couldn't be read (HTTP error, timeout, a block page, no readable text, or over 8 MB), the API couldn't be asked (a bad key, no credits), or the arguments are wrong |
 
 Before 0.1.11 every failure exited 1, and a `--json` miss exited 0.
 
@@ -316,22 +316,22 @@ Ten documentation pages, one question each ([bench/](bench) has the tasks, the s
 | | jurl | Claude Code WebFetch | Exa | Tavily |
 | --- | --- | --- | --- | --- |
 | Exact answer | **10/10** | **10/10** | 8/10 | 5/10 |
-| Code lines not on the page | **0 of 60** | 33 of 63 | **0 of 59** | 8 of 36 |
+| Code lines not on the page | **0 of 96** | 33 of 63 | **0 of 59** | 8 of 36 |
 | Cost per 10,000 pages | **$4** | ~$150 | $10 | $16 |
-| Tokens the agent reads | 375 | **148** | 351 | 524 |
-| Time per page | 0.8 s | — | **0.3 s** | 0.5 s |
+| Tokens the agent reads | 300 | **148** | 351 | 524 |
+| Time per page | 0.7 s | — | **0.3 s** | 0.5 s |
 | Finds an image by what it shows | **yes** | no | no | no |
 | Picks the links worth following | **yes** | no | no | no |
 | Just the code | **yes** | no | no | no |
 | Open source, in your terminal | **yes** | no | no | no |
 
-Best in each row in bold. WebFetch hands the agent the fewest tokens because it rewrites what it reads: half the code it hands back isn't on the page, and each call has a small model ($1 per million tokens) read the whole page. Exa is the fastest, but missed both answers that were code. Tavily cut the code out of its extracts. Measured on 2026-10-07.
+Best in each row in bold. WebFetch hands the agent the fewest tokens because it rewrites what it reads: half the code it hands back isn't on the page, and each call has a small model ($1 per million tokens) read the whole page. Exa is the fastest, but missed both answers that were code. Tavily cut the code out of its extracts. Measured on 2026-10-07; jurl again on 2026-10-08.
 
 ## Your keys, your data
 
 jurl has no server and no account of its own. It talks to the model APIs directly with **your** keys:
 
-- **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result, a miss included, says what its run used: `"usage": {"pages": 3, "jev": {"requests": 6, "input_tokens": 41250}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); a request counts once it has answered.
+- **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result says what its run used, a `--precise` miss included: `"usage": {"pages": 3, "jev": {"requests": 6, "input_tokens": 41250}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); a request counts once it has answered.
 - **What leaves your machine:** the text of the page goes to TypeSafe. With `--vision` or `--find`, the images go to Cloudflare too. Keep that in mind for internal or private pages.
 - **What jurl can't read:** it sends no cookies, so pages behind a login are out of reach.
 
@@ -345,7 +345,7 @@ jurl has no server and no account of its own. It talks to the model APIs directl
 
 ```text
 url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · images
-          └─ empty JavaScript app? ─▶ render in Lightpanda
+          └─ empty JavaScript app or unfilled template? ─▶ render in Lightpanda
                           │
             one yes/no question per candidate
               ┌───────────┴───────────┐
@@ -391,11 +391,18 @@ cargo build --release && ./target/release/jurl -t <url>
 
 | File | What's in it |
 | --- | --- |
-| `src/main.rs` | Modes, chunking, hedging, output |
+| `src/main.rs` | Entry point: flags checked, the page loaded, the mode picked |
+| `src/cli.rs` | The flags, as clap parses them and `--help` shows them |
+| `src/judge.rs` | Jev's requests: items and questions, chunks that fit the budget, block pages |
+| `src/blocks.rs` | The default mode and `-q`/`--code`: the best blocks, in page order |
+| `src/answer.rs` | `--precise`: the answer as a span of the best blocks |
+| `src/vision.rs` | `--image`, `--vision`, `--find`: content images, and Clef's look at the pixels |
+| `src/output.rs` | What a run prints (text or `--json`), exit codes, misses |
+| `src/timing.rs` | `-t`: per-phase timings on stderr |
 | `src/precise.rs` | `--precise`: candidate spans and the link to them |
-| `src/links.rs` | `--links -q` and `--follow`: which links lead to the answer |
+| `src/links.rs` | `--links` and `--links -q` (ranked by the answer), `--follow`: which links lead to the answer |
 | `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
-| `src/extract.rs` | HTML and markdown → blocks, links, images |
+| `src/extract/mod.rs` · `src/extract/html.rs` · `src/extract/markdown.rs` · `src/extract/join.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
 | `src/setup.rs` · `src/config.rs` | First-run key prompt, `jurl init`, key storage |

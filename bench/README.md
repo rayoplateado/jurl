@@ -1,11 +1,11 @@
 # Reading docs for one answer
 
 An agent has a URL and a question. What it gets back from each way of reading the page, on 10 documentation pages.
-Measured on 2026-10-07.
+Measured on 2026-10-07; jurl again on 2026-10-08.
 
 | Reader | Exact answer | Code lines not on the page | Cost per 10,000 pages | Median tokens | Median time |
 | --- | --- | --- | --- | --- | --- |
-| jurl -q | 10/10 (30/30 over 3 runs) | 0 of 60 | $4 | 375 | 0.8 s |
+| jurl -q | 10/10 (30/30 over 3 runs) | 0 of 96 | $4 | 300 | 0.7 s |
 | Claude Code WebFetch | 10/10 | 33 of 63 | ~$150 | 148 | — |
 | Exa contents + highlights | 8/10 | 0 of 59 | $10 | 351 | 0.3 s |
 | Exa search + highlights | 8/10 | — | $70 | 1,529 | 1.9 s |
@@ -19,7 +19,7 @@ Measured on 2026-10-07.
 
 ## What it costs
 
-- **jurl:** $0.0004 per page (median), $0.0086 at most, for Node's 450 KB `fs` page. Jev is $0.042 per million input tokens.
+- **jurl:** $0.0004 per page (median), $0.0087 at most, for Node's 450 KB `fs` page. Jev is $0.042 per million input tokens.
 - **Claude Code's WebFetch:** included in Claude Code; each call has a small model read the page, up to 100,000 characters. At Claude Haiku 4.5's $1 per million input tokens that's ~$0.015 for the median page here.
 - **Exa:** $0.001 per contents call, $0.007 per search, as reported by the API.
 - **Tavily:** $0.008 per credit; extract is 1 credit per 5 pages, search 1 credit.
@@ -62,7 +62,7 @@ WebFetch only runs inside Claude Code: [results/webfetch.json](results/webfetch.
 
 ## `--follow`: finding the page on a site
 
-[follow.json](follow.json) holds 18 searches that start from a site's front door: the cheapest paid plan from a bare domain (`linear.app`), an answer in docs from the docs' root, short and long Wikipedia games, and 3 questions the site doesn't answer (right = left empty). [follow.py](follow.py) runs each 3 times with `--precise --follow` and saves `results/follow-<label>.json`.
+[follow.json](follow.json) holds 28 searches that start from a site's front door: the cheapest paid plan from a bare domain (`linear.app`), an answer in docs from the docs' root, short and long Wikipedia games, and 3 questions the site doesn't answer (right = left empty). [follow.py](follow.py) runs each 3 times with `--precise --follow` and saves `results/follow-<label>.json`.
 
 | | Right | Pricing | Docs | Wikipedia | Not on the site | Median pages (pricing) | Tokens (all 54 runs) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -160,6 +160,47 @@ Headquarters and founding year from more front doors, once each with main and af
 | notion.com, founded | no answer | no answer |
 | vercel.com, headquarters | "San Francisco" (a press release's dateline) | "San Francisco" (the same) |
 | vercel.com, founded | no answer | no answer |
+
+#### Real-world searches
+
+[follow-real.json](follow-real.json) holds 30 searches people type at a company's or a project's site, each from its front door or docs root: company facts, support, product limits, docs, Spanish sites, and five questions the site doesn't answer (expect null). Every answer was checked against its page with curl; [follow-real.notes.md](follow-real.notes.md) has each one's URL, snippet and clicks. The set is held out: nothing in `--follow` was tuned on it, so use it to compare versions, not to tune against. Run it from the repo root with `CASES=bench/follow-real.json python3 bench/follow.py <label>`; `GROUP=es` still runs one group.
+
+The first run: 30/30 right ([results](results/follow-real-base.json)), p50 $0.0027, p90 $0.0048, max $0.0067 per search. Of its tokens, blocks are 40%, the site map 28%, links 25%, and `--precise`, refine and shortlist 8% ([cost.py](models/cost.py) on its recording, not committed).
+
+#### Cutting Jev's cost (2026-10-08)
+
+Where the tokens go. [cost.py](models/cost.py) on a recording of the 28 searches in [follow.json](follow.json), with main's binary (not committed: a recording holds the pages' text). Links are 62% of Jev's input tokens, blocks 32%, the site map 3%, and `--precise`, refine and shortlist 2%. On the 11 long games (`--follow 15`), the field question ("is the link in the answer's field") is 23% of the tokens. In a link request, the wording of the questions is 62% of their characters, and the user's question 17%.
+
+What shipped:
+
+- A link's field score is asked once per search, and each link is sent once, with both of its questions. On the long games, one round each ([base](results/follow-ab-base-long-r1.json), [field](results/follow-ab-field-long-r1.json)): 4.34M → 3.43M tokens, 5/5 right both times, 67.9k → 59.2k tokens per page (13% less). On the six held out ([base](results/follow-ab-base-heldout-r1.json), [field](results/follow-ab-field-heldout-r1.json)): 5.16M → 4.30M tokens, 5/6 → 6/6 right, 72.7k → 65.1k per page (10% less). The field version read fewer pages (64 → 58 and 71 → 66), so the totals fell further than the cost per page. A second base round on the long games ([r2](results/follow-ab-base-long-r2.json)) gave 66.9k per page.
+- Requests without a field question are byte for byte the same as before: `record.py --from` served 200 recorded requests to this binary, and [diff.py](models/diff.py) found all 200 identical. The recordings are not committed.
+- A page that a site lists in several languages (`/de/pricing`, `/es-es/pricing`) is scored once in the site map: the copy in the start page's language, else the one with no prefix. A page listed only in other languages keeps all its copies. On the 30 real-world searches, 599 of the 5,062 site-map URLs asked about (12%) were such copies ([the rule](../src/follow.rs), replayed on a recording, not committed).
+- `--precise` no longer asks Jev for the page kind it never prints. That question was 0.7% of the tokens of the [first real-world run](results/follow-real-base.json) (on its recording, not committed).
+
+Measured the same day:
+
+| | Right | Tokens | p50 | p90 |
+| --- | --- | --- | --- | --- |
+| follow.json, before (7e68b67, [1 run](results/follow-main-all.json)) | 25/28 | 11.31M ($0.475) | $0.0064 | $0.0416 |
+| follow.json, after ([1 run](results/follow-final-all.json)) | 27/28 | 10.14M ($0.426) | $0.0063 | $0.0355 |
+| real-world, before (7e68b67, [r1](results/follow-real-main-r1.json), [r2](results/follow-real-main-r2.json)) | 58/60 | 4.15M ($0.174) | $0.0026 | $0.0048 |
+| real-world, after ([r1](results/follow-real-final-r1.json), [r2](results/follow-real-final-r2.json)) | 58/60 | 4.02M ($0.169) | $0.0026 | $0.0047 |
+
+p50 and p90 are nearest-rank percentiles of each search's cost.
+
+On follow.json, the build before missed the Kubernetes docs question (`NotRequired`), Coffee → The Magic Flute and Bicycle → the Titanic, both with no answer. The new build got Coffee and Kubernetes right and missed only Bicycle → the Titanic (no answer after 15 pages), the same miss as before. On the real-world set, the build before missed Grafana's default port (no answer, r1) and MEGA's storage (r2 answered `!{freePlanStorage} storage`: the placeholder was not filled; such pages are now rendered). The new build missed the pCloud trap in both runs: "Where does pCloud's CEO live?" got a Swiss street address from help.pcloud.com/contact.
+
+On the real-world searches the cost is about the same: 3% fewer tokens. On the 11 long games, one run each, 13% fewer tokens (9.23M → 8.00M), p90 per search $0.049 → $0.041 (16% less), and 10/11 right against 9/11. The 17 short searches read 3% more (2.08M → 2.14M, one run each): the docs searches 26% more, the pricing searches 9% less.
+
+What didn't work:
+
+- Shorter wording of the per-item questions, or the question moved into the state: 4% and 10% fewer tokens, but Jev's link ranking moved far beyond its own noise. The same top link on 41% and 48% of the 81 rankings, against 70% for Jev against itself. Field answers "yes" 896 and 1,596 times, against 2,013 for Jev. The wording is load-bearing. [2026-10-08-jev-wording.txt](models/results/2026-10-08-jev-wording.txt), made with [rewrite.py](models/rewrite.py).
+- One `score` question per link (unrelated, same field, leads to the answer) instead of two yes/no questions: Spearman 0.53 against the recording, 0.94 for Jev against itself, and only 7.7% fewer tokens, since each score question repeats its criteria ([summary](models/results/2026-10-08-score-question.txt)).
+- Local static embeddings (model2vec) for the field question, or to pre-filter the links: Spearman 0.15 against Jev's field answers, 0.92 for Jev against itself. Keeping the 150 links closest to the question cut a step of 7 of 10 winning long trails ([summary](models/results/2026-10-08-embeddings.txt)).
+- A BM25 pre-filter of the blocks: on the 30 held-out real-world searches it dropped 4 of 24 answer blocks (Brave's headquarters, Vite's and Grafana's ports, Django's upload limit; [summary](models/results/2026-10-08-bm25-blocks.txt)).
+- Asking Jev about blocks in stages (the first 30 or 60, the rest only if nothing is strong): 4.1% and 2.6% fewer net tokens on real-world pages, with a second round trip on 31% and 17% of pages ([summary](models/results/2026-10-08-staged-blocks.txt)).
+- Scoring 150 of the site map's URLs instead of 300, ranked by BM25 over character 3-grams of the URL: p50 $0.0021 against $0.0026 for the build before, but Grafana's default port went unanswered. [One run](results/follow-ab-real-hints.json): 27/30, with MEGA's placeholder, Grafana and the pCloud trap missed. The answer is on `/tutorials/grafana-fundamentals`, and every run that answered reached it. The 300 are still picked by shared words, then depth.
 
 ## Another decision model in Jev's place
 

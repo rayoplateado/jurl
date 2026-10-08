@@ -5,18 +5,30 @@ use std::ops::Range;
 
 use crate::extract::{Block, Kind};
 
-/// A candidate answer: `blocks[block].text[range]`. A table cell carries its row and column as `label`, which is what
-/// Jev is shown ("30 s (CPU time · Paid)"); the answer is still just the cell.
+/// A candidate answer: `range` of the text of block `block`, where `block` is that block's `i` (its number on the
+/// page, which is also its index in `Extracted::blocks`). A table cell carries its row and column as `label`, which is
+/// what Jev is shown ("30 s (CPU time · Paid)"); the answer is still just the cell.
 #[derive(Debug, Clone)]
-pub struct Span {
-    pub block: usize,
-    pub range: Range<usize>,
-    pub label: Option<String>,
+pub(crate) struct Span {
+    pub(crate) block: usize,
+    pub(crate) range: Range<usize>,
+    pub(crate) label: Option<String>,
 }
 
 /// More than this and the request stops being one cheap call.
 const MAX_CANDIDATES: usize = 200;
 const MAX_SPAN_CHARS: usize = 400;
+/// A run of tokens from a number (a value, and the words after it) is at most this many tokens.
+const MAX_VALUE_RUN: usize = 4;
+/// A name runs for at most this many words.
+const MAX_NAME_WORDS: usize = 8;
+/// A code block of at most this many lines is also a candidate whole.
+const SHORT_SNIPPET_LINES: usize = 3;
+/// The words either side of a link's answer, so the browser finds the right occurrence.
+const CONTEXT_WORDS: usize = 3;
+/// A fragment longer than this many words is linked by its first and last `FRAGMENT_EDGE_WORDS`.
+const LONG_FRAGMENT_WORDS: usize = 10;
+const FRAGMENT_EDGE_WORDS: usize = 5;
 /// Lowercase words a name or title can have inside it ("The Coal Question", "Bank of England").
 const CONNECTORS: &[&str] = &["of", "the", "and", "for", "de", "del", "la", "von", "van", "&"];
 const DANGLING: &[&str] =
@@ -24,8 +36,8 @@ const DANGLING: &[&str] =
 const CURRENCY: &[&str] = &["$", "€", "£", "¥", "US$", "USD", "EUR", "GBP"];
 
 /// Candidate spans from `blocks`, taken from each block in turn so a long one (a big table) can't use up the
-/// whole budget. Every span is a substring of its block's text.
-pub fn candidates(blocks: &[&Block]) -> Vec<Span> {
+/// whole budget. Every span is a substring of its block's text, and names that block by its `i`.
+pub(crate) fn candidates(blocks: &[&Block]) -> Vec<Span> {
     let mut queues: Vec<std::vec::IntoIter<(Range<usize>, Option<String>)>> = blocks
         .iter()
         .map(|b| {
@@ -49,7 +61,7 @@ pub fn candidates(blocks: &[&Block]) -> Vec<Span> {
                 if s.chars().count() > MAX_SPAN_CHARS || !seen.insert(label.clone().unwrap_or_else(|| s.to_string())) {
                     continue;
                 }
-                out.push(Span { block: b, range: r, label });
+                out.push(Span { block: blocks[b].i, range: r, label });
                 live = true;
                 break;
             }
@@ -117,7 +129,7 @@ fn code_spans(text: &str) -> Vec<Range<usize>> {
         out.push(start..start + line.len());
         start += line.len();
     }
-    if out.len() <= 3 {
+    if out.len() <= SHORT_SNIPPET_LINES {
         out.push(0..text.len());
     }
     out
@@ -156,7 +168,7 @@ fn prose_spans(text: &str) -> Vec<Range<usize>> {
             }
         }
         for from in starts.into_iter().flatten() {
-            for len in 1..=4 {
+            for len in 1..=MAX_VALUE_RUN {
                 let Some(end) = tokens.get(t + len - 1) else { break };
                 // "10 million included per" says less than "10 million": a run can't end on a little word.
                 if len > 1 && DANGLING.contains(&text[end.clone()].to_lowercase().trim_end_matches([',', '.']).trim()) {
@@ -184,7 +196,7 @@ fn prose_spans(text: &str) -> Vec<Range<usize>> {
         let mut end = t;
         let mut k = t + 1;
         while k < tokens.len()
-            && k - t < 8
+            && k - t < MAX_NAME_WORDS
             && same_line(&tokens[k - 1], &tokens[k])
             && !ends_sentence(&text[tokens[k - 1].clone()])
             && (capital(&tokens[k]) || connector(&tokens[k]))
@@ -340,18 +352,18 @@ fn only_separators(gap: &str) -> bool {
 /// names and short phrases stay whole: "5,000 requests per hour" (4 words), "629.88 K (356.73 °C, 674.11 °F)" (7).
 const REFINE_WORDS: usize = 8;
 /// At most this many pieces of a winner are scored, in one more call.
-pub const MAX_REFINE: usize = 100;
+pub(crate) const MAX_REFINE: usize = 100;
 
 /// Whether the winning span is long enough that a part of it could be the answer: a line, clause or sentence of
 /// prose, not a value, a name or a table cell (those are labelled, or short).
-pub fn refinable(text: &str, span: &Span) -> bool {
+pub(crate) fn refinable(text: &str, span: &Span) -> bool {
     span.label.is_none() && text[span.range.clone()].split_whitespace().count() > REFINE_WORDS
 }
 
 /// Contiguous pieces of `text[range]`, each trimmed like any candidate and never the whole span: first those that
 /// start and end at punctuation or a link's edge, never cutting a link or parenthesis ("…: [A](…), [B](…)" → "[A](…)", "[A](…), [B](…)"), then any
 /// run of words, longest first. At most `MAX_REFINE`.
-pub fn refinements(text: &str, range: &Range<usize>) -> Vec<Range<usize>> {
+pub(crate) fn refinements(text: &str, range: &Range<usize>) -> Vec<Range<usize>> {
     let words: Vec<Range<usize>> =
         tokens(&text[range.clone()]).into_iter().map(|t| range.start + t.start..range.start + t.end).collect();
     let n = words.len();
@@ -508,7 +520,7 @@ fn trim(text: &str, r: Range<usize>) -> Option<Range<usize>> {
 
 /// A link that opens the page highlighting the answer, with a few words either side as context so the
 /// browser finds the right occurrence.
-pub fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
+pub(crate) fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
     let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
     // Context is up to three words next to the answer, as the browser shows them: markdown emphasis is
     // dropped, and a word that is markup (a table's `|`, an HTML tag, a link) ends the context there.
@@ -516,7 +528,7 @@ pub fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
         words
             .map(|w| w.trim_matches(['*', '_', '`']))
             .take_while(|w| w.chars().any(char::is_alphanumeric) && !w.contains(['<', '[', ']', '|']))
-            .take(3)
+            .take(CONTEXT_WORDS)
             .map(String::from)
             .collect::<Vec<_>>()
     };
@@ -531,8 +543,9 @@ pub fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
         // Text fragments don't match across block boundaries in one piece: give the first and last line.
         let edge = |l: &str| enc(&words(l).join(" "));
         format!("{},{}", edge(lines[0]), edge(lines[lines.len() - 1]))
-    } else if span.len() > 10 {
-        format!("{},{}", enc(&span[..5].join(" ")), enc(&span[span.len() - 5..].join(" ")))
+    } else if span.len() > LONG_FRAGMENT_WORDS {
+        let edge = FRAGMENT_EDGE_WORDS;
+        format!("{},{}", enc(&span[..edge].join(" ")), enc(&span[span.len() - edge..].join(" ")))
     } else {
         enc(&span.join(" "))
     };
@@ -659,7 +672,7 @@ mod tests {
     fn every_block_gets_a_turn() {
         let big =
             block(Kind::Table, &(0..200).map(|i| format!("| Row {i} | {i} units |")).collect::<Vec<_>>().join("\n"));
-        let small = block(Kind::Para, "Daniel Ek is the CEO.");
+        let small = Block { i: 1, ..block(Kind::Para, "Daniel Ek is the CEO.") };
         let spans = candidates(&[&big, &small]);
         assert!(spans.iter().any(|s| s.block == 1 && small.text[s.range.clone()] == *"Daniel Ek"), "{spans:?}");
     }

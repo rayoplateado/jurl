@@ -2,19 +2,27 @@
 //! and sends one JSON-RPC message per line on stdin; the answers go back one per line on stdout, so nothing else may
 //! write there (jurl's own notes go to stderr, as always).
 //!
-//! This is the small part of MCP a local tool server needs: `initialize`, `ping`, `tools/list` and `tools/call`.
+//! This is the small part of MCP a local tool server needs: `initialize`, `ping`, `tools/list`, `tools/call` and
+//! `notifications/cancelled`.
 //! Each tool is a jurl command line, parsed and run by the same code as the CLI, so a tool answers exactly what
 //! `jurl` would print. A miss ("the page doesn't say") is a normal result, as exit code 1 is; a failure (the page
 //! couldn't be read, a bad key, no credits) is a tool error, as exit code 2 is.
 
-use anyhow::{Context, Result};
+use std::{collections::VecDeque, future::Future, sync::LazyLock};
+
+use anyhow::Result;
 use clap::Parser;
 use futures::{StreamExt, stream::FuturesUnordered};
 use reqwest::Client;
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
-use crate::{Args, NotFound, Rendered, Timer, config::Config};
+use crate::{
+    cli::Args,
+    config::Config,
+    output::{Rendered, is_not_found},
+    timing::Timer,
+};
 
 /// The protocol versions that start with `initialize`, newest first. 2026-07-28 replaced the handshake with
 /// `server/discover`; clients on it fall back to `initialize` when that method isn't found, as it isn't here.
@@ -24,9 +32,47 @@ const FOLLOW_PAGES: u64 = 5;
 /// A cap on `follow`, so one call can't read a whole site: a long search (15 pages) costs about $0.035.
 const FOLLOW_MAX: u64 = 20;
 const MAX_RESULTS: u64 = 50;
+/// Tool calls running at once. The rest wait their turn, in arrival order, so one agent's burst can't fetch every page
+/// at once.
+const MAX_CALLS: usize = 4;
+/// Tool calls that may wait for one of the `MAX_CALLS` slots. Past this a call is refused at once (see `drive`), so a
+/// client that sends faster than calls finish can't grow the queue, or its own wait, without bound.
+const MAX_PENDING: usize = 64;
+/// JSON-RPC's error code for a message that is not a valid request.
+const INVALID_REQUEST: i64 = -32600;
 
 const VERBATIM: &str = "Everything returned is copied from the page, verbatim, with its links: jurl never writes, \
                         summarizes or guesses. When the page doesn't have it, the result says so (\"Not found\").";
+
+/// The tools, in the order `tools/list` shows them. A call names one by `name()`, and `command` matches on the enum, so a
+/// tool without a command line is a compile error, and a misspelt name can't reach one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tool {
+    ReadPage,
+    Answer,
+    FindLinks,
+    FindCode,
+    FindImage,
+}
+
+impl Tool {
+    const ALL: [Tool; 5] = [Tool::ReadPage, Tool::Answer, Tool::FindLinks, Tool::FindCode, Tool::FindImage];
+
+    /// The name a client calls the tool by, as `tools/list` shows it.
+    fn name(self) -> &'static str {
+        match self {
+            Tool::ReadPage => "read_page",
+            Tool::Answer => "answer",
+            Tool::FindLinks => "find_links",
+            Tool::FindCode => "find_code",
+            Tool::FindImage => "find_image",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|t| t.name() == name)
+    }
+}
 
 /// The tools, as `tools/list` shows them. Their input schemas are also what each call's arguments are checked against.
 fn tools() -> Value {
@@ -46,7 +92,7 @@ fn tools() -> Value {
     let read_only = json!({ "readOnlyHint": true, "openWorldHint": true });
     json!([
         {
-            "name": "read_page",
+            "name": Tool::ReadPage.name(),
             "title": "Read a page",
             "description": format!(
                 "Read a web page: its title, what kind of page it is, and the blocks that carry it (paragraphs, list \
@@ -67,7 +113,7 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
-            "name": "answer",
+            "name": Tool::Answer.name(),
             "title": "Answer a question from a page",
             "description": format!(
                 "The exact answer to a question, in the page's own words: a short span copied from the page (a \
@@ -100,7 +146,7 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
-            "name": "find_links",
+            "name": Tool::FindLinks.name(),
             "title": "Find links worth following",
             "description": format!(
                 "The links on a page worth following, best first, one URL per line. Without `question`: content links \
@@ -121,7 +167,7 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
-            "name": "find_code",
+            "name": Tool::FindCode.name(),
             "title": "Find code on a page",
             "description": format!(
                 "The code blocks on a page (examples, commands, snippets), each under its heading, exactly as \
@@ -141,7 +187,7 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
-            "name": "find_image",
+            "name": Tool::FindImage.name(),
             "title": "Find images on a page",
             "description": format!(
                 "Image URLs from a page, best first. With `description`, the image that shows it (\"a cathedral\"): \
@@ -167,12 +213,18 @@ fn tools() -> Value {
     ])
 }
 
+/// `tools/list`'s answer, built once: it never changes while the server runs, and every call is checked against it.
+static TOOLS: LazyLock<Value> = LazyLock::new(tools);
+
+/// The schema `tools/list` shows for `tool`: what its arguments are checked against.
+fn input_schema(tool: Tool) -> &'static Value {
+    let entry = TOOLS.as_array().unwrap().iter().find(|t| t["name"] == tool.name());
+    &entry.expect("every tool is listed")["inputSchema"]
+}
+
 /// The jurl command line a tool call stands for, after checking its arguments against the tool's schema.
-fn command(name: &str, args: &Value) -> Result<Vec<String>, String> {
-    let tools = tools();
-    let tool =
-        tools.as_array().unwrap().iter().find(|t| t["name"] == name).ok_or_else(|| format!("unknown tool {name}"))?;
-    let schema = &tool["inputSchema"];
+fn command(tool: Tool, args: &Value) -> Result<Vec<String>, String> {
+    let schema = input_schema(tool);
     let args = match args {
         Value::Null => &Map::new(),
         Value::Object(a) => a,
@@ -182,16 +234,16 @@ fn command(name: &str, args: &Value) -> Result<Vec<String>, String> {
 
     let str = |k: &str| args.get(k).and_then(Value::as_str).map(String::from);
     let mut argv = vec!["jurl".to_string()];
-    match name {
-        "answer" => argv.push("--precise".into()),
-        "find_links" => argv.push("--links".into()),
-        "find_code" => argv.push("--code".into()),
-        "find_image" => match str("description") {
+    match tool {
+        Tool::ReadPage => {}
+        Tool::Answer => argv.push("--precise".into()),
+        Tool::FindLinks => argv.push("--links".into()),
+        Tool::FindCode => argv.push("--code".into()),
+        Tool::FindImage => match str("description") {
             Some(what) => argv.push(format!("--find={what}")),
             None if args.get("vision") == Some(&Value::Bool(true)) => argv.push("--vision".into()),
             None => argv.push("--image".into()),
         },
-        _ => {}
     }
     // `--ask=…`, so a question that starts with "-" is still the question.
     if let Some(q) = str("question") {
@@ -205,8 +257,10 @@ fn command(name: &str, args: &Value) -> Result<Vec<String>, String> {
         Some(Value::Number(n)) => argv.extend(["--follow".into(), n.to_string()]),
         _ => {}
     }
-    // After `--`, a url starting with "-" is still a url.
-    argv.extend(["--".into(), str("url").unwrap_or_default()]);
+    // After `--`, a url starting with "-" is still a url. Its ends are trimmed, as `fits` checked it, so the page
+    // read is the one the client named.
+    let url = str("url").unwrap_or_default();
+    argv.extend(["--".to_string(), url.trim().to_string()]);
     Ok(argv)
 }
 
@@ -253,6 +307,8 @@ enum Reply {
     Now(Option<Value>),
     /// A tool call: run this jurl command line, then answer request `id`.
     Run { id: Value, argv: Vec<String> },
+    /// `notifications/cancelled`: the client no longer wants request `request_id` answered (see `drive`).
+    Cancel { request_id: Value },
 }
 
 fn handle(line: &str) -> Reply {
@@ -260,11 +316,33 @@ fn handle(line: &str) -> Reply {
         Ok(v) => v,
         Err(e) => return Reply::Now(Some(error(Value::Null, -32700, &format!("parse error: {e}")))),
     };
+    // Batches (MCP 2025-03-26 only) aren't served: say so, rather than drop the line as junk below.
+    if msg.is_array() {
+        return Reply::Now(Some(error(
+            Value::Null,
+            INVALID_REQUEST,
+            "Invalid Request: batches aren't supported, send one message per line",
+        )));
+    }
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
-        // A response to a request we never send, or junk: nothing to answer.
-        return Reply::Now(None);
+        // A reply to a request we never sent has a result or an error and no method: nothing to answer. Any other
+        // message with an id is an invalid request, which JSON-RPC answers under that id. Without one, it is junk.
+        let is_reply = msg.get("result").is_some() || msg.get("error").is_some();
+        return match msg.get("id") {
+            Some(id) if !is_reply => {
+                Reply::Now(Some(error(id.clone(), INVALID_REQUEST, "Invalid Request: `method` must be a string")))
+            }
+            _ => Reply::Now(None),
+        };
     };
-    // Notifications (`notifications/initialized`, `notifications/cancelled`…) have no id and get no reply.
+    // Cancelling is a notification too, but `drive` has to act on it: it drops the call, or stops its reply.
+    if method == "notifications/cancelled" {
+        return match msg["params"]["requestId"].clone() {
+            Value::Null => Reply::Now(None),
+            request_id => Reply::Cancel { request_id },
+        };
+    }
+    // Notifications (`notifications/initialized`…) have no id and get no reply.
     let Some(id) = msg.get("id").cloned() else { return Reply::Now(None) };
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
     let result = match method {
@@ -283,16 +361,16 @@ fn handle(line: &str) -> Reply {
             })
         }
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools() }),
+        "tools/list" => json!({ "tools": TOOLS.clone() }),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or_default();
-            if !tools().as_array().unwrap().iter().any(|t| t["name"] == name) {
+            let Some(tool) = Tool::from_name(name) else {
                 return Reply::Now(Some(error(id, -32602, &format!("unknown tool: {name}"))));
-            }
+            };
             // Bad arguments are the model's to fix, so they come back as a tool error it can read.
-            return match command(name, &params["arguments"]) {
+            return match command(tool, &params["arguments"]) {
                 Ok(argv) => Reply::Run { id, argv },
-                Err(e) => Reply::Now(Some(response(id, tool_error(&format!("{name}: {e}"))))),
+                Err(e) => Reply::Now(Some(response(id, tool_error(&format!("{}: {e}", tool.name()))))),
             };
         }
         _ => return Reply::Now(Some(error(id, -32601, &format!("method not found: {method}")))),
@@ -329,7 +407,7 @@ async fn run(client: &Client, argv: &[String]) -> Value {
         // probability in it, instead of the text the CLI prints. The text is what the model needs, in fewer tokens.
         Ok(r) => json!({ "content": [{ "type": "text", "text": text(&r) }] }),
         // The page was read and doesn't say it: a plain result, so the model takes it as the answer.
-        Err(e) if e.chain().any(|c| c.is::<NotFound>()) => {
+        Err(e) if is_not_found(&e) => {
             json!({ "content": [{ "type": "text", "text": format!("Not found: {e:#}") }] })
         }
         Err(e) => tool_error(&format!("jurl: {e:#}")),
@@ -346,39 +424,119 @@ fn text(r: &Rendered) -> String {
     text
 }
 
-/// Serve until the client closes stdin. Tool calls run side by side: an agent may ask about several pages at once.
-pub async fn serve(client: Client) -> Result<()> {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut stdout = tokio::io::stdout();
+/// Serve until the client closes stdin, then answer the calls still running. Tool calls run side by side, up to
+/// `MAX_CALLS`: an agent may ask about several pages at once.
+pub(crate) async fn serve(client: Client) -> Result<()> {
+    let client = &client;
+    drive(BufReader::new(tokio::io::stdin()), tokio::io::stdout(), move |argv: Vec<String>| async move {
+        run(client, &argv).await
+    })
+    .await
+}
+
+/// The loop behind `serve`, over any reader and writer, so a test can run it with a fake `call`. A cancelled request
+/// is not answered: see `cancel` and `finished`.
+async fn drive<R, W, F, Fut>(input: R, mut output: W, call: F) -> Result<()>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: Fn(Vec<String>) -> Fut,
+    Fut: Future<Output = Value>,
+{
+    // Lines are read as bytes: one that isn't UTF-8 is answered, not allowed to end the loop with calls in flight.
+    let mut segments = input.split(b'\n');
+    let mut open = true;
+    // A read error stops the input, not the answers: the calls already sent are answered, then the error is returned.
+    let mut failed: Option<anyhow::Error> = None;
+    let mut pending: VecDeque<(Value, Vec<String>)> = VecDeque::new();
     let mut calls = FuturesUnordered::new();
+    // The calls running now, by request id, with whether the client has cancelled each one since it started.
+    let mut running: Vec<(Value, bool)> = Vec::new();
     loop {
+        // Calls past the cap wait here, in arrival order.
+        while calls.len() < MAX_CALLS {
+            let Some((id, argv)) = pending.pop_front() else { break };
+            running.push((id.clone(), false));
+            let fut = call(argv);
+            calls.push(async move { response(id, fut.await) });
+        }
+        // Once stdin has closed, only the calls still running are left to answer.
+        if !open && calls.is_empty() {
+            return failed.map_or(Ok(()), Err);
+        }
         let reply = tokio::select! {
-            line = lines.next_line() => match line.context("reading stdin")? {
-                Some(line) if line.trim().is_empty() => continue,
-                Some(line) => match handle(&line) {
-                    Reply::Now(reply) => reply,
-                    Reply::Run { id, argv } => {
-                        let client = &client;
-                        calls.push(async move { response(id, run(client, &argv).await) });
-                        continue;
-                    }
+            segment = segments.next_segment(), if open => match segment {
+                Ok(Some(bytes)) => match std::str::from_utf8(&bytes) {
+                    Ok(line) if line.trim().is_empty() => continue,
+                    Ok(line) => match handle(line) {
+                        Reply::Now(reply) => reply,
+                        Reply::Cancel { request_id } => {
+                            cancel(&mut pending, &mut running, &request_id);
+                            continue;
+                        }
+                        Reply::Run { id, argv } if pending.len() < MAX_PENDING => {
+                            pending.push_back((id, argv));
+                            continue;
+                        }
+                        // -32000 is the first code JSON-RPC leaves to the server. The call itself is fine (so this isn't a
+                        // tool error the model would read and try to fix), it's the server that has no room for it.
+                        Reply::Run { id, .. } => Some(error(
+                            id,
+                            -32000,
+                            &format!("too many tool calls waiting (at most {MAX_PENDING}); try again later"),
+                        )),
+                    },
+                    // Not text, so not JSON: there's no id to answer, and serving goes on for the calls in flight.
+                    Err(_) => Some(error(Value::Null, -32700, "parse error: not valid UTF-8")),
                 },
-                None => return Ok(()),
+                Ok(None) => {
+                    open = false;
+                    continue;
+                }
+                Err(e) => {
+                    failed = Some(anyhow::Error::new(e).context("reading stdin"));
+                    open = false;
+                    continue;
+                }
             },
-            Some(reply) = calls.next(), if !calls.is_empty() => Some(reply),
+            Some(reply) = calls.next(), if !calls.is_empty() => finished(&mut running, reply),
         };
         if let Some(reply) = reply {
             let mut line = serde_json::to_vec(&reply)?;
             line.push(b'\n');
-            stdout.write_all(&line).await?;
-            stdout.flush().await?;
+            output.write_all(&line).await?;
+            output.flush().await?;
         }
     }
+}
+
+/// Stops a request the client cancelled. A call still waiting for a slot is dropped, so it never runs. A call that is
+/// running keeps running, but its reply isn't sent (see `finished`). A request that is neither, because it was
+/// answered already or never came, is left alone.
+fn cancel(pending: &mut VecDeque<(Value, Vec<String>)>, running: &mut [(Value, bool)], request_id: &Value) {
+    if let Some(at) = pending.iter().position(|(id, _)| id == request_id) {
+        pending.remove(at);
+    } else if let Some((_, cancelled)) = running.iter_mut().find(|(id, _)| id == request_id) {
+        *cancelled = true;
+    }
+}
+
+/// A call that has finished: its reply, unless the client cancelled it while it ran. It leaves `running`.
+fn finished(running: &mut Vec<(Value, bool)>, reply: Value) -> Option<Value> {
+    let cancelled = match running.iter().position(|(id, _)| *id == reply["id"]) {
+        Some(at) => running.swap_remove(at).1,
+        None => false,
+    };
+    (!cancelled).then_some(reply)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     fn reply(msg: Value) -> Option<Value> {
         handle_raw(&msg.to_string())
@@ -388,6 +546,7 @@ mod tests {
         match handle(line) {
             Reply::Now(r) => r,
             Reply::Run { argv, .. } => panic!("unexpected run: {argv:?}"),
+            Reply::Cancel { request_id } => panic!("unexpected cancel of {request_id}"),
         }
     }
 
@@ -414,6 +573,8 @@ mod tests {
     #[test]
     fn notifications_get_no_reply_and_unknown_methods_an_error() {
         assert!(reply(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).is_none());
+        // A cancellation with no request to cancel is a notification too: nothing to stop, nothing to say.
+        assert!(reply(json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": {} })).is_none());
         assert_eq!(reply(json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" })).unwrap()["result"], json!({}));
         // Newer clients try `server/discover` first and fall back to `initialize` on "method not found".
         let r = reply(json!({ "jsonrpc": "2.0", "id": "d", "method": "server/discover" })).unwrap();
@@ -421,6 +582,28 @@ mod tests {
         assert_eq!(r["id"], "d");
         assert!(reply(json!({ "jsonrpc": "2.0", "id": 4, "result": {} })).is_none());
         assert_eq!(handle_raw("{not json").unwrap()["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn a_request_without_a_string_method_is_an_invalid_request() {
+        // JSON-RPC 2.0 answers an invalid request under its own id, so the client can match the error to it.
+        let r = reply(json!({ "jsonrpc": "2.0", "id": 10, "method": 42 })).expect("an invalid request got no reply");
+        assert_eq!(r["error"]["code"], -32600);
+        assert_eq!(r["id"], 10);
+        assert_eq!(reply(json!({ "jsonrpc": "2.0", "id": "q" })).unwrap()["error"]["code"], -32600);
+        // A reply to a request we never sent (a result or an error, and no method) is not a request: it gets none.
+        assert!(reply(json!({ "jsonrpc": "2.0", "id": 4, "result": {} })).is_none());
+        assert!(reply(json!({ "jsonrpc": "2.0", "id": 4, "error": { "code": -1, "message": "x" } })).is_none());
+    }
+
+    #[test]
+    fn a_batch_is_an_invalid_request_not_silence() {
+        for batch in [json!([]), json!([{ "jsonrpc": "2.0", "id": 1, "method": "ping" }])] {
+            let r = reply(batch).expect("a batch got no reply");
+            assert_eq!(r["error"]["code"], -32600);
+            assert_eq!(r["id"], Value::Null);
+            assert!(r["error"]["message"].as_str().unwrap().starts_with("Invalid Request: "));
+        }
     }
 
     #[test]
@@ -452,6 +635,7 @@ mod tests {
                 argv[1..].join(" ")
             }
             Reply::Now(r) => panic!("{r:?}"),
+            Reply::Cancel { request_id } => panic!("cancelled {request_id}, not run"),
         };
         assert_eq!(argv("read_page", json!({ "url": "example.com" })), "-- example.com");
         assert_eq!(
@@ -479,6 +663,11 @@ mod tests {
         assert_eq!(argv("find_image", json!({ "url": "x.com", "description": "a cat" })), "--find=a cat -- x.com");
         assert_eq!(argv("find_image", json!({ "url": "x.com", "vision": true })), "--vision -- x.com");
         assert_eq!(argv("find_image", json!({ "url": "x.com" })), "--image -- x.com");
+        // The url's length is checked without its spaces, so jurl must get it without them too.
+        assert_eq!(
+            argv("answer", json!({ "url": "  x.com\t", "question": "price?" })),
+            "--precise --ask=price? -- x.com"
+        );
     }
 
     #[test]
@@ -530,5 +719,252 @@ mod tests {
             text(&r),
             "$10 per user/month\n\n…\n\nFound by following https://linear.app/ → https://linear.app/pricing"
         );
+    }
+
+    /// One JSON-RPC request, as a line.
+    fn request(id: u64, method: &str, params: Value) -> String {
+        format!("{}\n", json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+    }
+
+    /// The replies in `out`, one JSON value per line.
+    fn lines_of(out: &[u8]) -> Vec<Value> {
+        String::from_utf8(out.to_vec()).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+
+    /// A tool call that takes many polls, so it is still running when the input, which is all in memory, has ended.
+    async fn slow_call(_argv: Vec<String>) -> Value {
+        for _ in 0..1000 {
+            tokio::task::yield_now().await;
+        }
+        json!({ "content": [{ "type": "text", "text": "ok" }] })
+    }
+
+    #[tokio::test]
+    async fn replies_still_arrive_after_stdin_closes() {
+        // `printf '<initialize>\n<tools/call>\n' | jurl mcp`: the call is still running when the input ends.
+        let input = [
+            request(1, "initialize", json!({ "protocolVersion": "2025-06-18" })),
+            request(2, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } })),
+        ]
+        .concat();
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, slow_call).await.unwrap();
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 2, "{replies:?}");
+        assert_eq!(replies[0]["id"], 1);
+        assert_eq!(replies[1]["id"], 2);
+        assert_eq!(replies[1]["result"]["content"][0]["text"], "ok");
+    }
+
+    #[tokio::test]
+    async fn tool_calls_run_four_at_a_time_in_arrival_order_and_a_ping_does_not_wait() {
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let call = |argv: Vec<String>| {
+            started.lock().unwrap().push(argv.last().unwrap().clone());
+            let (running, peak) = (running.clone(), peak.clone());
+            async move {
+                peak.fetch_max(running.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                for _ in 0..1000 {
+                    tokio::task::yield_now().await;
+                }
+                running.fetch_sub(1, Ordering::SeqCst);
+                json!({ "content": [{ "type": "text", "text": "ok" }] })
+            }
+        };
+        let mut input: String = (1..=10)
+            .map(|i| {
+                request(i, "tools/call", json!({ "name": "read_page", "arguments": { "url": format!("x{i}.com") } }))
+            })
+            .collect();
+        input += &request(100, "ping", json!({}));
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, call).await.unwrap();
+
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 11, "{replies:?}");
+        // The ping is answered while the calls are still running, not after them.
+        assert_eq!(replies[0]["id"], 100);
+        assert_eq!(peak.load(Ordering::SeqCst), MAX_CALLS);
+        let urls: Vec<String> = (1..=10).map(|i| format!("x{i}.com")).collect();
+        assert_eq!(*started.lock().unwrap(), urls);
+        let mut ids: Vec<u64> = replies[1..].iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, (1..=10).collect::<Vec<u64>>());
+    }
+
+    #[tokio::test]
+    async fn a_line_that_is_not_utf8_is_a_parse_error_and_serving_goes_on() {
+        // The tool call is still running when the bad line arrives: its reply comes last, after both pings.
+        let mut input =
+            request(1, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } })).into_bytes();
+        input.extend_from_slice(request(2, "ping", json!({})).as_bytes());
+        input.extend_from_slice(b"\xff\xfe not text\n");
+        input.extend_from_slice(request(3, "ping", json!({})).as_bytes());
+        let mut out = Vec::new();
+        drive(input.as_slice(), &mut out, slow_call).await.unwrap();
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 4, "{replies:?}");
+        assert_eq!(replies[0]["id"], 2);
+        assert_eq!(replies[1]["error"]["code"], -32700);
+        assert_eq!(replies[1]["id"], Value::Null);
+        assert_eq!(replies[2]["id"], 3);
+        assert_eq!(replies[3]["id"], 1);
+    }
+
+    #[test]
+    fn tool_enum_matches_the_list_in_order_and_parses_back() {
+        let listed: Vec<&str> = TOOLS.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = Tool::ALL.iter().map(|t| t.name()).collect();
+        assert_eq!(listed, names);
+        for tool in Tool::ALL {
+            assert_eq!(Tool::from_name(tool.name()), Some(tool));
+            assert_eq!(input_schema(tool)["type"], "object");
+        }
+        assert_eq!(Tool::from_name("summarize"), None);
+    }
+
+    #[tokio::test]
+    async fn a_call_past_the_waiting_bound_is_refused_at_once_and_never_runs() {
+        // MAX_CALLS run and MAX_PENDING wait; the next one is refused as soon as it is read, while none has finished.
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let call = |argv: Vec<String>| {
+            started.lock().unwrap().push(argv.last().unwrap().clone());
+            async {
+                // Far more polls than the input has lines, so no call finishes before the input has been read.
+                for _ in 0..1_000 {
+                    tokio::task::yield_now().await;
+                }
+                json!({ "content": [{ "type": "text", "text": "ok" }] })
+            }
+        };
+        let accepted = MAX_CALLS + MAX_PENDING;
+        let total = accepted + 1;
+        let input: String = (1..=total)
+            .map(|i| {
+                request(
+                    i as u64,
+                    "tools/call",
+                    json!({ "name": "read_page", "arguments": { "url": format!("x{i}.com") } }),
+                )
+            })
+            .collect();
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, call).await.unwrap();
+
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), total, "{replies:?}");
+        // The refusal comes first, and it is a protocol error with the request's id, not a tool result.
+        assert_eq!(replies[0]["id"], total as u64);
+        assert_eq!(replies[0]["error"]["code"], -32000);
+        assert!(replies[0].get("result").is_none(), "{}", replies[0]);
+        let mut ids: Vec<u64> = replies[1..].iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, (1..=accepted as u64).collect::<Vec<u64>>());
+        // The refused call never ran; the accepted ones ran in arrival order.
+        let urls: Vec<String> = (1..=accepted).map(|i| format!("x{i}.com")).collect();
+        assert_eq!(*started.lock().unwrap(), urls);
+    }
+
+    /// A stdin that delivers `bytes`, then fails, as a pipe does when its read errors.
+    struct BrokenStdin(Vec<u8>);
+
+    impl tokio::io::AsyncRead for BrokenStdin {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.0.is_empty() {
+                return std::task::Poll::Ready(Err(std::io::Error::other("stdin broke")));
+            }
+            let n = self.0.len().min(buf.remaining());
+            buf.put_slice(&self.0[..n]);
+            self.0.drain(..n);
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stdin_read_error_answers_the_call_already_sent_and_is_then_returned() {
+        let line = request(1, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } }));
+        let mut out = Vec::new();
+        let err = drive(BufReader::new(BrokenStdin(line.into_bytes())), &mut out, slow_call).await.unwrap_err();
+        assert_eq!(format!("{err:#}"), "reading stdin: stdin broke");
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(replies[0]["id"], 1);
+        assert_eq!(replies[0]["result"]["content"][0]["text"], "ok");
+    }
+
+    #[tokio::test]
+    async fn a_stdin_read_error_answers_the_calls_waiting_for_a_slot_too() {
+        // More calls than slots, so some are still waiting when the read fails: all of them are answered.
+        let calls = MAX_CALLS + 2;
+        let input: String = (1..=calls as u64)
+            .map(|i| request(i, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } })))
+            .collect();
+        let mut out = Vec::new();
+        assert!(drive(BufReader::new(BrokenStdin(input.into_bytes())), &mut out, slow_call).await.is_err());
+        let mut ids: Vec<u64> = lines_of(&out).iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, (1..=calls as u64).collect::<Vec<u64>>());
+    }
+
+    /// `notifications/cancelled` for request `id`, as a line.
+    fn cancelled(id: u64) -> String {
+        let note = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": id } });
+        format!("{note}\n")
+    }
+
+    #[tokio::test]
+    async fn a_call_cancelled_while_it_waits_never_runs_and_gets_no_reply() {
+        // MAX_CALLS run, so the next call waits for a slot, and the client cancels it before a slot frees.
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let recorder = started.clone();
+        let call = move |argv: Vec<String>| {
+            recorder.lock().unwrap().push(argv.last().unwrap().clone());
+            slow_call(argv)
+        };
+        let waiting = MAX_CALLS as u64 + 1;
+        let mut input: String = (1..=waiting)
+            .map(|i| {
+                request(i, "tools/call", json!({ "name": "read_page", "arguments": { "url": format!("x{i}.com") } }))
+            })
+            .collect();
+        input += &cancelled(waiting);
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, call).await.unwrap();
+
+        let mut ids: Vec<u64> = lines_of(&out).iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, (1..=MAX_CALLS as u64).collect::<Vec<u64>>());
+        let urls: Vec<String> = (1..=MAX_CALLS).map(|i| format!("x{i}.com")).collect();
+        assert_eq!(*started.lock().unwrap(), urls);
+    }
+
+    #[tokio::test]
+    async fn a_call_cancelled_while_it_runs_finishes_but_its_reply_is_not_sent() {
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let recorder = started.clone();
+        let call = move |argv: Vec<String>| {
+            recorder.lock().unwrap().push(argv.last().unwrap().clone());
+            slow_call(argv)
+        };
+        let input = [
+            request(1, "tools/call", json!({ "name": "read_page", "arguments": { "url": "x.com" } })),
+            cancelled(1),
+            request(2, "ping", json!({})),
+        ]
+        .concat();
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, call).await.unwrap();
+
+        // Only the ping is answered: the cancelled call ran to its end, but the client had stopped waiting for it.
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(replies[0]["id"], 2);
+        assert_eq!(*started.lock().unwrap(), vec!["x.com".to_string()]);
     }
 }

@@ -1,0 +1,54 @@
+Score-question merge experiment: one `score` question per link (C) vs jurl's l + f (A), with A re-asked (B).
+Visits: 15 long-search page visits (--follow 10+ style: l and f questions), 10 searches. Model jev-1.13.0.
+Ranking: jurl's s = p + (1 - p) x 0.3 x f. A = recorded l/f answers (base-all.jsonl). B = the same requests re-sent.
+C: s' = P2 + (1 - P2) x 0.3 x min(1, P1 + P2) from the score probabilities.
+Ties: by position on the page (as jurl's top()). Spearman: average ranks for ties. Averages are per-visit means.
+Spend: 1,521,472 input tokens = $0.0639 by the ledger (cap $0.20); replies sum to 1,521,472.
+
+vid | search | A top1 | top1 B | top1 C | j3 B | j3 C | j10 B | j10 C | rho B | rho C | n>=.1 A | B | C | mean A | mean B | mean C | tok A | tok C | C/A
+V001 | How many moons does Mars hav | 0.28 | n | n | 1.00 | 0.20 | 0.67 | 0.25 | 0.90 | 0.54 | 20 | 21 | 3 | 0.064 | 0.064 | 0.012 | 57,077 | 52,930 | 0.93
+V008 | How many moons does Mars hav | 0.97 | y | y | 1.00 | 0.50 | 0.67 | 0.82 | 0.96 | 0.60 | 249 | 250 | 244 | 0.351 | 0.356 | 0.222 | 48,795 | 44,746 | 0.92
+V010 | How many moons does Mars hav | 0.96 | y | y | 1.00 | 1.00 | 1.00 | 0.54 | 0.95 | 0.42 | 250 | 250 | 246 | 0.348 | 0.349 | 0.283 | 53,248 | 49,462 | 0.93
+V036 | What is the atomic number of | 0.94 | y | y | 0.50 | 0.20 | 0.67 | 0.33 | 0.94 | 0.70 | 250 | 250 | 237 | 0.345 | 0.343 | 0.295 | 51,088 | 46,429 | 0.91
+V040 | What is the boiling point of | 0.92 | n | n | 0.50 | 0.50 | 0.67 | 0.67 | 0.96 | -0.04 | 250 | 250 | 247 | 0.348 | 0.353 | 0.274 | 49,422 | 46,411 | 0.94
+V049 | What is the boiling point of | 0.27 | n | y | 1.00 | 0.50 | 1.00 | 0.54 | 0.88 | 0.56 | 36 | 37 | 4 | 0.073 | 0.073 | 0.012 | 54,561 | 50,547 | 0.93
+V056 | What is the chemical formula | 0.59 | y | y | 1.00 | 0.20 | 0.82 | 0.43 | 0.97 | 0.04 | 196 | 199 | 35 | 0.150 | 0.150 | 0.052 | 51,561 | 46,710 | 0.91
+V061 | What is the chemical formula | 0.25 | y | y | 1.00 | 0.20 | 0.43 | 0.11 | 0.85 | 0.39 | 7 | 7 | 0 | 0.061 | 0.061 | 0.010 | 57,735 | 52,990 | 0.92
+V072 | What is the half-life of car | 0.58 | y | y | 1.00 | 0.20 | 0.82 | 0.43 | 0.97 | 0.84 | 188 | 180 | 65 | 0.147 | 0.145 | 0.072 | 51,070 | 46,972 | 0.92
+V081 | What is the largest planet i | 0.96 | y | n | 0.50 | 0.50 | 0.82 | 0.33 | 0.94 | 0.50 | 250 | 250 | 249 | 0.352 | 0.348 | 0.284 | 52,911 | 48,252 | 0.91
+V093 | What is the speed of sound i | 0.95 | y | y | 1.00 | 0.20 | 0.67 | 0.43 | 0.98 | 0.67 | 247 | 245 | 218 | 0.278 | 0.279 | 0.209 | 52,000 | 48,135 | 0.93
+V103 | Who composed The Magic Flute | 0.55 | n | n | 1.00 | 1.00 | 0.67 | 0.25 | 0.91 | 0.56 | 250 | 250 | 161 | 0.280 | 0.277 | 0.117 | 44,338 | 41,697 | 0.94
+V114 | Who painted the Mona Lisa? | 0.97 | y | y | 1.00 | 0.50 | 1.00 | 0.43 | 0.95 | 0.65 | 250 | 250 | 241 | 0.270 | 0.269 | 0.266 | 53,903 | 50,627 | 0.94
+V117 | Who painted the Mona Lisa? | 0.96 | y | n | 1.00 | 1.00 | 0.54 | 0.25 | 0.97 | 0.69 | 244 | 245 | 235 | 0.245 | 0.244 | 0.243 | 56,675 | 52,752 | 0.93
+V127 | Who wrote Don Quixote? | 0.92 | y | y | 1.00 | 0.20 | 0.82 | 0.25 | 0.98 | 0.85 | 250 | 250 | 235 | 0.379 | 0.381 | 0.297 | 56,642 | 51,786 | 0.91
+
+Averages over visits (A vs B = noise ceiling; A vs C = candidate):
+all visits                         n=15  top-1 agree B 11/15 C 10/15 | top-3 Jaccard B 0.90 C 0.46 | top-10 Jaccard B 0.75 C 0.40 | Spearman B 0.94 C 0.53 | links s>=0.1 A 195.8 B 195.6 C 161.3 | mean s A 0.246 B 0.246 C 0.176
+confident (A top-1 >= 0.9)         n= 9  top-1 agree B 8/9 C 6/9 | top-3 Jaccard B 0.83 C 0.51 | top-10 Jaccard B 0.76 C 0.45 | Spearman B 0.96 C 0.56 | links s>=0.1 A 248.9 B 248.9 C 239.1 | mean s A 0.324 B 0.325 C 0.263
+middle (0.5 <= A top-1 < 0.9)      n= 3  top-1 agree B 2/3 C 2/3 | top-3 Jaccard B 1.00 C 0.47 | top-10 Jaccard B 0.77 C 0.37 | Spearman B 0.95 C 0.48 | links s>=0.1 A 211.3 B 209.7 C 87.0 | mean s A 0.192 B 0.191 C 0.081
+cold (A top-1 < 0.5)               n= 3  top-1 agree B 1/3 C 2/3 | top-3 Jaccard B 1.00 C 0.30 | top-10 Jaccard B 0.70 C 0.30 | Spearman B 0.87 C 0.49 | links s>=0.1 A 21.0 B 21.7 C 2.3 | mean s A 0.066 B 0.066 C 0.011
+Components (per-visit mean Spearman against A): p: B 0.88, C 0.48 (C's p is P2) | f: B 0.92, C 0.54 (C's f is P1 + P2)
+Not in this comparison: jurl's LONG_MENU discount (0.3 on links outside the text, long searches), HOP_DECAY and heat;
+the ranking here is the brief's formula, applied to each visit's own links.
+
+Input tokens (Jev's usage.input_tokens, summed over each visit's requests):
+  A (original recorded requests, 75 requests): 791,026
+  B (same requests re-sent, 75 requests): 791,026  (B/A 1.000)
+  C (score questions, 45 requests): 730,446  (C/A 0.923, saving 7.7%)
+
+Largest A-vs-C disagreements (|s_A - s_C|, all visits):
+  |diff|  vid  search                       link text (path)                          s_A  s_C   p_A  f_A   p_C  f_C
+  0.54  V040  What is the boiling point of  dew points                     (/wiki/Dew_point) 0.41 0.95  0.18 0.94  0.93 0.97
+  0.47  V008  How many moons does Mars hav  PADME                          (/wiki/Phobos_And_Deimos_&_Ma) 0.74 0.26  0.63 0.95  0.10 0.61
+  0.39  V036  What is the atomic number of  Periodic table (electron confi (/wiki/Periodic_table_(electr) 0.44 0.83  0.21 0.98  0.76 0.97
+  0.37  V081  What is the largest planet i  gas giants                     (/wiki/Gas_giant) 0.74 0.37  0.63 0.96  0.12 0.94
+  0.36  V008  How many moons does Mars hav  Phobos                         (/wiki/Transit_of_Phobos_from) 0.78 0.42  0.69 0.96  0.21 0.88
+  0.33  V127  Who wrote Don Quixote?        Don Quixote                    (/wiki/Don_Quixote_(Picasso)) 0.54 0.21  0.43 0.67  0.08 0.48
+  0.33  V127  Who wrote Don Quixote?        Permanent link                 (/w/index.php) 0.55 0.88  0.43 0.72  0.84 0.93
+  0.32  V036  What is the atomic number of  atomic numbers                 (/wiki/Atomic_number) 0.80 0.48  0.72 0.95  0.29 0.91
+  0.31  V127  Who wrote Don Quixote?        Spanish language               (/wiki/Spanish_language) 0.50 0.19  0.35 0.75  0.03 0.54
+  0.31  V093  What is the speed of sound i  anharmonic                     (/wiki/Anharmonicity) 0.41 0.10  0.27 0.62  0.03 0.24
+
+Selection: the 12 visits drawn at random (seed 0) from 250-link visits whose recorded top-1 s_A >= 0.5, one per search
+(10 searches, plus two more from the most populated), excluding the Titanic search (its eligible visits all have
+'Titanium' as top link). Three cold visits (A top-1 < 0.3, V001, V049, V061) added so f can move the ranking.

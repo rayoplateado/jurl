@@ -1,0 +1,408 @@
+[
+ {
+  "start": "hetzner.com",
+  "q": "In what year was Hetzner founded?",
+  "group": "company",
+  "answer": "1997",
+  "right": true,
+  "pages": 3,
+  "tokens": 52759,
+  "ms": 3539,
+  "path": [
+   "https://www.hetzner.com/",
+   "https://www.hetzner.com/unternehmen/ueber-uns/"
+  ]
+ },
+ {
+  "start": "santander.com",
+  "q": "In what year was Santander founded?",
+  "group": "company",
+  "answer": "1857",
+  "right": true,
+  "pages": 3,
+  "tokens": 52292,
+  "ms": 2698,
+  "path": [
+   "https://www.santander.com/en/home",
+   "https://www.santander.com/en/about-us/our-history"
+  ]
+ },
+ {
+  "start": "bitwarden.com",
+  "q": "Where is Bitwarden's corporate headquarters?",
+  "group": "company",
+  "answer": "Santa Barbara, CA 93103 USA",
+  "right": true,
+  "pages": 3,
+  "tokens": 67341,
+  "ms": 2182,
+  "path": [
+   "https://bitwarden.com/",
+   "https://bitwarden.com/about/"
+  ]
+ },
+ {
+  "start": "proton.me",
+  "q": "In what year was Proton founded?",
+  "group": "company",
+  "answer": "2014",
+  "right": true,
+  "pages": 3,
+  "tokens": 66161,
+  "ms": 2455,
+  "path": [
+   "https://proton.me/",
+   "https://proton.me/about"
+  ]
+ },
+ {
+  "start": "basecamp.com",
+  "q": "Who is the CEO of Basecamp?",
+  "group": "company",
+  "answer": "Jason Fried",
+  "right": true,
+  "pages": 1,
+  "tokens": 32782,
+  "ms": 1373,
+  "path": [
+   "https://basecamp.com/"
+  ]
+ },
+ {
+  "start": "brave.com",
+  "q": "Where is Brave headquartered?",
+  "group": "company",
+  "answer": "48 2nd St, Floor 3, San Francisco, CA 94105",
+  "right": true,
+  "pages": 3,
+  "tokens": 84307,
+  "ms": 2421,
+  "path": [
+   "https://brave.com/",
+   "https://brave.com/about/"
+  ]
+ },
+ {
+  "start": "mullvad.net",
+  "q": "What is Mullvad's support email address?",
+  "group": "support",
+  "answer": "support@mullvadvpn.net",
+  "right": true,
+  "pages": 3,
+  "tokens": 50196,
+  "ms": 2507,
+  "path": [
+   "https://mullvad.net/",
+   "https://mullvad.net/en/blog/we-now-self-host-our-support-email"
+  ]
+ },
+ {
+  "start": "kagi.com",
+  "q": "What is Kagi's support email address?",
+  "group": "support",
+  "answer": "Feel free to email our customer support at support@kagi.com",
+  "right": true,
+  "pages": 5,
+  "tokens": 44724,
+  "ms": 4297,
+  "path": [
+   "https://kagi.com/",
+   "https://help.kagi.com/kagi/support-and-community/"
+  ]
+ },
+ {
+  "start": "www.ikea.com/us/en/",
+  "q": "How many days do I have to return new, unopened products to IKEA?",
+  "group": "support",
+  "answer": "365 days",
+  "right": true,
+  "pages": 3,
+  "tokens": 33410,
+  "ms": 3698,
+  "path": [
+   "https://www.ikea.com/us/en/",
+   "https://www.ikea.com/us/en/customer-service/returns-claims/"
+  ]
+ },
+ {
+  "start": "plausible.io",
+  "q": "What email address do I use to get help from Plausible?",
+  "group": "support",
+  "answer": "Email hello@plausible.io",
+  "right": true,
+  "pages": 3,
+  "tokens": 71162,
+  "ms": 1993,
+  "path": [
+   "https://plausible.io/",
+   "https://plausible.io/contact"
+  ]
+ },
+ {
+  "start": "obsidian.md",
+  "q": "What is the maximum file size on Obsidian Sync's Standard plan?",
+  "group": "product",
+  "answer": "5 MB maximum file size",
+  "right": true,
+  "pages": 3,
+  "tokens": 28454,
+  "ms": 1851,
+  "path": [
+   "https://obsidian.md/",
+   "https://obsidian.md/sync"
+  ]
+ },
+ {
+  "start": "telegram.org",
+  "q": "What is the largest file you can send on Telegram without Premium?",
+  "group": "product",
+  "answer": "2 GB",
+  "right": true,
+  "pages": 3,
+  "tokens": 126456,
+  "ms": 2812,
+  "path": [
+   "https://telegram.org/",
+   "https://telegram.org/faq"
+  ]
+ },
+ {
+  "start": "mega.io",
+  "q": "How much free storage does MEGA include?",
+  "group": "product",
+  "answer": "!{freePlanStorage} storage",
+  "right": false,
+  "pages": 5,
+  "tokens": 132706,
+  "ms": 5005,
+  "path": [
+   "https://mega.io/",
+   "https://mega.io/pricing?mct=mainpr"
+  ]
+ },
+ {
+  "start": "sync.com",
+  "q": "How much free storage does Sync include?",
+  "group": "product",
+  "answer": "5 GB",
+  "right": true,
+  "pages": 3,
+  "tokens": 61071,
+  "ms": 4681,
+  "path": [
+   "https://www.sync.com/",
+   "https://www.sync.com/free-cloud-storage-from-trial/"
+  ]
+ },
+ {
+  "start": "dropbox.com",
+  "q": "How much storage does Dropbox Plus include?",
+  "group": "product",
+  "answer": "2,000 GB",
+  "right": true,
+  "pages": 3,
+  "tokens": 66393,
+  "ms": 4382,
+  "path": [
+   "https://dropbox.com/",
+   "https://www.dropbox.com/plus"
+  ]
+ },
+ {
+  "start": "vite.dev/guide/",
+  "q": "What port does the Vite dev server use by default?",
+  "group": "docs",
+  "answer": "`5173`",
+  "right": true,
+  "pages": 3,
+  "tokens": 46250,
+  "ms": 1996,
+  "path": [
+   "https://vite.dev/guide/",
+   "https://vite.dev/config/server-options.md"
+  ]
+ },
+ {
+  "start": "gohugo.io/documentation/",
+  "q": "What port does hugo server listen on by default?",
+  "group": "docs",
+  "answer": "Content-Security-Policy: script-src localhost:1313",
+  "right": true,
+  "pages": 3,
+  "tokens": 51097,
+  "ms": 2158,
+  "path": [
+   "https://gohugo.io/documentation/",
+   "https://gohugo.io/configuration/server/"
+  ]
+ },
+ {
+  "start": "prometheus.io/docs/introduction/overview/",
+  "q": "What is the default value of Prometheus's --web.listen-address flag?",
+  "group": "docs",
+  "answer": "0.0.0.0:9090",
+  "right": true,
+  "pages": 5,
+  "tokens": 59383,
+  "ms": 11942,
+  "path": [
+   "https://prometheus.io/docs/introduction/overview/",
+   "https://prometheus.io/docs/prometheus/3.15/command-line/prometheus/"
+  ]
+ },
+ {
+  "start": "caddyserver.com/docs/",
+  "q": "What is the default address of Caddy's admin endpoint?",
+  "group": "docs",
+  "answer": "localhost:2019",
+  "right": true,
+  "pages": 3,
+  "tokens": 59364,
+  "ms": 2926,
+  "path": [
+   "https://caddyserver.com/docs/",
+   "https://caddyserver.com/docs/caddyfile/options"
+  ]
+ },
+ {
+  "start": "docs.djangoproject.com/en/stable/",
+  "q": "What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting?",
+  "group": "docs",
+  "answer": "2621440 (i.e. 2.5 MB)",
+  "right": true,
+  "pages": 3,
+  "tokens": 168385,
+  "ms": 6133,
+  "path": [
+   "https://docs.djangoproject.com/en/6.1/",
+   "https://docs.djangoproject.com/en/6.1/ref/settings/"
+  ]
+ },
+ {
+  "start": "grafana.com/docs/grafana/latest/",
+  "q": "What port does Grafana listen on by default?",
+  "group": "docs",
+  "answer": null,
+  "right": false,
+  "pages": 5,
+  "tokens": 76971,
+  "ms": 2905,
+  "path": [
+   "https://grafana.com/docs/grafana/latest/"
+  ]
+ },
+ {
+  "start": "usal.es",
+  "q": "¿En qué año se fundó la Universidad de Salamanca?",
+  "group": "es",
+  "answer": "1218",
+  "right": true,
+  "pages": 3,
+  "tokens": 40288,
+  "ms": 2312,
+  "path": [
+   "https://usal.es/",
+   "https://usal.es/historia"
+  ]
+ },
+ {
+  "start": "once.es",
+  "q": "¿En qué año se creó la ONCE?",
+  "group": "es",
+  "answer": "1938",
+  "right": true,
+  "pages": 3,
+  "tokens": 23862,
+  "ms": 2384,
+  "path": [
+   "https://www.once.es/",
+   "https://www.once.es/conocenos/la-historia"
+  ]
+ },
+ {
+  "start": "cabify.com/es",
+  "q": "¿En qué año nació Cabify?",
+  "group": "es",
+  "answer": "2011",
+  "right": true,
+  "pages": 3,
+  "tokens": 60854,
+  "ms": 2625,
+  "path": [
+   "https://cabify.com/es",
+   "https://cabify.com/es/sobre-nosotros"
+  ]
+ },
+ {
+  "start": "docs.python.org/es/3/",
+  "q": "¿Cuál es el valor predeterminado de sys.tracebacklimit?",
+  "group": "es",
+  "answer": "1000",
+  "right": true,
+  "pages": 5,
+  "tokens": 112561,
+  "ms": 2597,
+  "path": [
+   "https://docs.python.org/es/3/",
+   "https://docs.python.org/es/3/library/index.html",
+   "https://docs.python.org/es/3/library/sys.html"
+  ]
+ },
+ {
+  "start": "canonical.com",
+  "q": "What was Canonical's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 80499,
+  "ms": 7019,
+  "path": []
+ },
+ {
+  "start": "todoist.com",
+  "q": "What was Doist's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 88068,
+  "ms": 3811,
+  "path": []
+ },
+ {
+  "start": "fastmail.com",
+  "q": "What is Fastmail's CEO's salary?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 71152,
+  "ms": 2741,
+  "path": []
+ },
+ {
+  "start": "1password.com",
+  "q": "What is 1Password's support phone number?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 38196,
+  "ms": 2976,
+  "path": []
+ },
+ {
+  "start": "pcloud.com",
+  "q": "Where does pCloud's CEO live?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 44849,
+  "ms": 10583,
+  "path": [
+   "https://www.pcloud.com/"
+  ]
+ }
+]

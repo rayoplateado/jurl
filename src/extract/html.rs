@@ -1,89 +1,13 @@
-//! HTML/markdown → candidate blocks and images. Every emitted string is text that
-//! exists in the page; nothing here rewrites content beyond whitespace collapsing.
+//! The HTML path: find the page's content root, walk it into blocks, and collect the images and links on it. The rules
+//! for what a reader never sees (script and form elements, hidden elements, page chrome) are here too.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use scraper::{ElementRef, Html, Node, Selector};
-use serde::Serialize;
 use url::Url;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Kind {
-    Heading,
-    Para,
-    Code,
-    Quote,
-    Item,
-    Table,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Block {
-    pub i: usize,
-    pub kind: Kind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub level: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lang: Option<String>,
-    pub text: String,
-    /// Which `<ul>`/`<ol>` a list item belongs to, numbered in page order.
-    #[serde(skip)]
-    pub list: Option<usize>,
-}
-
-impl Block {
-    pub fn markdown(&self) -> String {
-        match self.kind {
-            Kind::Heading => format!("{} {}", "#".repeat(self.level.unwrap_or(2) as usize), self.text),
-            Kind::Code => {
-                // Longer than any fence inside, so code that shows a ``` block prints as one block.
-                let inner = self.text.lines().map(|l| l.trim_start().chars().take_while(|&c| c == '`').count()).max();
-                let fence = "`".repeat(inner.unwrap_or(0).max(2) + 1);
-                format!("{fence}{}\n{}\n{fence}", self.lang.as_deref().unwrap_or(""), self.text.trim_end())
-            }
-            Kind::Quote => self.text.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n"),
-            Kind::Item => format!("- {}", self.text),
-            Kind::Para | Kind::Table => self.text.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Image {
-    pub i: usize,
-    pub url: Url,
-    /// A smaller variant when the page offers one: what gets downloaded for Clef.
-    pub preview: Url,
-    pub alt: String,
-    pub caption: String,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Link {
-    pub i: usize,
-    pub url: Url,
-    pub text: String,
-    pub context: String,
-    /// Only ever a footnote mark (inside `<sup>`: "[1]", "[clarification needed]") or an image with no text (on a wiki
-    /// it opens the photo's own page): beside the text, never a way to the topic. A link to the same page in words
-    /// clears it.
-    pub marginal: bool,
-}
-
-pub struct Extracted {
-    pub title: String,
-    pub blocks: Vec<Block>,
-    pub images: Vec<Image>,
-    pub links: Vec<Link>,
-    /// Every link on the page, menus and footers included: how `--follow` moves around a site.
-    pub site_links: Vec<Link>,
-    /// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no
-    /// text, the page is a JS app.
-    pub app_shell: bool,
-}
+use super::join::join_short;
+use super::{BREAK, Block, Extracted, Image, Kind, Link, collapse, push_image, push_link};
 
 const SKIP: &[&str] = &[
     "script", "style", "noscript", "nav", "footer", "aside", "form", "svg", "button", "iframe", "template", "select",
@@ -94,13 +18,45 @@ const INLINE: &[&str] = &[
     "time", "br", "kbd", "q", "cite", "label", "var", "samp", "dfn", "bdi", "wbr", "font", "img", "picture", "data",
 ];
 
-pub fn html(body: &str, base: &Url) -> Extracted {
-    let doc = Html::parse_document(body);
-    let title = meta(&doc, "meta[property='og:title']")
-        .or_else(|| first_text(&doc, "title"))
-        .or_else(|| first_text(&doc, "h1"))
-        .unwrap_or_default();
+/// Attributes where a lazy loader keeps an image's real address while `src` holds a placeholder, in the order read.
+const LAZY_SRC: &[&str] = &["data-src", "data-lazy-src"];
+/// The full-size file a lazy loader may keep as well. The image and its preview both read it after `LAZY_SRC` and
+/// before `src`, so a placeholder `src` is never the preview of an image that has a lazy one.
+const LAZY_FULL_SIZE: &str = "data-original";
 
+pub fn html(body: &str, base: &Url) -> Extracted {
+    extract_doc(&Html::parse_document(body), body, base)
+}
+
+/// `html`, and whether the page is a template its script has not filled in: see [`has_placeholders`].
+pub fn html_with_placeholders(body: &str, base: &Url) -> (Extracted, bool) {
+    let doc = Html::parse_document(body);
+    (extract_doc(&doc, body, base), has_placeholders(&doc))
+}
+
+fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
+    let root = content_root(doc);
+    let in_body = root.value().name() == "body";
+    Extracted {
+        title: collapse(&page_title(doc)),
+        blocks: join_short(walk(doc, root, in_body)),
+        images: collect_images(doc, root, in_body, base),
+        links: collect_links(root, in_body, base),
+        site_links: collect_site_links(doc, base),
+        app_shell: is_app_shell(doc, body),
+    }
+}
+
+/// The page's title: `og:title`, else the `<title>`, else the first `<h1>`.
+fn page_title(doc: &Html) -> String {
+    meta(doc, "meta[property='og:title']")
+        .or_else(|| first_text(doc, "title"))
+        .or_else(|| first_text(doc, "h1"))
+        .unwrap_or_default()
+}
+
+/// The element the content is read from: the first candidate, in order, that holds a fair share of the page's text.
+fn content_root(doc: &Html) -> ElementRef<'_> {
     // Several <article>s means a listing of cards: the container is the content.
     let order: &[&str] = if doc.select(&sel("article")).nth(1).is_some() {
         &["main", "[role=main]", "body"]
@@ -110,28 +66,42 @@ pub fn html(body: &str, base: &Url) -> Extracted {
     // An <article> or <main> holding a sliver of the page's text isn't its content: a sign-up modal's
     // <main>, a "related" card. Below this share of the body's visible text, try the next candidate.
     let body_len = doc.select(&sel("body")).next().map(visible_len).unwrap_or(0);
-    let root = order
+    order
         .iter()
         .find_map(|s| {
             doc.select(&sel(s))
                 .max_by_key(|e| visible_len(*e))
                 .filter(|e| *s == "body" || visible_len(*e) * ROOT_MIN_SHARE_INV >= body_len)
         })
-        .unwrap_or_else(|| doc.root_element());
-    let in_body = root.value().name() == "body";
+        .unwrap_or_else(|| doc.root_element())
+}
 
+/// The blocks of the content root, in page order.
+fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool) -> Vec<Block> {
     // React streams late content (a Suspense boundary) as `<div hidden id="S:n">` at the end of the body, and a
     // script moves it into `<template id="B:n">`, where it belongs. Read it there.
     let segments: HashMap<String, ElementRef> = doc
         .select(&sel("div[hidden][id^='S:']"))
         .filter_map(|e| Some((e.value().id()?.strip_prefix("S:")?.to_string(), e)))
         .collect();
-    let mut w = Walker { blocks: Vec::new(), skip_header: in_body, buf: String::new(), segments, list: None, lists: 0 };
+    let mut w = Walker {
+        blocks: Vec::new(),
+        skip_header: in_body,
+        buf: String::new(),
+        segments,
+        list: None,
+        lists: 0,
+        depth: 0,
+    };
     w.container(root);
     w.flush();
+    w.blocks
+}
 
+/// The images of the page: `og:image` first, then the `<img>`s of the content root that a reader can see.
+fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Vec<Image> {
     let mut images = Vec::new();
-    if let Some(og) = meta(&doc, "meta[property='og:image']") {
+    if let Some(og) = meta(doc, "meta[property='og:image']") {
         push_image(&mut images, base, &og, None, String::new(), String::new(), None, None);
     }
     for img in root.select(&sel("img")) {
@@ -139,23 +109,27 @@ pub fn html(body: &str, base: &Url) -> Extracted {
             continue;
         }
         let a = |k| img.value().attr(k);
-        let src = a("srcset").or(a("data-srcset")).and_then(best_srcset).or(a("data-src")
-            .or(a("data-lazy-src"))
-            .or(a("data-original"))
-            .or(a("src"))
-            .map(String::from));
+        let srcsets = a("srcset").or(a("data-srcset"));
+        // The image's own address: a lazy loader's attribute if it has one, else `src`, which may be a placeholder.
+        let own = first_attr(img, LAZY_SRC).or(a(LAZY_FULL_SIZE)).or(a("src"));
+        let src = srcsets.and_then(best_srcset).or(own.map(String::from));
         let Some(src) = src else { continue };
-        let preview = a("srcset").or(a("data-srcset")).and_then(small_srcset).or(a("data-src")
-            .or(a("data-lazy-src"))
-            .or(a("src"))
-            .filter(|s| !s.starts_with("data:"))
-            .map(String::from));
+        let preview = srcsets.and_then(small_srcset).or(own.filter(|s| !s.starts_with("data:")).map(String::from));
         let alt = collapse(a("alt").or(a("title")).unwrap_or(""));
         let caption = figcaption(img);
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
         push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
     }
+    images
+}
 
+/// The first of these attributes that the element has.
+fn first_attr<'a>(el: ElementRef<'a>, names: &[&str]) -> Option<&'a str> {
+    names.iter().find_map(|n| el.value().attr(n))
+}
+
+/// The links of the content root. Hidden links, and links inside skipped elements, are left out.
+fn collect_links(root: ElementRef, in_body: bool, base: &Url) -> Vec<Link> {
     let mut links = Vec::new();
     for a in root.select(&sel("a[href]")) {
         if hidden(a) || has_skipped_ancestor(a, in_body) {
@@ -186,13 +160,69 @@ pub fn html(body: &str, base: &Url) -> Extracted {
             .unwrap_or_default();
         push_link(&mut links, base, v.attr("href").unwrap_or(""), text, context, marginal(a));
     }
+    links
+}
 
-    let app_shell = doc.select(&sel("script")).next().is_some()
+/// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no text, the page is a JS app.
+fn is_app_shell(doc: &Html, body: &str) -> bool {
+    doc.select(&sel("script")).next().is_some()
         && (body.len() > 4096
-            || doc
-                .select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]"))
-                .next()
-                .is_some());
+            || doc.select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]")).next().is_some())
+}
+
+/// A sigil before `{name}` makes a template placeholder: MEGA's `!{freePlanStorage}` and `^{price}`, JavaScript's
+/// `${total}`, Ruby's `#{name}`.
+const SIGILS: &[char] = &['!', '^', '$', '#', '%', '@'];
+/// The placeholders in a page's visible text that make it a template its script has not filled in.
+const PLACEHOLDERS_MIN: usize = 2;
+/// Elements whose text is not prose a reader takes in: markup, and code, where braces are what the text is about.
+const NOT_PROSE: &[&str] =
+    &["head", "script", "style", "noscript", "template", "textarea", "pre", "code", "kbd", "samp", "var"];
+
+/// Whether the page is a template its script has not filled in: at least `PLACEHOLDERS_MIN` placeholders in its
+/// visible text, outside code. `{{name}}`, and a sigil before `{name}`, are placeholders; a bare `{name}` is not, since
+/// prose uses it for regex quantifiers and the like. Only a script fills placeholders in, so a page without one is read
+/// as it is.
+fn has_placeholders(doc: &Html) -> bool {
+    if doc.select(&sel("script")).next().is_none() {
+        return false;
+    }
+    let mut found = 0;
+    for node in doc.root_element().descendants() {
+        let Some(text) = node.value().as_text().filter(|t| t.contains('{')) else { continue };
+        if node.ancestors().filter_map(ElementRef::wrap).any(|a| hidden(a) || NOT_PROSE.contains(&a.value().name())) {
+            continue;
+        }
+        found += count_placeholders(text);
+        if found >= PLACEHOLDERS_MIN {
+            return true;
+        }
+    }
+    false
+}
+
+/// The placeholders in `text`: each `{{name}}`, and each `{name}` with a sigil right before it.
+fn count_placeholders(text: &str) -> usize {
+    text.match_indices('{')
+        .filter(|&(at, _)| match text[at + 1..].strip_prefix('{') {
+            Some(inside) => name_then(inside, "}}"),
+            None => {
+                text[..at].chars().next_back().is_some_and(|c| SIGILS.contains(&c)) && name_then(&text[at + 1..], "}")
+            }
+        })
+        .count()
+}
+
+/// Whether `s` starts with a name and then `close`, spaces allowed around the name. A name is an identifier of two or
+/// more characters, dots allowed (`price`, `plan.storage`), so the `n` in `x^{n}` is not one.
+fn name_then(s: &str, close: &str) -> bool {
+    let s = s.trim_start();
+    let len = s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.')).unwrap_or(s.len());
+    len >= 2 && s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && s[len..].trim_start().starts_with(close)
+}
+
+/// Every link on the page, menus and footers included: only hidden links are left out.
+fn collect_site_links(doc: &Html, base: &Url) -> Vec<Link> {
     // Menus and footers are where a site keeps "Pricing" and "Docs": only hidden links are left out here.
     let mut site_links = Vec::new();
     for a in doc.select(&sel("a[href]")) {
@@ -208,184 +238,12 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         };
         push_link(&mut site_links, base, v.attr("href").unwrap_or(""), text, String::new(), marginal(a));
     }
-    Extracted { title: collapse(&title), blocks: join_short(w.blocks), images, links, site_links, app_shell }
+    site_links
 }
 
-/// Below this many characters a block says too little to be judged on its own ("Basic", "$10", "per user/month").
-pub const SHORT_BLOCK_CHARS: usize = 25;
-/// A run of joined short blocks stops growing here.
-const JOINED_MAX_CHARS: usize = 400;
-
-/// Consecutive short paragraphs and list items become one block, a line each, as the page shows them: a pricing
-/// card built from bare `<div>`s is then one block that says "Basic / $10 / per user/month" instead of pieces too
-/// short to judge. Headings, code, tables and quotes are never joined.
-fn join_short(blocks: Vec<Block>) -> Vec<Block> {
-    // A short heading with a figure in it ("### $12") is a value set big, not a section title.
-    let value = |b: &Block| b.kind == Kind::Heading && b.text.chars().any(|c| c.is_ascii_digit());
-    let short = |b: &Block| {
-        (matches!(b.kind, Kind::Para | Kind::Item) || value(b)) && b.text.chars().count() < SHORT_BLOCK_CHARS
-    };
-    let mut out: Vec<Block> = Vec::with_capacity(blocks.len());
-    let mut run: Vec<Block> = Vec::new();
-    let flush = |run: &mut Vec<Block>, out: &mut Vec<Block>| match run.len() {
-        0 => {}
-        1 => out.push(run.pop().unwrap()),
-        _ => {
-            let text = run.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
-            // Items of one list joined are still part of that list ("1 egg" and "Salt" next to each other).
-            let list = run[0].list.filter(|l| run.iter().all(|b| b.kind == Kind::Item && b.list == Some(*l)));
-            out.push(Block { i: 0, kind: Kind::Para, level: None, lang: None, text, list });
-            run.clear();
-        }
-    };
-    for b in blocks {
-        let joined: usize = run.iter().map(|r| r.text.chars().count() + 1).sum();
-        if short(&b) && joined + b.text.chars().count() <= JOINED_MAX_CHARS {
-            run.push(b);
-        } else {
-            flush(&mut run, &mut out);
-            if short(&b) { run.push(b) } else { out.push(b) }
-        }
-    }
-    flush(&mut run, &mut out);
-    for (i, b) in out.iter_mut().enumerate() {
-        b.i = i;
-    }
-    out
-}
-
-/// List items too short to be judged alone ("1 teaspoon baking soda") that sit next to a kept item of the same
-/// list: a list is read whole, so they go wherever their neighbours go. Without them a recipe loses its salt.
-pub fn short_items_of_kept_lists(blocks: &[Block], kept: impl Fn(usize) -> bool) -> HashSet<usize> {
-    let short = |b: &Block| b.list.is_some() && b.text.chars().count() < SHORT_BLOCK_CHARS;
-    let mut out = HashSet::new();
-    // Grows from each kept item outwards, so a run of short items between two kept ones comes along whole.
-    loop {
-        let before = out.len();
-        for (i, b) in blocks.iter().enumerate() {
-            if !short(b) || out.contains(&i) {
-                continue;
-            }
-            let neighbour = |j: usize| blocks.get(j).is_some_and(|n| n.list == b.list && (kept(j) || out.contains(&j)));
-            if (i > 0 && neighbour(i - 1)) || neighbour(i + 1) {
-                out.insert(i);
-            }
-        }
-        if out.len() == before {
-            return out;
-        }
-    }
-}
-
-/// Server already sent markdown (`Accept: text/markdown`). Split on blank lines,
-/// keeping fenced code intact.
-pub fn markdown(body: &str, base: &Url) -> Extracted {
-    let mut blocks = Vec::new();
-    let mut images = Vec::new();
-    let mut links = Vec::new();
-    let mut title = String::new();
-    let mut cur: Vec<&str> = Vec::new();
-    let mut fence: Option<String> = None;
-
-    let flush = |cur: &mut Vec<&str>, blocks: &mut Vec<Block>| {
-        let text = cur.join("\n").trim().to_string();
-        cur.clear();
-        if text.is_empty() {
-            return;
-        }
-        let i = blocks.len();
-        let (kind, level, text) = if let Some(rest) = text.strip_prefix('#') {
-            let level = 1 + rest.chars().take_while(|&c| c == '#').count() as u8;
-            (Kind::Heading, Some(level), rest.trim_start_matches('#').trim().to_string())
-        } else if text.starts_with("```") || text.starts_with("~~~") {
-            let mut lines = text.lines();
-            let lang = lines.next().unwrap_or("").trim_matches(|c| c == '`' || c == '~').trim().to_string();
-            let body: Vec<_> = lines.collect();
-            let body = body[..body.len().saturating_sub(1)].join("\n");
-            blocks.push(Block {
-                i,
-                kind: Kind::Code,
-                level: None,
-                lang: Some(lang).filter(|l| !l.is_empty()),
-                text: body,
-                list: None,
-            });
-            return;
-        } else if text.starts_with('>') {
-            let t = text.lines().map(|l| l.trim_start_matches('>').trim()).collect::<Vec<_>>().join("\n");
-            (Kind::Quote, None, t)
-        } else {
-            (Kind::Para, None, text)
-        };
-        blocks.push(Block { i, kind, level, lang: None, text, list: None });
-    };
-
-    // YAML frontmatter: take the title, don't treat it as content.
-    let mut body = body;
-    if let Some(rest) = body.strip_prefix("---\n")
-        && let Some(end) = rest.find("\n---")
-    {
-        for line in rest[..end].lines() {
-            if let Some(v) = line.strip_prefix("title:") {
-                title = v.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
-            }
-        }
-        body = rest[end + 4..].trim_start_matches(['-', '\n']);
-    }
-
-    for line in body.lines() {
-        let t = line.trim_start();
-        if let Some(f) = &fence {
-            cur.push(line);
-            if closes_fence(t, f) {
-                fence = None;
-                flush(&mut cur, &mut blocks);
-            }
-            continue;
-        }
-        if t.starts_with("```") || t.starts_with("~~~") {
-            flush(&mut cur, &mut blocks);
-            let c = t.chars().next().unwrap_or('`');
-            fence = Some(t.chars().take_while(|&x| x == c).collect());
-            cur.push(line);
-        } else if t.is_empty() || t.starts_with('#') {
-            flush(&mut cur, &mut blocks);
-            if !t.is_empty() {
-                cur.push(line);
-                flush(&mut cur, &mut blocks);
-            }
-        } else {
-            cur.push(line);
-        }
-        for (text, href) in md_links(line) {
-            let context = if line.trim() == format!("[{text}]({href})") {
-                String::new()
-            } else {
-                collapse(line).chars().take(200).collect()
-            };
-            push_link(&mut links, base, href, collapse(text), context, false);
-        }
-        for (alt, src) in md_images(line) {
-            push_image(&mut images, base, src, None, collapse(alt), String::new(), None, None);
-        }
-    }
-    flush(&mut cur, &mut blocks);
-    if title.is_empty()
-        && let Some(h) = blocks.iter().find(|b| b.kind == Kind::Heading)
-    {
-        title = h.text.clone();
-    }
-    let site_links = links.clone();
-    Extracted { title, blocks: join_short(blocks), images, links, site_links, app_shell: false }
-}
-
-/// A fence closes on a line of the same character, at least as long, and nothing else: a ```` block can show
-/// a ```js block inside it, and "```js" never closes anything.
-fn closes_fence(line: &str, fence: &str) -> bool {
-    let Some(c) = fence.chars().next() else { return false };
-    let run = line.chars().take_while(|&x| x == c).count();
-    run >= fence.chars().count() && line[run * c.len_utf8()..].trim().is_empty()
-}
+/// How deep the walk recurses into a page before it reads a subtree flat. A page nested this deep is hostile or broken,
+/// and the stack is finite: the walk and the inline text both stop here.
+const MAX_WALK_DEPTH: usize = 256;
 
 struct Walker<'a> {
     blocks: Vec<Block>,
@@ -395,6 +253,8 @@ struct Walker<'a> {
     /// The list being walked, and how many lists came before it.
     list: Option<usize>,
     lists: usize,
+    /// How many containers the walk is inside of, capped at `MAX_WALK_DEPTH`.
+    depth: usize,
 }
 
 impl<'a> Walker<'a> {
@@ -412,13 +272,16 @@ impl<'a> Walker<'a> {
         self.push(Kind::Para, None, None, text);
     }
 
-    fn skipped(&self, el: ElementRef) -> bool {
-        let name = el.value().name();
-        SKIP.contains(&name) || (self.skip_header && name == "header") || hidden(el) || chrome(el)
-    }
-
     /// Generic container: inline runs become paragraphs, block children recurse.
     fn container(&mut self, el: ElementRef<'a>) {
+        if self.depth >= MAX_WALK_DEPTH {
+            // Too deep to walk into: its text, read flat, carries on the paragraph in progress.
+            self.buf.push(BREAK);
+            self.buf.push_str(&flat_text(el, self.skip_header));
+            self.buf.push(BREAK);
+            return;
+        }
+        self.depth += 1;
         for child in el.children() {
             match child.value() {
                 Node::Text(t) => self.buf.push_str(t),
@@ -430,7 +293,7 @@ impl<'a> Walker<'a> {
                         self.flush();
                         continue;
                     }
-                    if self.skipped(child) || segment(child) {
+                    if skipped(child, self.skip_header, true) || segment(child) {
                         continue;
                     }
                     if permalink(child) {
@@ -446,6 +309,7 @@ impl<'a> Walker<'a> {
                 _ => {}
             }
         }
+        self.depth -= 1;
     }
 
     /// The streamed content that belongs where this `<template id="B:n">` is.
@@ -488,7 +352,7 @@ impl<'a> Walker<'a> {
                         }
                         Node::Element(_) => {
                             let c = ElementRef::wrap(c).unwrap();
-                            if !self.skipped(c) {
+                            if !skipped(c, self.skip_header, true) {
                                 own.push(' ');
                                 own.push_str(&inline_text(c));
                             }
@@ -531,30 +395,68 @@ impl<'a> Walker<'a> {
     }
 }
 
-/// Where inline text crosses a block boundary (`<li>`s in a table cell, a `<br>`): `collapse` makes it a
-/// newline, as the page shows it, so "Dylan Field" and "Evan Wallace" don't read as one name.
-const BREAK: char = '\u{1F}';
-
 fn inline_text(el: ElementRef) -> String {
+    inline_text_at(el, 0)
+}
+
+/// `inline_text` of `el`, which is `depth` levels down: past `MAX_WALK_DEPTH` a subtree is read flat.
+fn inline_text_at(el: ElementRef, depth: usize) -> String {
     let mut out = String::new();
     for c in el.children() {
         match c.value() {
             Node::Text(t) => out.push_str(t),
-            Node::Element(e) if SKIP.contains(&e.name()) => {}
-            Node::Element(_) if permalink(ElementRef::wrap(c).unwrap()) => {}
+            // A `<br>` is a line break even where it is hidden, so it is handled before the skip rules.
             Node::Element(e) if e.name() == "br" => out.push(BREAK),
             Node::Element(_) => {
                 let c = ElementRef::wrap(c).unwrap();
-                if !hidden(c) && !chrome(c) {
+                // No `<header>` rule here: inline text keeps the words of a header.
+                if !skipped(c, false, true) && !permalink(c) {
                     let block = !INLINE.contains(&c.value().name());
                     if block {
                         out.push(BREAK);
                     }
-                    out.push_str(&inline_text(c));
+                    if depth < MAX_WALK_DEPTH {
+                        out.push_str(&inline_text_at(c, depth + 1));
+                    } else {
+                        // Inline text keeps the words of a header, as `inline_text` does.
+                        out.push_str(&flat_text(c, false));
+                    }
                     if block {
                         out.push(BREAK);
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The text under `el`, read without recursion for a subtree the walk won't go into. It leaves out what the walk leaves
+/// out (script, hidden elements, page chrome, and a masthead `<header>` when `skip_header`), and a block element starts
+/// and ends a line.
+fn flat_text(el: ElementRef, skip_header: bool) -> String {
+    let mut out = String::new();
+    // A stack instead of recursion. A `None` marks the end of a block element.
+    let mut stack: Vec<_> = el.children().rev().map(Some).collect();
+    while let Some(next) = stack.pop() {
+        let Some(node) = next else {
+            out.push(BREAK);
+            continue;
+        };
+        match node.value() {
+            Node::Text(t) => out.push_str(t),
+            Node::Element(e) if e.name() == "br" => out.push(BREAK),
+            Node::Element(_) => {
+                let Some(child) = ElementRef::wrap(node) else { continue };
+                if skipped(child, skip_header, true) || permalink(child) {
+                    continue;
+                }
+                if !INLINE.contains(&child.value().name()) {
+                    out.push(BREAK);
+                    stack.push(None);
+                }
+                stack.extend(child.children().rev().map(Some));
             }
             _ => {}
         }
@@ -589,25 +491,30 @@ fn has_block_desc(el: ElementRef) -> bool {
     el.descendants().filter_map(ElementRef::wrap).skip(1).any(|d| !INLINE.contains(&d.value().name()))
 }
 
+/// Whether an ancestor of the element is skipped. The element's own `hidden` is the caller's to check, and its own
+/// class or role is not checked at all: only its ancestors' are.
 fn has_skipped_ancestor(el: ElementRef, skip_header: bool) -> bool {
-    el.ancestors().filter_map(ElementRef::wrap).any(|a| {
-        let n = a.value().name();
-        SKIP.contains(&n) || (skip_header && n == "header") || hidden(a) || chrome(a)
-    })
+    el.ancestors().filter_map(ElementRef::wrap).any(|a| skipped(a, skip_header, true))
+}
+
+/// What a reader never sees: script-like and form elements, a `<header>` that is the page's masthead (`skip_header`),
+/// page chrome, and hidden elements (`skip_hidden`). A hidden carousel slide is the one exception, which
+/// `image_skipped` makes by passing `skip_hidden = false`.
+fn skipped(el: ElementRef, skip_header: bool, skip_hidden: bool) -> bool {
+    let name = el.value().name();
+    SKIP.contains(&name) || (skip_header && name == "header") || chrome(el) || (skip_hidden && hidden(el))
 }
 
 /// An image is skipped like any element, except that a hidden carousel slide still counts: sliders hide every slide
 /// but the active one with `display:none`, and those are the page's photos (a restaurant's dishes), not chrome.
+/// As for a link, the image's own class or role is not checked, only its ancestors'.
 fn image_skipped(img: ElementRef, skip_header: bool) -> bool {
     let carousel = std::iter::once(img)
         .chain(img.ancestors().filter_map(ElementRef::wrap))
         .take(8)
         .any(|a| a.value().attr("class").is_some_and(is_carousel));
-    let skipped_by = |a: ElementRef| {
-        let n = a.value().name();
-        SKIP.contains(&n) || (skip_header && n == "header") || chrome(a) || (!carousel && hidden(a))
-    };
-    (!carousel && hidden(img)) || img.ancestors().filter_map(ElementRef::wrap).any(skipped_by)
+    (!carousel && hidden(img))
+        || img.ancestors().filter_map(ElementRef::wrap).any(|a| skipped(a, skip_header, !carousel))
 }
 
 const CAROUSEL: &[&str] = &["slide", "slider", "carousel", "swiper", "splide", "glide", "owl-", "slick", "gallery"];
@@ -695,128 +602,10 @@ fn small_srcset(srcset: &str) -> Option<String> {
         .map(|(u, _)| u)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_image(
-    out: &mut Vec<Image>,
-    base: &Url,
-    src: &str,
-    preview: Option<&str>,
-    alt: String,
-    caption: String,
-    width: Option<u32>,
-    height: Option<u32>,
-) {
-    let src = src.trim();
-    if src.is_empty() || src.starts_with('#') {
-        return;
-    }
-    let Ok(url) = base.join(src) else { return };
-    if !matches!(url.scheme(), "http" | "https") || noise(&url, width, height) {
-        return;
-    }
-    // A src that resolves to the page itself ("?q=80" in an og:image left without its path) is the page, not a
-    // picture of anything.
-    let bare = |u: &Url| u.as_str().split(['?', '#']).next().unwrap_or_default().to_string();
-    if bare(&url) == bare(base) {
-        return;
-    }
-    if let Some(existing) = out.iter_mut().find(|i| i.url == url) {
-        if existing.alt.is_empty() {
-            existing.alt = alt;
-        }
-        if existing.caption.is_empty() {
-            existing.caption = caption;
-        }
-        return;
-    }
-    let preview = preview.and_then(|p| base.join(p.trim()).ok()).unwrap_or_else(|| url.clone());
-    out.push(Image { i: out.len(), url, preview, alt, caption, width, height });
-}
-
-/// Cheap pre-filter: things that are never content, so no model needs to see them.
-fn noise(url: &Url, width: Option<u32>, height: Option<u32>) -> bool {
-    let path = url.path().to_ascii_lowercase();
-    if path.ends_with(".svg") || path.ends_with(".ico") {
-        return true;
-    }
-    if width.is_some_and(|w| w < 48) || height.is_some_and(|h| h < 48) {
-        return true;
-    }
-    const WORDS: &[&str] =
-        &["sprite", "pixel", "tracking", "spacer", "blank.gif", "favicon", "1x1", "spinner", "emoji"];
-    let full = url.as_str().to_ascii_lowercase();
-    WORDS.iter().any(|w| full.contains(w))
-}
-
 /// A link in a footnote mark (`<sup>`), or an image with no text: see [`Link::marginal`].
 fn marginal(a: ElementRef) -> bool {
     let image_only = a.text().all(|t| t.trim().is_empty()) && a.select(&sel("img")).next().is_some();
     image_only || a.ancestors().filter_map(ElementRef::wrap).any(|e| e.value().name() == "sup")
-}
-
-fn push_link(out: &mut Vec<Link>, base: &Url, href: &str, text: String, context: String, marginal: bool) {
-    let href = href.trim();
-    if href.is_empty() || href.starts_with('#') {
-        return;
-    }
-    let Ok(mut url) = base.join(href) else { return };
-    if !matches!(url.scheme(), "http" | "https") {
-        return;
-    }
-    url.set_fragment(None);
-    let mut page = base.clone();
-    page.set_fragment(None);
-    if url == page {
-        return;
-    }
-    if let Some(existing) = out.iter_mut().find(|l| l.url == url) {
-        if existing.text.is_empty() {
-            existing.text = text;
-        }
-        existing.marginal &= marginal;
-        return;
-    }
-    out.push(Link { i: out.len(), url, text, context, marginal });
-}
-
-/// `[text](url)` that is not an image.
-fn md_links(line: &str) -> Vec<(&str, &str)> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    while let Some(off) = line[pos..].find('[') {
-        let start = pos + off;
-        pos = start + 1;
-        if start > 0 && line.as_bytes()[start - 1] == b'!' {
-            continue;
-        }
-        let Some(close) = line[start..].find("](") else { break };
-        let text = &line[start + 1..start + close];
-        if text.contains('[') {
-            continue;
-        }
-        let rest = &line[start + close + 2..];
-        let Some(end) = rest.find(')') else { break };
-        let href = rest[..end].split_whitespace().next().unwrap_or("");
-        out.push((text, href));
-        pos = start + close + 2 + end;
-    }
-    out
-}
-
-fn md_images(line: &str) -> Vec<(&str, &str)> {
-    let mut out = Vec::new();
-    let mut rest = line;
-    while let Some(start) = rest.find("![") {
-        rest = &rest[start + 2..];
-        let Some(close) = rest.find("](") else { break };
-        let alt = &rest[..close];
-        rest = &rest[close + 2..];
-        let Some(end) = rest.find(')') else { break };
-        let src = rest[..end].split_whitespace().next().unwrap_or("");
-        out.push((alt, src));
-        rest = &rest[end..];
-    }
-    out
 }
 
 fn sel(s: &str) -> Selector {
@@ -829,25 +618,6 @@ fn meta(doc: &Html, s: &str) -> Option<String> {
 
 fn first_text(doc: &Html, s: &str) -> Option<String> {
     doc.select(&sel(s)).next().map(|e| e.text().collect::<String>()).filter(|s| !s.trim().is_empty())
-}
-
-/// Runs of whitespace become one space, or one newline where they hold a block boundary.
-pub fn collapse(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut gap: Option<bool> = None; // Some(has a break) while inside a run of whitespace
-    for c in s.chars() {
-        if c.is_whitespace() || c == BREAK {
-            gap = Some(gap.unwrap_or(false) || c == BREAK);
-        } else {
-            if let Some(brk) = gap.take()
-                && !out.is_empty()
-            {
-                out.push(if brk { '\n' } else { ' ' });
-            }
-            out.push(c);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -898,29 +668,6 @@ mod tests {
     }
 
     #[test]
-    fn a_price_set_as_a_heading_joins_its_card() {
-        let ex = markdown("### Teams\n\nYEARLY\n\n### $12\n\nper user/month\n\nSave 25%\n", &base());
-        let texts: Vec<_> = ex.blocks.into_iter().map(|b| b.text).collect();
-        assert_eq!(texts, ["Teams", "YEARLY\n$12\nper user/month\nSave 25%"]);
-    }
-
-    #[test]
-    fn short_pieces_of_a_card_are_one_block() {
-        let page = r#"<body><h2>Pricing</h2><div><div>Basic</div><div>$10</div><div>per user/month</div></div>
-            <p>Everything in Free, plus unlimited teams and private projects for everyone.</p><div>Ok</div></body>"#;
-        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
-        assert_eq!(
-            texts,
-            [
-                "Pricing",
-                "Basic\n$10\nper user/month",
-                "Everything in Free, plus unlimited teams and private projects for everyone.",
-                "Ok"
-            ]
-        );
-    }
-
-    #[test]
     fn heading_permalinks_are_not_text() {
         let page = r##"<body><article><h2>Methods of File Objects<a class="headerlink" href="#methods">¶</a></h2>
             <p>See <a href="#methods">the methods</a> for more.</p></article></body>"##;
@@ -963,15 +710,6 @@ mod tests {
     }
 
     #[test]
-    fn links_skip_images_fragments_and_self() {
-        let md = "See [the docs](/docs#intro), ![pic](a.png), [top](#top) and [here](https://example.com/post/).";
-        let ex = markdown(md, &base());
-        assert_eq!(ex.links.len(), 1);
-        assert_eq!(ex.links[0].url.as_str(), "https://example.com/docs");
-        assert_eq!(ex.links[0].text, "the docs");
-    }
-
-    #[test]
     fn footnote_marks_and_image_only_links_are_marginal() {
         let page = "<body><a href='/'><img alt='Logo' src='/logo.png'></a><article><p>Built in 1889 \
             <sup><i>[<a href='/wiki/Help:Clarify'>clarification needed</a>]</i></sup> by \
@@ -1001,6 +739,43 @@ mod tests {
     }
 
     #[test]
+    fn unfilled_template_placeholders_need_a_render() {
+        // MEGA's pricing page: the text is long, but its script has not filled in the placeholders.
+        let page = r#"<body><main><p>Compare the plans and pick the one that fits your team. Every plan includes encrypted
+            storage, file sharing and apps for every device, and you can change plans at any time from your account.</p>
+            <div class="plan-feature">!{freePlanStorage}</div><p>Get {{ planStorage }} free, then save up to ^{price} a month.</p>
+            </main><script src="/app.js"></script></body>"#;
+        assert!(html_with_placeholders(page, &base()).1);
+    }
+
+    #[test]
+    fn braces_in_code_and_bare_braces_in_prose_are_not_placeholders() {
+        let page = r#"<body><article><p>Set <code>${HOME}</code> and <code>{{ name }}</code>, then run the sample.</p>
+            <pre><code>cd ${HOME}/bin
+            echo {name} !{freePlanStorage} !{freePlanStorage}</code></pre>
+            <p>The quantifier {n} repeats the atom, x^{n} is a power, and pass {min} and {max} as the bounds.</p>
+            <p>A stray !{freePlanStorage} is one placeholder, not a template.</p><div hidden>!{freePlanStorage} ^{price}</div>
+            </article><script src="/app.js"></script></body>"#;
+        assert!(!html_with_placeholders(page, &base()).1);
+    }
+
+    #[test]
+    fn placeholders_need_a_script_to_fill_them_in() {
+        let page =
+            r#"<body><p>Plan storage is !{freePlanStorage}, and transfer is !{freePlanTransfer} a month.</p></body>"#;
+        assert!(!html_with_placeholders(page, &base()).1);
+        let with_script = page.replace("</body>", "<script>load()</script></body>");
+        assert!(html_with_placeholders(&with_script, &base()).1);
+    }
+
+    #[test]
+    fn a_placeholder_is_a_sigil_or_double_braces_around_a_name() {
+        assert_eq!(count_placeholders("!{freePlanStorage} ^{price} ${plan.total} {{ name }}"), 4);
+        // Bare braces, one-letter names, digits, empty braces and braces after punctuation are not placeholders.
+        assert_eq!(count_placeholders("{ab} x^{n} {min} !{a} ({ab}) {0} ${}"), 0);
+    }
+
+    #[test]
     fn hidden_carousel_slides_keep_their_images() {
         let html_doc = r#"<html><body><article><p>Our kitchen and our dishes, every day.</p>
             <div class='frs-slide-img-wrapper' style='display:none;'><div class='frs-slide-img' style='display:none'>
@@ -1014,36 +789,6 @@ mod tests {
     }
 
     #[test]
-    fn short_list_items_go_with_their_list() {
-        let page = "<article><p>Some introduction that is long enough to be judged on its own.</p><ul>\
-            <li>2 and 1/4 cups (281g) all-purpose flour</li><li>1 teaspoon baking soda</li>\
-            <li>1 and 1/2 teaspoons cornstarch*</li><li>1/2 teaspoon salt</li>\
-            <li>3/4 cup (170g) unsalted butter, melted</li></ul><ul><li>Pin it</li></ul></article>";
-        let ex = html(page, &base());
-        let at = |t: &str| ex.blocks.iter().position(|b| b.text == t).unwrap();
-        let (soda, salt, pin) = (at("1 teaspoon baking soda"), at("1/2 teaspoon salt"), at("Pin it"));
-        let flour = at("2 and 1/4 cups (281g) all-purpose flour");
-        let kept = |i| {
-            i == flour
-                || i == at("1 and 1/2 teaspoons cornstarch*")
-                || i == at("3/4 cup (170g) unsalted butter, melted")
-        };
-        let items = short_items_of_kept_lists(&ex.blocks, kept);
-        assert!(items.contains(&soda) && items.contains(&salt));
-        // Another list's short item stays out, and nothing comes along when no item of the list is kept.
-        assert!(!items.contains(&pin));
-        assert!(short_items_of_kept_lists(&ex.blocks, |_| false).is_empty());
-
-        // Two tiny items next to each other are joined into one block, still too short to judge: it goes too.
-        let page = "<article><ul><li>2 and 1/4 cups (281g) all-purpose flour</li><li>1 egg</li><li>Salt</li>\
-            <li>3/4 cup (170g) unsalted butter, melted</li></ul></article>";
-        let ex = html(page, &base());
-        let joined = ex.blocks.iter().position(|b| b.text == "1 egg\nSalt").unwrap();
-        let flour = ex.blocks.iter().position(|b| b.text.starts_with("2 and")).unwrap();
-        assert!(short_items_of_kept_lists(&ex.blocks, |i| i == flour).contains(&joined));
-    }
-
-    #[test]
     fn the_page_itself_is_not_an_image() {
         let page = r#"<html><head><meta property="og:image" content="?q=80"></head><body><article>
             <p>Text</p><img src="/blog/post?w=800" width="800" height="400"><img src="/a.png" width="800" height="400">
@@ -1053,44 +798,80 @@ mod tests {
         assert_eq!(urls, ["https://example.com/a.png"]);
     }
 
-    #[test]
-    fn markdown_code_keeps_its_lines() {
-        let md = "Intro\n\n```js\nuseEffect(() => {\n  const c = connect();\n\n  return () => {\n    c.disconnect();\n  };\n}, []);\n```\n";
-        let ex = markdown(md, &base());
-        let code = ex.blocks.iter().find(|b| b.kind == Kind::Code).unwrap();
-        assert_eq!(
-            code.text,
-            "useEffect(() => {\n  const c = connect();\n\n  return () => {\n    c.disconnect();\n  };\n}, []);"
-        );
-        assert_eq!(code.lang.as_deref(), Some("js"));
+    /// The stack the deep-nesting tests run on: a tokio worker's, which is where the walk runs in production. In a debug
+    /// build the walk at its depth cap needs between 0.5 and 1 MB of it, and the worst case (the walk at its cap, then
+    /// inline text at its cap) between 1 and 1.5 MB.
+    const DEEP_STACK: usize = 2 << 20;
+
+    /// The block texts of `page`, read on a thread of `DEEP_STACK` bytes. A recursion too deep for that aborts the test.
+    fn texts_on_a_deep_stack(page: String) -> Vec<String> {
+        std::thread::Builder::new()
+            .stack_size(DEEP_STACK)
+            .spawn(move || html(&page, &base()).blocks.into_iter().map(|b| b.text).collect())
+            .unwrap()
+            .join()
+            .unwrap()
     }
 
     #[test]
-    fn markdown_fence_closes_on_its_own_length() {
-        let md = "Intro\n\n````\n$ jurl -q x\n```js\nlet a = 1;\n```\n````\n\nAfter: red, green and blue.\n\n```\n$ ls\n```\n\nThe end.\n";
-        let ex = markdown(md, &base());
-        let code: Vec<&Block> = ex.blocks.iter().filter(|b| b.kind == Kind::Code).collect();
-        assert_eq!(code.len(), 2, "{:?}", ex.blocks);
-        assert_eq!(code[0].text, "$ jurl -q x\n```js\nlet a = 1;\n```");
-        assert_eq!(code[1].text, "$ ls");
-        assert!(code[0].markdown().starts_with("````\n") && code[0].markdown().ends_with("\n````"));
-        assert_eq!(code[1].markdown(), "```\n$ ls\n```");
-        assert!(
-            ex.blocks.iter().any(|b| b.kind == Kind::Para && b.text == "After: red, green and blue."),
-            "{:?}",
-            ex.blocks
-        );
-        assert!(ex.blocks.iter().any(|b| b.kind == Kind::Para && b.text == "The end."), "{:?}", ex.blocks);
+    fn a_page_nested_deeper_than_the_walk_recurses_is_read_flat() {
+        // Without the cap, 600 levels overflow DEEP_STACK in a debug build. This is 1,000, which parses in about 60 ms:
+        // html5ever scans the open elements for each <div>, so parsing costs the square of the nesting.
+        let page = format!("<body>{}Deep text is still read.{}</body>", "<div>".repeat(1_000), "</div>".repeat(1_000));
+        let texts = texts_on_a_deep_stack(page);
+        assert!(texts.iter().any(|t| t == "Deep text is still read."), "{texts:?}");
     }
 
     #[test]
-    fn markdown_frontmatter_and_empty_images() {
-        let md =
-            "---\ntitle: Hello\n---\n\n# Heading\n\nSome text ![]() and ![pic](img.png)\n\n```rust\nfn x() {}\n```\n";
-        let ex = markdown(md, &base());
-        assert_eq!(ex.title, "Hello");
+    fn inline_elements_nested_deeper_than_the_walk_recurses_are_read_flat() {
+        // Without the cap, 4,000 spans overflow DEEP_STACK in a debug build. This is 8,000.
+        let page = format!("<body><p>{}Deep words.{}</p></body>", "<span>".repeat(8_000), "</span>".repeat(8_000));
+        let texts = texts_on_a_deep_stack(page);
+        assert!(texts.iter().any(|t| t == "Deep words."), "{texts:?}");
+    }
+
+    #[test]
+    fn the_walk_and_the_inline_text_at_their_caps_fit_the_stack_together() {
+        // The walk reaches its cap, then a paragraph there reaches the inline cap: the worst case. Without the caps it
+        // overflows DEEP_STACK in a debug build; with them it fits.
+        let page = format!(
+            "<body>{}<p>{}Deep words.{}</p>{}</body>",
+            "<div>".repeat(255),
+            "<span>".repeat(4_000),
+            "</span>".repeat(4_000),
+            "</div>".repeat(255)
+        );
+        let texts = texts_on_a_deep_stack(page);
+        assert!(texts.iter().any(|t| t == "Deep words."), "{texts:?}");
+    }
+
+    #[test]
+    fn a_deep_subtree_keeps_what_a_reader_sees_and_no_more() {
+        // Past the depth cap the text is read flat, which must leave out script, hidden text and a masthead header as
+        // the walk does.
+        let page = format!(
+            r#"<body>{}<p>Shown text.</p><script>evil()</script><div style="display: none">Hidden text.</div><header>Masthead words.</header>{}</body>"#,
+            "<div>".repeat(300),
+            "</div>".repeat(300)
+        );
+        let text: String = html(&page, &base()).blocks.into_iter().map(|b| b.text + "|").collect();
+        assert!(text.contains("Shown text."), "{text}");
+        assert!(!text.contains("evil()") && !text.contains("Hidden text.") && !text.contains("Masthead"), "{text}");
+    }
+
+    #[test]
+    fn a_lazy_image_previews_its_full_file_not_the_placeholder() {
+        let ex = html(r#"<img src="/img/blank.gif" data-original="/photos/full.jpg">"#, &base());
         assert_eq!(ex.images.len(), 1);
-        assert!(ex.blocks.iter().any(|b| b.kind == Kind::Code && b.text == "fn x() {}"));
-        assert!(ex.blocks.iter().all(|b| !b.text.contains("title:")));
+        assert_eq!(ex.images[0].url.as_str(), "https://example.com/photos/full.jpg");
+        assert_eq!(ex.images[0].preview.as_str(), "https://example.com/photos/full.jpg");
+    }
+
+    #[test]
+    fn a_lazy_image_with_a_srcset_previews_the_small_candidate() {
+        let page = r#"<img srcset="/s/small.jpg 320w, /s/big.jpg 1280w" src="/img/blank.gif" data-original="/photos/full.jpg">"#;
+        let ex = html(page, &base());
+        assert_eq!(ex.images[0].url.as_str(), "https://example.com/s/big.jpg");
+        assert_eq!(ex.images[0].preview.as_str(), "https://example.com/s/small.jpg");
     }
 }

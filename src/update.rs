@@ -8,6 +8,10 @@ use reqwest::{Client, redirect::Policy};
 
 const REPO: &str = "https://github.com/rayoplateado/jurl";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
+/// How long `jurl update` waits for GitHub to name the latest release.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the hint about a newer jurl may take on an unknown flag: the error must not wait on the network for long.
+const HINT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How this copy was installed, read from where the binary lives.
 #[derive(Debug, PartialEq)]
@@ -56,7 +60,7 @@ impl Install {
 }
 
 /// The latest release's version, from where GitHub's /releases/latest redirects to (no API, no rate limit).
-pub async fn latest(timeout: Duration) -> Result<String> {
+async fn latest(timeout: Duration) -> Result<String> {
     let client = Client::builder()
         .redirect(Policy::none())
         .timeout(timeout)
@@ -69,20 +73,20 @@ pub async fn latest(timeout: Duration) -> Result<String> {
 }
 
 /// Whether `a` is a later version than `b` ("0.1.10" > "0.1.9").
-pub fn newer(a: &str, b: &str) -> bool {
+fn newer(a: &str, b: &str) -> bool {
     let parts = |v: &str| v.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
     parts(a) > parts(b)
 }
 
 /// A line to add to an "unexpected argument" error when a newer jurl is out, which may know the flag.
-pub async fn hint() -> Option<String> {
-    let latest = latest(Duration::from_secs(3)).await.ok()?;
+pub(crate) async fn hint() -> Option<String> {
+    let latest = latest(HINT_TIMEOUT).await.ok()?;
     newer(&latest, CURRENT)
         .then(|| format!("you have jurl {CURRENT} and {latest} is out, which may have it: run `jurl update`"))
 }
 
-pub async fn run() -> Result<()> {
-    let latest = latest(Duration::from_secs(10)).await.context("couldn't reach GitHub to check the latest release")?;
+pub(crate) async fn run() -> Result<()> {
+    let latest = latest(CHECK_TIMEOUT).await.context("couldn't reach GitHub to check the latest release")?;
     if !newer(&latest, CURRENT) {
         eprintln!("jurl {CURRENT} is the latest.");
         return Ok(());

@@ -1,7 +1,8 @@
 use std::{path::Path, process::Stdio, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use reqwest::{Client, header};
+use encoding_rs::Encoding;
+use reqwest::{Client, Response, header};
 use serde_json::Value;
 use tokio::process::Command;
 use url::Url;
@@ -12,8 +13,16 @@ pub struct Page {
     pub is_markdown: bool,
 }
 
+/// The largest page read: a body past this is an error, not read on.
+const PAGE_MAX: usize = 8 << 20;
+
 pub async fn fetch(client: &Client, url: &str) -> Result<Page> {
-    let res = client
+    fetch_capped(client, url, PAGE_MAX).await
+}
+
+/// `fetch`, refusing a page larger than `max` bytes.
+async fn fetch_capped(client: &Client, url: &str, max: usize) -> Result<Page> {
+    let mut res = client
         .get(url)
         .header(header::ACCEPT, "text/markdown, text/html;q=0.9, */*;q=0.5")
         .send()
@@ -29,9 +38,58 @@ pub async fn fetch(client: &Client, url: &str) -> Result<Page> {
     }
     let final_url = res.url().clone();
     let ct = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
-    let body = res.text().await?;
+    let Some(bytes) = read_capped(&mut res, max).await? else {
+        bail!("{url}: page larger than {}", size_label(max));
+    };
+    let body = decode(&ct, &bytes);
     let is_markdown = served_markdown(&ct, &body);
     Ok(Page { url: final_url, body, is_markdown })
+}
+
+/// The body of `res`, or None once it is larger than `max` bytes. The Content-Length is checked first, but the bytes
+/// that arrive are what is counted: a compressed or streamed body may have no length, or one that is not its size.
+pub async fn read_capped(res: &mut Response, max: usize) -> Result<Option<Vec<u8>>> {
+    if res.content_length().is_some_and(|n| n > max as u64) {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = res.chunk().await? {
+        if bytes.len() + chunk.len() > max {
+            return Ok(None);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(Some(bytes))
+}
+
+/// A byte count for a message: "8 MB", "1 KB" for a whole number of KB, or the bytes. A multiple of 2^k has at least k
+/// trailing zero bits.
+pub fn size_label(bytes: usize) -> String {
+    if bytes.trailing_zeros() >= 20 {
+        format!("{} MB", bytes >> 20)
+    } else if bytes.trailing_zeros() >= 10 {
+        format!("{} KB", bytes >> 10)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+/// A body's text, decoded as reqwest's text() decodes it: the charset the Content-Type names, UTF-8 if it names none,
+/// and a byte order mark over both.
+pub(crate) fn decode(content_type: &str, bytes: &[u8]) -> String {
+    charset_of(content_type).decode(bytes).0.into_owned()
+}
+
+/// The encoding a Content-Type names, as reqwest's text() reads it: the `charset` parameter's label, or UTF-8 when there
+/// is no such parameter or encoding_rs knows no such label.
+fn charset_of(content_type: &str) -> &'static Encoding {
+    content_type
+        .split(';')
+        .skip(1)
+        .filter_map(|param| param.split_once('='))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
+        .and_then(|(_, label)| Encoding::for_label(label.trim().trim_matches('"').as_bytes()))
+        .unwrap_or(encoding_rs::UTF_8)
 }
 
 /// Some sites answer `Accept: text/markdown` with markdown served as text/plain. Read as HTML, its fenced code
@@ -78,14 +136,10 @@ pub async fn render(bin: &Path, url: &Url) -> Result<Page> {
     Ok(Page { url: url.clone(), body: body.to_string(), is_markdown: false })
 }
 
-pub async fn fetch_bytes(client: &Client, url: &Url) -> Result<Vec<u8>> {
-    let res = client.get(url.as_str()).send().await?.error_for_status()?;
-    Ok(res.bytes().await?.to_vec())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use test_server::{client, serve};
 
     #[test]
     fn markdown_served_as_plain_text_is_markdown() {
@@ -93,5 +147,133 @@ mod tests {
         assert!(served_markdown("text/plain; charset=utf-8", "---\ntitle: useEffect\n---\n\n```js\nx\n```"));
         assert!(!served_markdown("text/plain", "<!DOCTYPE html><html></html>"));
         assert!(!served_markdown("text/html; charset=utf-8", "# not markdown"));
+    }
+
+    /// A cap small enough to pass in a test.
+    const SMALL: usize = 1024;
+
+    #[tokio::test]
+    async fn a_page_whose_length_says_it_is_too_big_is_refused_unread() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 5000\r\n\r\n".to_string();
+        let url = serve(head, Vec::new(), false);
+        let err = fetch_capped(&client(), &url, SMALL).await.err().expect("refused");
+        assert!(format!("{err:#}").ends_with("page larger than 1 KB"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_streamed_page_is_stopped_once_it_passes_the_cap() {
+        // No Content-Length: the bytes that arrive are what is counted.
+        let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_string();
+        let url = serve(head, vec![b'a'; 4 * SMALL], true);
+        let err = fetch_capped(&client(), &url, SMALL).await.err().expect("refused");
+        assert!(format!("{err:#}").ends_with("page larger than 1 KB"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_page_at_the_cap_is_read_whole_without_its_byte_order_mark() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n".to_string();
+        let mut text = "\u{feff}<p>Hello, page.</p>".to_string();
+        text.push_str(&" ".repeat(SMALL - text.len()));
+        assert_eq!(text.len(), SMALL);
+        let url = serve(head, text.clone().into_bytes(), true);
+        let page = fetch_capped(&client(), &url, SMALL).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.body, text.trim_start_matches('\u{feff}'));
+    }
+
+    /// The body as fetch_capped reads it, and the body reqwest's own text() reads from the same response.
+    async fn both_ways(head: &str, body: Vec<u8>) -> (String, String) {
+        let url = serve(head.to_string(), body.clone(), true);
+        let ours = fetch_capped(&client(), &url, SMALL).await.unwrap_or_else(|e| panic!("{e:#}")).body;
+        let res = client().get(serve(head.to_string(), body, true)).send().await.expect("a response");
+        (ours, res.text().await.expect("text"))
+    }
+
+    #[tokio::test]
+    async fn a_windows_1252_page_is_decoded_as_its_charset_says() {
+        // 0xE9 is é and 0x80 is € in windows-1252; neither byte is valid UTF-8 on its own.
+        let head =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=windows-1252\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let (ours, theirs) = both_ways(head, b"Caf\xE9 costs \x80 5".to_vec()).await;
+        assert_eq!(ours, "Café costs € 5");
+        assert_eq!(ours, theirs);
+    }
+
+    #[tokio::test]
+    async fn a_utf8_page_without_a_charset_is_read_as_utf8() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let (ours, theirs) = both_ways(head, "Café costs € 5".as_bytes().to_vec()).await;
+        assert_eq!(ours, "Café costs € 5");
+        assert_eq!(ours, theirs);
+    }
+
+    #[tokio::test]
+    async fn a_byte_order_mark_decides_over_the_charset_the_header_names() {
+        // UTF-16LE with its byte order mark, under a header that says windows-1252.
+        let head =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=windows-1252\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let mut body = vec![0xFF, 0xFE];
+        body.extend("Café".encode_utf16().flat_map(u16::to_le_bytes));
+        let (ours, theirs) = both_ways(head, body).await;
+        assert_eq!(ours, "Café");
+        assert_eq!(ours, theirs);
+    }
+
+    #[test]
+    fn the_charset_is_the_labelled_one_or_utf8() {
+        assert_eq!(charset_of("text/html; charset=windows-1252").name(), "windows-1252");
+        assert_eq!(charset_of("text/html; Charset=\"Shift_JIS\"").name(), "Shift_JIS");
+        assert_eq!(charset_of("text/html").name(), "UTF-8");
+        assert_eq!(charset_of("text/html; charset=no-such-label").name(), "UTF-8");
+    }
+
+    #[test]
+    fn a_size_is_named_in_the_units_a_message_uses() {
+        assert_eq!(size_label(8 << 20), "8 MB");
+        assert_eq!(size_label(1 << 10), "1 KB");
+        assert_eq!(size_label(1500), "1500 bytes");
+    }
+}
+
+/// A one-shot server on 127.0.0.1, for the tests that need a body of a given size or shape.
+#[cfg(test)]
+pub(crate) mod test_server {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    /// Answers one request with `head` (the status line and headers, ending in a blank line) and then `body`, in pieces
+    /// when `chunked`. The client may hang up part way: the server just stops. Returns the URL to fetch.
+    pub(crate) fn serve(head: String, body: Vec<u8>, chunked: bool) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        thread::spawn(move || {
+            let Ok((mut conn, _)) = listener.accept() else { return };
+            let mut request = [0u8; 4096];
+            let _ = conn.read(&mut request);
+            if conn.write_all(head.as_bytes()).is_err() {
+                return;
+            }
+            if !chunked {
+                let _ = conn.write_all(&body);
+                return;
+            }
+            for piece in body.chunks(16 << 10) {
+                let mut frame = format!("{:x}\r\n", piece.len()).into_bytes();
+                frame.extend_from_slice(piece);
+                frame.extend_from_slice(b"\r\n");
+                if conn.write_all(&frame).is_err() {
+                    return;
+                }
+            }
+            let _ = conn.write_all(b"0\r\n\r\n");
+        });
+        format!("http://{addr}/page")
+    }
+
+    /// A client for the loopback server, which ignores any proxy in the environment.
+    pub(crate) fn client() -> reqwest::Client {
+        reqwest::Client::builder().no_proxy().build().expect("a client")
     }
 }

@@ -10,13 +10,15 @@ use crate::{config::Config, decide};
 
 const TYPESAFE_URL: &str = "https://console.typesafe.ai";
 const CLOUDFLARE_URL: &str = "https://dash.cloudflare.com/profile/api-tokens";
+/// How much of an error's first line goes on the "that didn't work" line.
+const SHORT_ERROR_CHARS: usize = 80;
 
-pub fn interactive() -> bool {
+fn interactive() -> bool {
     stdin().is_terminal() && stderr().is_terminal()
 }
 
 /// The TypeSafe key, asking for it when running in a terminal and it is missing.
-pub async fn typesafe_key(cfg: &mut Config, client: &Client) -> Result<String> {
+pub(crate) async fn typesafe_key(cfg: &mut Config, client: &Client) -> Result<String> {
     if !interactive() || cfg.get("TYPESAFE_API_KEY").is_some() || decide::custom_jev_url().is_some() {
         return saved_key(cfg);
     }
@@ -26,7 +28,7 @@ pub async fn typesafe_key(cfg: &mut Config, client: &Client) -> Result<String> {
 }
 
 /// The TypeSafe key from the environment or `jurl init`, never asking: `jurl mcp` has no terminal to ask in.
-pub fn saved_key(cfg: &Config) -> Result<String> {
+pub(crate) fn saved_key(cfg: &Config) -> Result<String> {
     key_for(decide::custom_jev_url().is_some(), |k| cfg.get(k))
 }
 
@@ -43,7 +45,7 @@ fn key_for(custom_url: bool, get: impl Fn(&str) -> Option<String>) -> Result<Str
 }
 
 /// `jurl init`: set or replace both keys.
-pub async fn init(cfg: &mut Config, client: &Client) -> Result<()> {
+pub(crate) async fn init(cfg: &mut Config, client: &Client) -> Result<()> {
     if !interactive() {
         bail!(
             "`jurl init` needs a terminal; otherwise set TYPESAFE_API_KEY (and CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_TOKEN) in the environment"
@@ -112,7 +114,7 @@ fn short(e: &anyhow::Error) -> String {
     let s = e.to_string();
     match s.find("HTTP ") {
         Some(i) => s[i..].split(':').next().unwrap_or("").to_string(),
-        None => s.lines().next().unwrap_or("").chars().take(80).collect(),
+        None => s.lines().next().unwrap_or("").chars().take(SHORT_ERROR_CHARS).collect(),
     }
 }
 

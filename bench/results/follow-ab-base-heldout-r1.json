@@ -1,0 +1,94 @@
+[
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": "Leonardo",
+  "right": true,
+  "pages": 13,
+  "tokens": 1048649,
+  "ms": 4867,
+  "path": [
+   "https://en.wikipedia.org/wiki/Volcano",
+   "https://en.wikipedia.org/wiki/Smithsonian_Institution",
+   "https://en.wikipedia.org/wiki/Portrait_painting",
+   "https://en.wikipedia.org/wiki/Leonardo_da_Vinci"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "At 20 °C (68 °F), the speed of sound in air is about 343 m/s (1,125 ft/s; 1,235 km/h; 767 mph; 667 kn), or 1 km in 2.92 s or one mile in 4.69 s",
+  "right": true,
+  "pages": 10,
+  "tokens": 747710,
+  "ms": 3934,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_science",
+   "https://en.wikipedia.org/wiki/Fluid_dynamics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": 15,
+  "tokens": 1096406,
+  "ms": 4571,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": "5700±30 years",
+  "right": true,
+  "pages": 10,
+  "tokens": 614947,
+  "ms": 3368,
+  "path": [
+   "https://en.wikipedia.org/wiki/Association_football",
+   "https://en.wikipedia.org/wiki/SI",
+   "https://en.wikipedia.org/wiki/Radioactive_decay",
+   "https://en.wikipedia.org/wiki/Carbon-14"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": "Jupiter",
+  "right": true,
+  "pages": 13,
+  "tokens": 887804,
+  "ms": 6797,
+  "path": [
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Radio",
+   "https://en.wikipedia.org/wiki/Gamma_rays",
+   "https://en.wikipedia.org/wiki/Visible_universe",
+   "https://en.wikipedia.org/wiki/Solar_System"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": "1912",
+  "right": true,
+  "pages": 10,
+  "tokens": 763534,
+  "ms": 3170,
+  "path": [
+   "https://en.wikipedia.org/wiki/Bicycle",
+   "https://en.wikipedia.org/wiki/Steel",
+   "https://en.wikipedia.org/wiki/Ship",
+   "https://en.wikipedia.org/wiki/RMS_Titanic"
+  ]
+ }
+]

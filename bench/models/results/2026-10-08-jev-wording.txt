@@ -1,0 +1,38 @@
+239 requests answered in every file
+                                           Jev-vs-Jev               short                 ref
+requests ok                                   239/239             239/239             239/239
+b: MAE                                          0.004               0.009               0.021
+b: same side of 0.1                             99.2%               98.1%               95.0%
+b: n >= 0.1 (jev 624)                             629                 671                 669
+b: mean (jev 0.050)                             0.049               0.054               0.054
+l: MAE                                          0.007               0.022               0.028
+l: same side of 0.5                             99.9%               99.8%               99.8%
+l: n >= 0.5 (jev 25)                               26                  10                  17
+l: mean (jev 0.057)                             0.058               0.043               0.033
+f: MAE                                          0.022               0.238               0.141
+f: same side of 0.5                             98.0%               77.0%               89.6%
+f: n >= 0.5 (jev 2013)                           2032                 896                1596
+f: mean (jev 0.499)                             0.499               0.265               0.373
+blocked: MAE                                    0.004               0.004               0.009
+blocked: same side of 0.8                      100.0%              100.0%              100.0%
+blocked: n >= 0.8 (jev 0)                           0                   0                   0
+blocked: mean (jev 0.054)                       0.054               0.053               0.059
+links: same top-1 (n=81)                  57/81 (70%)         33/81 (41%)         39/81 (48%)
+links: top-3 Jaccard                             0.63                0.35                0.33
+links: Spearman median                           0.85                0.54                0.40
+blocks: same top-1 (n=79)                 78/79 (99%)         78/79 (99%)         62/79 (78%)
+blocks: top-3 Jaccard                            0.97                0.93                0.72
+blocks: Spearman median                          0.81                0.70                0.50
+choice page_kind: same top                      62/62               62/62               61/62
+choice pick: same top                           23/24               22/24               24/24
+choice next: same top                             7/8                 7/8                 7/8
+choice tighter: same top                          6/6                 6/6                 6/6
+latency p50                                     0.35s               0.36s               0.35s
+latency p95                                     0.43s               0.46s               0.46s
+latency max                                      0.7s                0.5s                0.5s
+latency p50, Jev tokens 0k-5k            0.28s (n=76)        0.29s (n=76)        0.30s (n=76)
+latency p50, Jev tokens 5k-10k           0.32s (n=32)        0.34s (n=32)        0.33s (n=32)
+latency p50, Jev tokens 10k-15k          0.36s (n=92)        0.38s (n=92)        0.38s (n=92)
+latency p50, Jev tokens 15k+             0.40s (n=39)        0.43s (n=39)        0.43s (n=39)
+input tokens sum (Jev 2217177)        2217177 (1.00x)     2130989 (0.96x)     1987284 (0.90x)
+throughput tok/s                                26743               24707               23307
