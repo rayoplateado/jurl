@@ -402,7 +402,10 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     t.lap(format!("page 1 + site map ({} pages listed)", hints.len()));
 
     let mut visited: HashSet<String> = [self::key(&start), self::key(&first.url)].into_iter().collect();
+    // `pages` is the pages read, which is what the search reports. `opened` is the pages opened, read or not: the
+    // budget `--follow N` stops at, so a page that fails to load still takes its step.
     let mut pages = 1;
+    let mut opened = 1;
     let mut closest: Option<(f64, Visit, Vec<Url>)> = None;
     let mut leads: Vec<Lead> = Vec::new();
     let mut found: Vec<(f64, Visit, Vec<Url>)> = Vec::new();
@@ -466,7 +469,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
     };
     let site_ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &start, &empty) };
     let mut cold = false;
-    while pages < max {
+    while opened < max {
         leads.sort_by(|a, b| b.score.total_cmp(&a.score));
         let mut seen = HashSet::new();
         leads.retain(|l| {
@@ -483,7 +486,7 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             break;
         }
         // Jev picks the next pages out of the best few, side by side, or says none of them leads anywhere.
-        let n = (if max >= 10 { PARALLEL_LONG } else { PARALLEL }).min(max - pages);
+        let n = (if max >= 10 { PARALLEL_LONG } else { PARALLEL }).min(max - opened);
         let short: Vec<&Lead> = leads.iter().take(SHORTLIST).collect();
         // On a long trail (`--follow 10` and up) no page "is the next step" to something far away, so Jev's side-by-side
         // pick only adds noise there: the leads' own scores decide.
@@ -506,11 +509,12 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         // asked is kept once the batch is in.
         let results =
             join_all(batch.iter().map(|l| visit(args, cfg, client, key, &l.url, &site, &known, &field_scores))).await;
-        pages += batch.len();
+        opened += batch.len();
         t.lap(format!("{} more", batch.len()));
         for (lead, r) in batch.into_iter().zip(results) {
             match r {
                 Ok(mut v) => {
+                    pages += 1;
                     visited.insert(self::key(&v.url));
                     known.extend(v.menus.iter().cloned());
                     field_scores.extend(std::mem::take(&mut v.new_field_scores));
