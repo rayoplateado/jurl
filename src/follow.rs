@@ -199,7 +199,8 @@ async fn small_text(client: &Client, url: &Url) -> Option<String> {
         .filter(|b| b.len() < 5_000_000)
 }
 
-/// The pages the site lists itself: `llms.txt` (written for exactly this) and `sitemap.xml`, shallowest first.
+/// The pages the site lists itself: `llms.txt` (written for exactly this) and `sitemap.xml`, shallowest first. A page
+/// listed in several languages keeps one copy (see [`without_language_copies`]).
 async fn site_map(client: &Client, start: &Url, site: &Site) -> Vec<Link> {
     let llms = async {
         let url = start.join("/llms.txt").ok()?;
@@ -241,7 +242,64 @@ async fn site_map(client: &Client, start: &Url, site: &Site) -> Vec<Link> {
         let text = u.path().to_string();
         add(u, text);
     }
-    out
+    without_language_copies(start, out)
+}
+
+/// Languages a site puts in its paths (`/de/pricing`, `/pt-br/pricing`): ISO 639-1 codes, without the ones that name
+/// another country's market (`ca`, `uk`, `be`, `se`, `br`, `za`, `ee`, `et`, `my` and `ar`: `/ca/` is Canada, not
+/// Catalan).
+const LOCALES: &[&str] = &[
+    "bg", "cs", "da", "de", "el", "en", "es", "fa", "fi", "fr", "he", "hi", "hr", "hu", "id", "it", "ja", "ko", "lt",
+    "lv", "ms", "nb", "nl", "nn", "no", "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "th", "tr", "ur", "vi", "zh",
+];
+
+/// Whether a path segment is a locale: a language from [`LOCALES`], optionally with a two-letter region (`es-es`,
+/// `pt-br`, `en-US`). A country code that isn't a language (`us`, as in `/us/en/`) isn't one.
+fn is_locale(segment: &str) -> bool {
+    let s = segment.to_ascii_lowercase();
+    let (lang, region) = match s.split_once('-') {
+        Some((lang, region)) => (lang, Some(region)),
+        None => (s.as_str(), None),
+    };
+    LOCALES.contains(&lang) && region.is_none_or(|r| r.len() == 2 && r.bytes().all(|b| b.is_ascii_lowercase()))
+}
+
+/// The locale a URL's first path segment names (lowercased), if it names one, and the URL's key without that segment:
+/// the same page in every language has the same key.
+fn locale_key(u: &Url) -> (Option<String>, String) {
+    let segments: Vec<&str> = u.path().split('/').filter(|s| !s.is_empty()).collect();
+    let (locale, rest) = match segments.split_first() {
+        Some((first, rest)) if is_locale(first) => (Some(first.to_ascii_lowercase()), rest),
+        _ => (None, segments.as_slice()),
+    };
+    let mut base = u.clone();
+    base.set_path(&format!("/{}", rest.join("/")));
+    (locale, links::key(&base))
+}
+
+/// A page the site lists in several languages keeps one copy: the one in the start page's language if the site lists
+/// it, else the one with no language prefix. A page listed only in other languages keeps all of them. Renumbers the
+/// links that stay.
+fn without_language_copies(start: &Url, links: Vec<Link>) -> Vec<Link> {
+    let own = locale_key(start).0;
+    let keys: Vec<(Option<String>, String)> = links.iter().map(|l| locale_key(&l.url)).collect();
+    let own_pages: HashSet<&str> =
+        keys.iter().filter(|(locale, _)| *locale == own).map(|(_, key)| key.as_str()).collect();
+    let plain_pages: HashSet<&str> =
+        keys.iter().filter(|(locale, _)| locale.is_none()).map(|(_, key)| key.as_str()).collect();
+    let keep: Vec<bool> = keys
+        .iter()
+        .map(|(locale, key)| {
+            if own_pages.contains(key.as_str()) {
+                *locale == own
+            } else if plain_pages.contains(key.as_str()) {
+                locale.is_none()
+            } else {
+                true
+            }
+        })
+        .collect();
+    links.into_iter().zip(keep).filter(|(_, keep)| *keep).enumerate().map(|(i, (l, _))| Link { i, ..l }).collect()
 }
 
 /// Every `<loc>…</loc>` in a sitemap.
@@ -994,5 +1052,121 @@ mod tests {
         assert_eq!(s.done(), None);
         // No lead at all, and nothing found: cold too.
         assert_eq!(search().done(), Some(Stop::Cold));
+    }
+
+    /// The links a site lists for `urls`, in that order, as `site_map` lists them.
+    fn listed(urls: &[&str]) -> Vec<Link> {
+        urls.iter()
+            .enumerate()
+            .map(|(i, s)| Link { i, url: u(s), text: String::new(), context: String::new(), marginal: false })
+            .collect()
+    }
+
+    /// The URLs that stay of `urls` once the site's language copies are dropped, as `site_map` keeps them.
+    fn kept(start: &str, urls: &[&str]) -> Vec<String> {
+        without_language_copies(&u(start), listed(urls)).iter().map(|l| l.url.as_str().to_string()).collect()
+    }
+
+    #[test]
+    fn locales_are_a_language_with_an_optional_two_letter_region() {
+        for s in ["de", "pt-br", "en-US", "zh", "es-es"] {
+            assert!(is_locale(s), "{s}");
+        }
+        for s in ["us", "ca", "uk", "english", "de-deu", "en-", "pricing"] {
+            assert!(!is_locale(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn a_page_listed_without_a_language_keeps_one_copy_of_it() {
+        let urls = [
+            "https://x.com/pricing",
+            "https://x.com/de/pricing",
+            "https://x.com/es-es/pricing/",
+            "https://x.com/pt-BR/pricing",
+            "https://x.com/en-US/docs/Web",
+            "https://x.com/docs/Web",
+        ];
+        assert_eq!(kept("https://x.com/", &urls), ["https://x.com/pricing", "https://x.com/docs/Web"]);
+        // The links that stay are renumbered.
+        let out = without_language_copies(
+            &u("https://x.com/"),
+            listed(&["https://x.com/de/a", "https://x.com/a", "https://x.com/b"]),
+        );
+        assert_eq!(out.iter().map(|l| (l.i, l.url.path())).collect::<Vec<_>>(), [(0, "/a"), (1, "/b")]);
+    }
+
+    #[test]
+    fn the_start_pages_language_keeps_its_own_copy() {
+        let urls = [
+            "https://cabify.com/precios",
+            "https://cabify.com/es/precios",
+            "https://cabify.com/en/precios",
+            "https://cabify.com/en/about-us",
+            "https://cabify.com/es/sobre-nosotros",
+        ];
+        assert_eq!(
+            kept("https://cabify.com/es", &urls),
+            ["https://cabify.com/es/precios", "https://cabify.com/en/about-us", "https://cabify.com/es/sobre-nosotros"]
+        );
+    }
+
+    #[test]
+    fn without_the_start_pages_language_the_unprefixed_copy_wins() {
+        let urls = ["https://docs.python.org/fr/3/library/os.html", "https://docs.python.org/3/library/os.html"];
+        assert_eq!(kept("https://docs.python.org/es/3/", &urls), ["https://docs.python.org/3/library/os.html"]);
+    }
+
+    #[test]
+    fn the_real_answers_that_are_in_a_language_survive() {
+        // The answer pages of bench/follow-real.notes.md that carry a language prefix, each listed beside its other copies
+        // (docs.python.org also lists the unprefixed one). Each answer survives.
+        let cases: [(&str, &str, &[&str]); 5] = [
+            (
+                "https://www.santander.com/",
+                "https://www.santander.com/en/about-us/our-history",
+                &["https://www.santander.com/es/sobre-nosotros/nuestra-historia"],
+            ),
+            ("https://mullvad.net/", "https://mullvad.net/en/pricing", &["https://mullvad.net/de/pricing"]),
+            ("https://cabify.com/es", "https://cabify.com/es/sobre-nosotros", &["https://cabify.com/en/about-us"]),
+            (
+                "https://docs.python.org/es/3/",
+                "https://docs.python.org/es/3/library/sys.html",
+                &["https://docs.python.org/fr/3/library/sys.html", "https://docs.python.org/3/library/sys.html"],
+            ),
+            (
+                "https://docs.djangoproject.com/en/stable/",
+                "https://docs.djangoproject.com/en/stable/ref/settings/",
+                &["https://docs.djangoproject.com/fr/stable/ref/settings/"],
+            ),
+        ];
+        for (start, answer, others) in cases {
+            let mut urls = vec![answer];
+            urls.extend_from_slice(others);
+            assert!(kept(start, &urls).contains(&answer.to_string()), "{answer}");
+        }
+    }
+
+    #[test]
+    fn a_country_code_or_a_subdomain_is_not_a_language_copy() {
+        // `us` is a country, not a language: the IKEA pages under /us/en/ are their own pages.
+        let ikea = [
+            "https://www.ikea.com/us/en/customer-service/returns-claims/",
+            "https://www.ikea.com/customer-service/returns-claims/",
+        ];
+        assert_eq!(kept("https://www.ikea.com/us/en/", &ikea), ikea);
+        // `ca` names Canada's market, not Catalan: /ca/pricing is not a copy of /pricing. A subdomain is not a path.
+        let ca = ["https://x.com/ca/pricing", "https://x.com/pricing"];
+        assert_eq!(kept("https://x.com/", &ca), ca);
+        let sub = ["https://de.x.com/pricing", "https://x.com/pricing"];
+        assert_eq!(kept("https://x.com/", &sub), sub);
+    }
+
+    #[test]
+    fn a_language_alone_is_a_copy_of_the_home_page() {
+        assert_eq!(
+            kept("https://x.com/", &["https://x.com/", "https://x.com/de/", "https://x.com/de"]),
+            ["https://x.com/"]
+        );
     }
 }
