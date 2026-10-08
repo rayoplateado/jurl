@@ -1,0 +1,99 @@
+[
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": "Leonardo",
+  "right": true,
+  "pages": 10,
+  "tokens": 710177,
+  "ms": 3345,
+  "path": [
+   "https://en.wikipedia.org/wiki/Volcano",
+   "https://en.wikipedia.org/wiki/Smithsonian_Institution",
+   "https://en.wikipedia.org/wiki/Portrait_painting",
+   "https://en.wikipedia.org/wiki/Leonardo_da_Vinci"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": "At 20 °C (68 °F), the speed of sound in air is about 343 m/s (1,125 ft/s; 1,235 km/h; 767 mph; 667 kn), or 1 km in 2.92 s or one mile in 4.69 s",
+  "right": true,
+  "pages": 13,
+  "tokens": 847659,
+  "ms": 4561,
+  "path": [
+   "https://en.wikipedia.org/wiki/Chess",
+   "https://en.wikipedia.org/wiki/Computer_scientists",
+   "https://en.wikipedia.org/wiki/Physics",
+   "https://en.wikipedia.org/wiki/Acoustics",
+   "https://en.wikipedia.org/wiki/Speed_of_sound"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": "Wolfgang Amadeus Mozart",
+  "right": true,
+  "pages": 10,
+  "tokens": 771455,
+  "ms": 3676,
+  "path": [
+   "https://en.wikipedia.org/wiki/Coffee",
+   "https://en.wikipedia.org/wiki/Cappuccino",
+   "https://en.wikipedia.org/wiki/Vienna",
+   "https://en.wikipedia.org/wiki/Wolfgang_Amadeus_Mozart"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": "5700(30) years",
+  "right": true,
+  "pages": 10,
+  "tokens": 557879,
+  "ms": 3787,
+  "path": [
+   "https://en.wikipedia.org/wiki/Association_football",
+   "https://en.wikipedia.org/wiki/Atmosphere_(unit)",
+   "https://en.wikipedia.org/wiki/Chemistry",
+   "https://en.wikipedia.org/wiki/Radioactive_decay"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": "Jupiter",
+  "right": true,
+  "pages": 10,
+  "tokens": 654503,
+  "ms": 3101,
+  "path": [
+   "https://en.wikipedia.org/wiki/Guitar",
+   "https://en.wikipedia.org/wiki/Radio",
+   "https://en.wikipedia.org/wiki/Inverse-square_law",
+   "https://en.wikipedia.org/wiki/Solar_System"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": "1912",
+  "right": true,
+  "pages": 13,
+  "tokens": 756745,
+  "ms": 3501,
+  "path": [
+   "https://en.wikipedia.org/wiki/Bicycle",
+   "https://en.wikipedia.org/wiki/Steel",
+   "https://en.wikipedia.org/wiki/Ship",
+   "https://en.wikipedia.org/wiki/RMS_Titanic"
+  ]
+ }
+]

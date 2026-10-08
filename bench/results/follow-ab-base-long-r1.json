@@ -1,0 +1,85 @@
+[
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "long",
+  "answer": "C9H8O4",
+  "right": true,
+  "pages": 15,
+  "tokens": 1122536,
+  "ms": 6582,
+  "path": [
+   "https://en.wikipedia.org/wiki/Paris",
+   "https://en.wikipedia.org/wiki/French_Academy_of_Sciences",
+   "https://en.wikipedia.org/wiki/Chemistry",
+   "https://en.wikipedia.org/wiki/Glossary_of_chemistry_terms",
+   "https://en.wikipedia.org/wiki/Acid",
+   "https://en.wikipedia.org/wiki/Acetylsalicylic_acid"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Banana",
+  "q": "What is the atomic number of uranium?",
+  "group": "long",
+  "answer": "92",
+  "right": true,
+  "pages": 13,
+  "tokens": 730218,
+  "ms": 3394,
+  "path": [
+   "https://en.wikipedia.org/wiki/Banana",
+   "https://en.wikipedia.org/wiki/Starch",
+   "https://en.wikipedia.org/wiki/Chemical_formula",
+   "https://en.wikipedia.org/wiki/Periodic_table"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Jazz",
+  "q": "How many moons does Mars have?",
+  "group": "long",
+  "answer": "2",
+  "right": true,
+  "pages": 13,
+  "tokens": 1037400,
+  "ms": 4270,
+  "path": [
+   "https://en.wikipedia.org/wiki/Jazz",
+   "https://en.wikipedia.org/wiki/African_Diaspora",
+   "https://en.wikipedia.org/wiki/Asia",
+   "https://en.wikipedia.org/wiki/Ptolemy",
+   "https://en.wikipedia.org/wiki/Mars"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Tennis",
+  "q": "What is the boiling point of mercury?",
+  "group": "long",
+  "answer": "629.88 K ​(356.73 °C, ​674.11 °F)",
+  "right": true,
+  "pages": 13,
+  "tokens": 798273,
+  "ms": 6847,
+  "path": [
+   "https://en.wikipedia.org/wiki/Tennis",
+   "https://en.wikipedia.org/wiki/Nylon",
+   "https://en.wikipedia.org/wiki/Melting_point",
+   "https://en.wikipedia.org/wiki/Mercury_(element)"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Pizza",
+  "q": "Who wrote Don Quixote?",
+  "group": "long",
+  "answer": "Miguel de Cervantes",
+  "right": true,
+  "pages": 10,
+  "tokens": 654463,
+  "ms": 2895,
+  "path": [
+   "https://en.wikipedia.org/wiki/Pizza",
+   "https://en.wikipedia.org/wiki/Aeneid",
+   "https://en.wikipedia.org/wiki/Western_canon",
+   "https://en.wikipedia.org/wiki/Miguel_de_Cervantes_Prize"
+  ]
+ }
+]

@@ -1,0 +1,176 @@
+[
+ {
+  "start": "canonical.com",
+  "q": "What was Canonical's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 3,
+  "tokens": 43484,
+  "ms": 25786,
+  "path": []
+ },
+ {
+  "start": "canonical.com",
+  "q": "What was Canonical's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 3,
+  "tokens": 44041,
+  "ms": 26486,
+  "path": []
+ },
+ {
+  "start": "canonical.com",
+  "q": "What was Canonical's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 59185,
+  "ms": 2612,
+  "path": []
+ },
+ {
+  "start": "todoist.com",
+  "q": "What was Doist's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 75150,
+  "ms": 3509,
+  "path": []
+ },
+ {
+  "start": "todoist.com",
+  "q": "What was Doist's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 73893,
+  "ms": 3113,
+  "path": []
+ },
+ {
+  "start": "todoist.com",
+  "q": "What was Doist's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 75145,
+  "ms": 3310,
+  "path": []
+ },
+ {
+  "start": "fastmail.com",
+  "q": "What is Fastmail's CEO's salary?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 47297,
+  "ms": 10968,
+  "path": []
+ },
+ {
+  "start": "fastmail.com",
+  "q": "What is Fastmail's CEO's salary?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 54611,
+  "ms": 2668,
+  "path": []
+ },
+ {
+  "start": "fastmail.com",
+  "q": "What is Fastmail's CEO's salary?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 55288,
+  "ms": 2799,
+  "path": []
+ },
+ {
+  "start": "1password.com",
+  "q": "What is 1Password's support phone number?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 38179,
+  "ms": 2601,
+  "path": []
+ },
+ {
+  "start": "1password.com",
+  "q": "What is 1Password's support phone number?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 38182,
+  "ms": 2131,
+  "path": []
+ },
+ {
+  "start": "1password.com",
+  "q": "What is 1Password's support phone number?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 38208,
+  "ms": 9522,
+  "path": []
+ },
+ {
+  "start": "pcloud.com",
+  "q": "Where does pCloud's CEO live?",
+  "group": "trap",
+  "answer": "74 Zugerstrasse Str, 6340 Baar, Switzerland",
+  "right": false,
+  "pages": 5,
+  "tokens": 54892,
+  "ms": 12307,
+  "path": [
+   "https://www.pcloud.com/",
+   "https://help.pcloud.com/contact"
+  ]
+ },
+ {
+  "start": "pcloud.com",
+  "q": "Where does pCloud's CEO live?",
+  "group": "trap",
+  "answer": "74 Zugerstrasse Str, 6340 Baar, Switzerland",
+  "right": false,
+  "pages": 5,
+  "tokens": 54896,
+  "ms": 11206,
+  "path": [
+   "https://www.pcloud.com/",
+   "https://help.pcloud.com/contact"
+  ]
+ },
+ {
+  "start": "pcloud.com",
+  "q": "Where does pCloud's CEO live?",
+  "group": "trap",
+  "answer": "74 Zugerstrasse Str, 6340 Baar, Switzerland",
+  "right": false,
+  "pages": 5,
+  "tokens": 54902,
+  "ms": 12121,
+  "path": [
+   "https://www.pcloud.com/",
+   "https://help.pcloud.com/contact"
+  ]
+ }
+]
