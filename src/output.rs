@@ -134,6 +134,10 @@ mod tests {
         assert_eq!(v["closest"], Value::Null);
         assert_eq!(v["url"], "https://jurl.dev/");
         assert_eq!(v["ask"], "books?");
+        // No block to name: the quote, block, link and the block's kind, level and language are left out, not null.
+        for key in ["quote", "block", "link", "kind", "level", "lang"] {
+            assert!(v.get(key).is_none(), "{key} in a miss: {v}");
+        }
         // A miss with a closest candidate prints that.
         let close = Rendered { text: String::new(), json: json!({ "answer": null, "closest": "x" }) };
         let out = stdout_for(&args, &Err(missed("no answer".into(), close)), &usage).unwrap().unwrap();
