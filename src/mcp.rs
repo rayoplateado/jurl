@@ -256,8 +256,10 @@ fn command(tool: Tool, args: &Value) -> Result<Vec<String>, String> {
         Some(Value::Number(n)) => argv.extend(["--follow".into(), n.to_string()]),
         _ => {}
     }
-    // After `--`, a url starting with "-" is still a url.
-    argv.extend(["--".into(), str("url").unwrap_or_default()]);
+    // After `--`, a url starting with "-" is still a url. Its ends are trimmed, as `fits` checked it, so the page
+    // read is the one the client named.
+    let url = str("url").unwrap_or_default();
+    argv.extend(["--".to_string(), url.trim().to_string()]);
     Ok(argv)
 }
 
@@ -619,6 +621,11 @@ mod tests {
         assert_eq!(argv("find_image", json!({ "url": "x.com", "description": "a cat" })), "--find=a cat -- x.com");
         assert_eq!(argv("find_image", json!({ "url": "x.com", "vision": true })), "--vision -- x.com");
         assert_eq!(argv("find_image", json!({ "url": "x.com" })), "--image -- x.com");
+        // The url's length is checked without its spaces, so jurl must get it without them too.
+        assert_eq!(
+            argv("answer", json!({ "url": "  x.com\t", "question": "price?" })),
+            "--precise --ask=price? -- x.com"
+        );
     }
 
     #[test]
