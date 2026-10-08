@@ -9,9 +9,12 @@ use serde_json::{Map, json};
 use url::Url;
 
 use crate::{
+    blocks::top,
     decide::{Answers, noul},
     extract::{Extracted, Link},
     judge::{Ctx, Item},
+    output::{Rendered, not_found},
+    timing::Timer,
 };
 
 /// Links scored per page: cheap to score (~45 tokens each).
@@ -150,6 +153,59 @@ fn read(links: &[Link], a: &Answers, field: Option<&FieldScores>) -> (Vec<f64>, 
         scores.push(p + (1.0 - p) * FIELD_WEIGHT * f);
     }
     (scores, asked)
+}
+
+/// --links: the links worth following, best first. With -q, the links most likely to lead to the answer: what
+/// --follow opens, menus and footers included (a nav bar's "Pricing" is often the way to a price).
+pub(crate) async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {
+    let (candidates, scores): (Vec<Link>, Vec<Option<f64>>) = if ctx.args.ask.is_some() {
+        let candidates = candidates(ctx, ex, |_| true);
+        if candidates.is_empty() {
+            return Err(not_found(format!("no links found in {}", ctx.url)));
+        }
+        let (scores, _) = score(ctx, &candidates, "Following the link in `links`", None).await?;
+        t.lap(format!("{} links", candidates.len()));
+        (candidates, scores.into_iter().map(Some).collect())
+    } else {
+        // Footnote marks and image-only links are left out, as with -q: they open a note or a photo, not the topic.
+        let candidates: Vec<Link> = ex.links.iter().filter(|l| !l.marginal).cloned().collect();
+        if candidates.is_empty() {
+            return Err(not_found(format!("no links found in {}", ctx.url)));
+        }
+        let items = candidates
+            .iter()
+            .map(|l| Item {
+                state: json!({ "i": l.i, "text": l.text, "context": l.context, "host": l.url.host_str() }),
+                questions: vec![(
+                    format!("l{}", l.i),
+                    ctx.question(
+                        &format!("The link in `links` with i={}", l.i),
+                        "points to something a reader of this page would want to follow — referenced articles, \
+                         sources, docs, downloads or related content — not site navigation, login, social sharing, \
+                         legal pages or ads.",
+                    ),
+                )],
+            })
+            .collect();
+        let a = ctx.judge("links", items, Map::new()).await?;
+        t.lap(a.label());
+        let scores = candidates.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
+        (candidates, scores)
+    };
+    let kept = top(&scores, ctx.args.threshold(), ctx.args.limit(20));
+    if kept.is_empty() {
+        return Err(not_found(format!("no links worth following in {} (try a lower --threshold)", ctx.url)));
+    }
+
+    let v: Vec<_> = kept
+        .iter()
+        .map(|(i, p)| {
+            let l = &candidates[*i];
+            json!({ "url": l.url.as_str(), "text": l.text, "p": p })
+        })
+        .collect();
+    let text = kept.iter().map(|(i, _)| format!("{}\n", candidates[*i].url)).collect();
+    Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "links": v }) })
 }
 
 #[cfg(test)]
