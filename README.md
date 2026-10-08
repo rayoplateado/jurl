@@ -279,7 +279,7 @@ The tools run the same code as the CLI, with the same keys (`jurl init` or the e
 | `jurl update` | Install the latest jurl, the same way this one was installed |
 | `jurl mcp` | Serve jurl's tools to an AI agent over MCP (see [above](#use-it-from-an-agent-mcp)) |
 
-Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`.
+Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`. A `.env` in the current directory is read too, for those API keys only.
 
 `--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
 

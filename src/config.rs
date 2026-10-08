@@ -2,33 +2,21 @@ use std::{collections::HashMap, env, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 
-/// Keys come from the environment first, then `~/.config/jurl/env`, then `./.env`
-/// (simple `KEY=value` lines).
+/// Keys come from the environment first, then `~/.config/jurl/env`, then `./.env` (simple `KEY=value` lines).
+/// `./.env` supplies only the `DOTENV_KEYS`.
 pub struct Config {
     file: HashMap<String, String>,
 }
 
+/// The keys `./.env` may supply. A project's `.env` is not the user's: it must not choose the programs jurl runs
+/// (`JURL_LIGHTPANDA`).
+const DOTENV_KEYS: &[&str] = &["TYPESAFE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_TOKEN"];
+
 impl Config {
     pub fn load() -> Self {
-        let mut file = HashMap::new();
-        let mut paths = vec![PathBuf::from(".env")];
-        if let Some(p) = Self::path() {
-            paths.insert(0, p);
-        }
-        for path in paths {
-            let Ok(text) = fs::read_to_string(&path) else { continue };
-            for line in text.lines() {
-                let line = line.trim().trim_start_matches("export ");
-                if line.starts_with('#') {
-                    continue;
-                }
-                if let Some((k, v)) = line.split_once('=') {
-                    let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
-                    file.entry(k.trim().to_string()).or_insert_with(|| v.to_string());
-                }
-            }
-        }
-        Self { file }
+        let user = Self::path().and_then(|p| fs::read_to_string(p).ok()).unwrap_or_default();
+        let dotenv = fs::read_to_string(".env").unwrap_or_default();
+        Self { file: merge(&user, &dotenv) }
     }
 
     pub fn path() -> Option<PathBuf> {
@@ -61,5 +49,56 @@ impl Config {
         }
         self.file.insert(key.to_string(), value.to_string());
         Ok(path)
+    }
+}
+
+/// `KEY=value` lines, with `export`, quotes and `#` comments handled. Any other line is skipped.
+fn parse(text: &str) -> impl Iterator<Item = (String, String)> + '_ {
+    text.lines().filter_map(|line| {
+        let line = line.trim().trim_start_matches("export ");
+        if line.starts_with('#') {
+            return None;
+        }
+        let (k, v) = line.split_once('=')?;
+        Some((k.trim().to_string(), v.trim().trim_matches(|c| c == '"' || c == '\'').to_string()))
+    })
+}
+
+/// The user's file wins for a key both files set; within a file, the first line wins.
+fn merge(user: &str, dotenv: &str) -> HashMap<String, String> {
+    let mut file = HashMap::new();
+    for (k, v) in parse(user) {
+        file.entry(k).or_insert(v);
+    }
+    for (k, v) in parse(dotenv).filter(|(k, _)| DOTENV_KEYS.contains(&k.as_str())) {
+        file.entry(k).or_insert(v);
+    }
+    file
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dotenv_supplies_only_the_api_keys() {
+        let file = merge("", "JURL_LIGHTPANDA=/bin/echo\nTYPESAFE_API_KEY=k\nCLOUDFLARE_AI_TOKEN=t");
+        assert!(!file.contains_key("JURL_LIGHTPANDA"));
+        assert_eq!(file["TYPESAFE_API_KEY"], "k");
+        assert_eq!(file["CLOUDFLARE_AI_TOKEN"], "t");
+    }
+
+    #[test]
+    fn user_file_sets_any_key_and_wins_over_dotenv() {
+        let file = merge("JURL_LIGHTPANDA=/opt/lp\nTYPESAFE_API_KEY=user", "TYPESAFE_API_KEY=dotenv");
+        assert_eq!(file["JURL_LIGHTPANDA"], "/opt/lp");
+        assert_eq!(file["TYPESAFE_API_KEY"], "user");
+    }
+
+    #[test]
+    fn parses_export_quotes_and_comments() {
+        let file = merge("# a comment\nexport TYPESAFE_API_KEY=\"quoted\"\n\nno equals sign\n", "");
+        assert_eq!(file.len(), 1);
+        assert_eq!(file["TYPESAFE_API_KEY"], "quoted");
     }
 }
