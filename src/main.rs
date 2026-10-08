@@ -8,13 +8,14 @@ mod links;
 mod mcp;
 mod precise;
 mod setup;
+mod timing;
 mod update;
 
 use std::{
     collections::{HashMap, HashSet},
     io::{ErrorKind, Write, stdout},
     process::ExitCode,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -28,6 +29,7 @@ use crate::{
     config::Config,
     decide::{Answers, choice, is_api_error, noul},
     extract::{Block, Extracted, Image, Kind, Link},
+    timing::Timer,
 };
 
 /// curl, but it reads the page for you. Jev picks what matters; Clef looks at
@@ -137,28 +139,6 @@ static VISUAL_KINDS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
         "decoration": "A background, divider, pattern or other decoration",
     })
 });
-
-struct Timer {
-    start: Instant,
-    last: Instant,
-    phases: Vec<(String, Duration)>,
-}
-
-impl Timer {
-    fn new() -> Self {
-        let now = Instant::now();
-        Self { start: now, last: now, phases: Vec::new() }
-    }
-    fn lap(&mut self, name: impl Into<String>) {
-        let now = Instant::now();
-        self.phases.push((name.into(), now - self.last));
-        self.last = now;
-    }
-    fn report(&self) {
-        let parts: Vec<_> = self.phases.iter().map(|(n, d)| format!("{n} {}ms", d.as_millis())).collect();
-        eprintln!("⏱  {} · total {}ms", parts.join(" · "), self.start.elapsed().as_millis());
-    }
-}
 
 /// Everything a mode needs to talk to Jev about one page.
 struct Ctx<'a> {

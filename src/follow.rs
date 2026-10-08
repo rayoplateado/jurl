@@ -13,12 +13,14 @@ use serde_json::Map;
 use url::Url;
 
 use crate::{
-    Args, Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, Rendered, Timer,
+    Args, Ctx, Item, PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, Rendered,
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Link},
     links::{self, FieldScores, key, overlap},
-    load, missed, precise_pick, render_blocks, render_precise, score_blocks, top,
+    load, missed, precise_pick, render_blocks, render_precise, score_blocks,
+    timing::Timer,
+    top,
 };
 
 /// Pages opened at once on each step. Two, so the default 5 pages are two full steps (1 + 2 + 2): answers two links
