@@ -51,22 +51,30 @@ static VISUAL_KINDS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
     })
 });
 
+/// Clef's Cloudflare account and API token, from `jurl init`.
+struct ClefKeys {
+    account: String,
+    token: String,
+}
+
+/// Both keys are needed for --vision and --find; the message is the same whichever is missing.
+const MISSING_KEYS: &str = "--vision and --find need a Cloudflare Workers AI token: run `jurl init`";
+
+impl ClefKeys {
+    fn from_config(cfg: &Config) -> Result<Self> {
+        Ok(Self {
+            account: cfg.get("CLOUDFLARE_ACCOUNT_ID").context(MISSING_KEYS)?,
+            token: cfg.get("CLOUDFLARE_AI_TOKEN").context(MISSING_KEYS)?,
+        })
+    }
+}
+
 /// --image / --vision: content images, best first.
 pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {
     if ex.images.is_empty() {
         return Err(not_found(format!("no images found in {}", ctx.url)));
     }
-    let clef_keys = if ctx.args.vision {
-        let account = cfg
-            .get("CLOUDFLARE_ACCOUNT_ID")
-            .context("--vision and --find need a Cloudflare Workers AI token: run `jurl init`")?;
-        let token = cfg
-            .get("CLOUDFLARE_AI_TOKEN")
-            .context("--vision and --find need a Cloudflare Workers AI token: run `jurl init`")?;
-        Some((account, token))
-    } else {
-        None
-    };
+    let clef_keys = if ctx.args.vision { Some(ClefKeys::from_config(cfg)?) } else { None };
 
     // Text-only judgement: alt, caption, file name and size are usually enough.
     let items = ex
@@ -207,15 +215,17 @@ impl Looks {
 async fn look_all(
     client: &Client,
     clef_client: &Client,
-    keys: Option<&(String, String)>,
+    keys: Option<&ClefKeys>,
     title: &str,
     imgs: Vec<&Image>,
     query: Option<&str>,
 ) -> Looks {
-    let Some((account, token)) = keys else { return Looks::default() };
+    let Some(keys) = keys else { return Looks::default() };
     let deadline = vision_deadline();
     let answers = join_all(imgs.into_iter().map(|img| async move {
-        let look = tokio::time::timeout(deadline, look(client, clef_client, account, token, title, img, query)).await;
+        let look =
+            tokio::time::timeout(deadline, look(client, clef_client, &keys.account, &keys.token, title, img, query))
+                .await;
         (img.i, look.unwrap_or_else(|_| Err(anyhow!("over {}ms (JURL_VISION_TIMEOUT_MS)", deadline.as_millis()))))
     }))
     .await;
