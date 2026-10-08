@@ -43,18 +43,16 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
             questions: Vec::new(),
         })
         .collect();
-    let mut criteria = Map::new();
-    for (k, s) in spans.iter().enumerate() {
-        criteria
-            .insert(format!("s{k}"), json!(s.label.as_deref().unwrap_or(&ex.blocks[s.block].text[s.range.clone()])));
-    }
-    criteria.insert("none".to_string(), json!("None of these is exactly the answer"));
-    let pick = choice(
+    let labels: Vec<&str> =
+        spans.iter().map(|s| s.label.as_deref().unwrap_or(&ex.blocks[s.block].text[s.range.clone()])).collect();
+    let pick = span_choice(
         &format!(
             "Which of these spans from the blocks is exactly the answer to this question, with nothing missing \
              and nothing extra? {q}"
         ),
-        Value::Object(criteria),
+        's',
+        &labels,
+        true,
     );
     let a = ctx.judge("blocks", items, Map::from_iter([("pick".to_string(), pick)])).await?;
     t.lap(a.label());
@@ -103,17 +101,15 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
                 options.push(r);
             }
         }
-        let mut criteria = Map::new();
-        for (k, r) in options.iter().enumerate() {
-            criteria.insert(format!("o{k}"), json!(&text[r.clone()]));
-        }
-        criteria.insert("none".to_string(), json!("None of these is exactly the answer"));
-        let refine = choice(
+        let labels: Vec<&str> = options.iter().map(|r| &text[r.clone()]).collect();
+        let refine = span_choice(
             &format!(
                 "Which of these spans from the block is exactly the answer to this question, with nothing missing \
                  and nothing extra? {q}"
             ),
-            Value::Object(criteria),
+            'o',
+            &labels,
+            true,
         );
         let b = ctx.judge("blocks", context(), Map::from_iter([("refine".to_string(), refine)])).await?;
         t.lap(b.label());
@@ -132,16 +128,15 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
     }
     if p >= threshold && !inside.is_empty() {
         let options: Vec<&precise::Span> = std::iter::once(best).chain(inside).collect();
-        let mut criteria = Map::new();
-        for (k, s) in options.iter().enumerate() {
-            criteria.insert(format!("o{k}"), json!(&ex.blocks[s.block].text[s.range.clone()]));
-        }
-        let tighter = choice(
+        let labels: Vec<&str> = options.iter().map(|s| &ex.blocks[s.block].text[s.range.clone()]).collect();
+        let tighter = span_choice(
             &format!(
                 "All of these say the answer to this question. Which one is exactly the answer, without any \
                  extra words around it? {q}"
             ),
-            Value::Object(criteria),
+            'o',
+            &labels,
+            false,
         );
         let b = ctx.judge("blocks", context(), Map::from_iter([("tighter".to_string(), tighter)])).await?;
         t.lap(b.label());
@@ -154,6 +149,19 @@ pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, 
         }
     }
     Ok(Pick { block: best.block, range: best.range.clone(), p })
+}
+
+/// One choice over spans (or over a block's ranges): `{prefix}{k}` for each label in order, and "none" when the page
+/// may not hold the answer at all.
+fn span_choice(instructions: &str, prefix: char, labels: &[&str], with_none: bool) -> Value {
+    let mut criteria = Map::new();
+    for (k, label) in labels.iter().enumerate() {
+        criteria.insert(format!("{prefix}{k}"), json!(label));
+    }
+    if with_none {
+        criteria.insert("none".to_string(), json!("None of these is exactly the answer"));
+    }
+    choice(instructions, Value::Object(criteria))
 }
 
 /// The answer on its own line, then the block it's in and a link to it; JSON says how sure, and below the threshold
@@ -181,4 +189,25 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
         doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
     }
     Rendered { text: format!("{answer}\n\n{}\n\n<{link}>\n", block.markdown()), json: doc }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn span_choice_names_each_span_and_maybe_none() {
+        assert_eq!(
+            span_choice("Which?", 's', &["$8", "$8 per user"], true),
+            json!({
+                "type": "choice",
+                "instructions": "Which?",
+                "criteria": { "s0": "$8", "s1": "$8 per user", "none": "None of these is exactly the answer" },
+            }),
+        );
+        assert_eq!(
+            span_choice("Which one?", 'o', &["a", "b"], false),
+            json!({ "type": "choice", "instructions": "Which one?", "criteria": { "o0": "a", "o1": "b" } }),
+        );
+    }
 }
