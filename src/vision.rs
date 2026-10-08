@@ -57,16 +57,33 @@ struct ClefKeys {
     token: String,
 }
 
-/// Both keys are needed for --vision and --find; the message is the same whichever is missing.
-const MISSING_KEYS: &str = "--vision and --find need a Cloudflare Workers AI token: run `jurl init`";
-
 impl ClefKeys {
     fn from_config(cfg: &Config) -> Result<Self> {
-        Ok(Self {
-            account: cfg.get("CLOUDFLARE_ACCOUNT_ID").context(MISSING_KEYS)?,
-            token: cfg.get("CLOUDFLARE_AI_TOKEN").context(MISSING_KEYS)?,
-        })
+        Self::from_lookup(|name| cfg.get(name))
     }
+
+    /// Both keys are needed for --vision and --find. An empty one is unset, and the error names each unset variable.
+    fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self> {
+        let account = get("CLOUDFLARE_ACCOUNT_ID").filter(|v| !v.is_empty());
+        let token = get("CLOUDFLARE_AI_TOKEN").filter(|v| !v.is_empty());
+        match (account, token) {
+            (Some(account), Some(token)) => Ok(Self { account, token }),
+            (account, token) => {
+                let missing: Vec<&str> = [("CLOUDFLARE_ACCOUNT_ID", account), ("CLOUDFLARE_AI_TOKEN", token)]
+                    .into_iter()
+                    .filter(|(_, v)| v.is_none())
+                    .map(|(name, _)| name)
+                    .collect();
+                Err(anyhow!(missing_keys_message(&missing)))
+            }
+        }
+    }
+}
+
+/// The error when Clef's keys are not set: `missing` names the variables that are.
+fn missing_keys_message(missing: &[&str]) -> String {
+    let verb = if missing.len() == 1 { "is" } else { "are" };
+    format!("--vision and --find need {}, which {verb} missing: run `jurl init`", missing.join(" and "))
 }
 
 /// --image / --vision: content images, best first.
@@ -461,6 +478,42 @@ mod tests {
         let (_, question) = clef_ask("Trip", &img, None);
         assert_eq!(question["type"], "choice");
         assert_eq!(question["criteria"]["photo"], "A photograph of a scene, object, place or person");
+    }
+
+    /// The variables that are set, as a lookup: any other name is unset.
+    fn env_of(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn the_error_names_each_missing_cloudflare_variable() {
+        let both = env_of(&[("CLOUDFLARE_ACCOUNT_ID", "acct"), ("CLOUDFLARE_AI_TOKEN", "tok")]);
+        assert!(ClefKeys::from_lookup(both).is_ok());
+        let token_only = env_of(&[("CLOUDFLARE_AI_TOKEN", "tok")]);
+        let err = ClefKeys::from_lookup(token_only).err().expect("no account id");
+        assert_eq!(
+            format!("{err:#}"),
+            "--vision and --find need CLOUDFLARE_ACCOUNT_ID, which is missing: run `jurl init`"
+        );
+        let account_only = env_of(&[("CLOUDFLARE_ACCOUNT_ID", "acct")]);
+        let err = ClefKeys::from_lookup(account_only).err().expect("no token");
+        assert_eq!(
+            format!("{err:#}"),
+            "--vision and --find need CLOUDFLARE_AI_TOKEN, which is missing: run `jurl init`"
+        );
+        let neither = env_of(&[]);
+        let err = ClefKeys::from_lookup(neither).err().expect("no keys");
+        assert_eq!(
+            format!("{err:#}"),
+            "--vision and --find need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_TOKEN, which are missing: run `jurl init`"
+        );
+    }
+
+    #[test]
+    fn an_empty_cloudflare_variable_is_missing_too() {
+        let empty_token = env_of(&[("CLOUDFLARE_ACCOUNT_ID", "acct"), ("CLOUDFLARE_AI_TOKEN", "")]);
+        let err = ClefKeys::from_lookup(empty_token).err().expect("empty token");
+        assert!(format!("{err:#}").contains("need CLOUDFLARE_AI_TOKEN, which is missing"), "{err:#}");
     }
 
     #[test]
