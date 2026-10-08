@@ -305,16 +305,22 @@ async fn look_all(req: Option<&LookRequest<'_>>, imgs: Vec<&Image>) -> Looks {
     Looks(answers.into_iter().collect())
 }
 
-/// Clef's view of one image: with a query, P(it shows that); without, P(it is content, not chrome).
-async fn look(req: &LookRequest<'_>, img: &Image) -> Result<f64> {
-    let data = thumbnail(req.http, &img.preview).await?;
-    let state = json!({ "page_title": req.title, "alt": img.alt, "caption": img.caption });
+/// What Clef is told about one image: its state (the page title, alt and caption) and the question.
+fn clef_ask(title: &str, img: &Image, query: Option<&str>) -> (Value, Value) {
+    let state = json!({ "page_title": title, "alt": img.alt, "caption": img.caption });
     // Clef answers "what is this?" far better than "does this matter?", so without a query
     // ask the factual question and add up the content classes here.
-    let question = match req.query {
+    let question = match query {
         Some(q) => noul(format!("The attached image shows: {q}")),
         None => choice("What does the attached image show?", VISUAL_KINDS.clone()),
     };
+    (state, question)
+}
+
+/// Clef's view of one image: with a query, P(it shows that); without, P(it is content, not chrome).
+async fn look(req: &LookRequest<'_>, img: &Image) -> Result<f64> {
+    let data = thumbnail(req.http, &img.preview).await?;
+    let (state, question) = clef_ask(req.title, img, req.query);
     let qs = Map::from_iter([("q".to_string(), question)]);
     let call =
         || decide::clef(req.clef, &req.keys.account, &req.keys.token, state.clone(), qs.clone(), vec![data.clone()]);
@@ -444,6 +450,17 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].questions[0].0, image_id(&ex.images[0]));
         assert_eq!(items[0].questions[0].0, "img0");
+    }
+
+    #[test]
+    fn clef_is_asked_the_query_or_what_the_image_shows() {
+        let img = image(4);
+        let (state, question) = clef_ask("Trip", &img, Some("a cathedral"));
+        assert_eq!(state, json!({ "page_title": "Trip", "alt": "", "caption": "" }));
+        assert_eq!(question, json!({ "type": "noul", "instructions": "The attached image shows: a cathedral" }));
+        let (_, question) = clef_ask("Trip", &img, None);
+        assert_eq!(question["type"], "choice");
+        assert_eq!(question["criteria"]["photo"], "A photograph of a scene, object, place or person");
     }
 
     #[test]
