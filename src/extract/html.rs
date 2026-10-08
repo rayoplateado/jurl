@@ -7,7 +7,7 @@ use scraper::{ElementRef, Html, Node, Selector};
 use url::Url;
 
 use super::join::join_short;
-use super::{BREAK, Block, Extracted, Kind, collapse, push_image, push_link};
+use super::{BREAK, Block, Extracted, Image, Kind, Link, collapse, push_image, push_link};
 
 const SKIP: &[&str] = &[
     "script", "style", "noscript", "nav", "footer", "aside", "form", "svg", "button", "iframe", "template", "select",
@@ -20,11 +20,28 @@ const INLINE: &[&str] = &[
 
 pub fn html(body: &str, base: &Url) -> Extracted {
     let doc = Html::parse_document(body);
-    let title = meta(&doc, "meta[property='og:title']")
-        .or_else(|| first_text(&doc, "title"))
-        .or_else(|| first_text(&doc, "h1"))
-        .unwrap_or_default();
+    let root = content_root(&doc);
+    let in_body = root.value().name() == "body";
+    Extracted {
+        title: collapse(&page_title(&doc)),
+        blocks: join_short(walk(&doc, root, in_body)),
+        images: collect_images(&doc, root, in_body, base),
+        links: collect_links(root, in_body, base),
+        site_links: collect_site_links(&doc, base),
+        app_shell: is_app_shell(&doc, body),
+    }
+}
 
+/// The page's title: `og:title`, else the `<title>`, else the first `<h1>`.
+fn page_title(doc: &Html) -> String {
+    meta(doc, "meta[property='og:title']")
+        .or_else(|| first_text(doc, "title"))
+        .or_else(|| first_text(doc, "h1"))
+        .unwrap_or_default()
+}
+
+/// The element the content is read from: the first candidate, in order, that holds a fair share of the page's text.
+fn content_root(doc: &Html) -> ElementRef<'_> {
     // Several <article>s means a listing of cards: the container is the content.
     let order: &[&str] = if doc.select(&sel("article")).nth(1).is_some() {
         &["main", "[role=main]", "body"]
@@ -34,16 +51,18 @@ pub fn html(body: &str, base: &Url) -> Extracted {
     // An <article> or <main> holding a sliver of the page's text isn't its content: a sign-up modal's
     // <main>, a "related" card. Below this share of the body's visible text, try the next candidate.
     let body_len = doc.select(&sel("body")).next().map(visible_len).unwrap_or(0);
-    let root = order
+    order
         .iter()
         .find_map(|s| {
             doc.select(&sel(s))
                 .max_by_key(|e| visible_len(*e))
                 .filter(|e| *s == "body" || visible_len(*e) * ROOT_MIN_SHARE_INV >= body_len)
         })
-        .unwrap_or_else(|| doc.root_element());
-    let in_body = root.value().name() == "body";
+        .unwrap_or_else(|| doc.root_element())
+}
 
+/// The blocks of the content root, in page order.
+fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool) -> Vec<Block> {
     // React streams late content (a Suspense boundary) as `<div hidden id="S:n">` at the end of the body, and a
     // script moves it into `<template id="B:n">`, where it belongs. Read it there.
     let segments: HashMap<String, ElementRef> = doc
@@ -53,9 +72,13 @@ pub fn html(body: &str, base: &Url) -> Extracted {
     let mut w = Walker { blocks: Vec::new(), skip_header: in_body, buf: String::new(), segments, list: None, lists: 0 };
     w.container(root);
     w.flush();
+    w.blocks
+}
 
+/// The images of the page: `og:image` first, then the `<img>`s of the content root that a reader can see.
+fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Vec<Image> {
     let mut images = Vec::new();
-    if let Some(og) = meta(&doc, "meta[property='og:image']") {
+    if let Some(og) = meta(doc, "meta[property='og:image']") {
         push_image(&mut images, base, &og, None, String::new(), String::new(), None, None);
     }
     for img in root.select(&sel("img")) {
@@ -79,7 +102,11 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
         push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
     }
+    images
+}
 
+/// The links of the content root. Hidden links, and links inside skipped elements, are left out.
+fn collect_links(root: ElementRef, in_body: bool, base: &Url) -> Vec<Link> {
     let mut links = Vec::new();
     for a in root.select(&sel("a[href]")) {
         if hidden(a) || has_skipped_ancestor(a, in_body) {
@@ -110,13 +137,18 @@ pub fn html(body: &str, base: &Url) -> Extracted {
             .unwrap_or_default();
         push_link(&mut links, base, v.attr("href").unwrap_or(""), text, context, marginal(a));
     }
+    links
+}
 
-    let app_shell = doc.select(&sel("script")).next().is_some()
+/// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no text, the page is a JS app.
+fn is_app_shell(doc: &Html, body: &str) -> bool {
+    doc.select(&sel("script")).next().is_some()
         && (body.len() > 4096
-            || doc
-                .select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]"))
-                .next()
-                .is_some());
+            || doc.select(&sel("noscript, #root, #app, #__next, #__nuxt, [data-reactroot], [ng-app]")).next().is_some())
+}
+
+/// Every link on the page, menus and footers included: only hidden links are left out.
+fn collect_site_links(doc: &Html, base: &Url) -> Vec<Link> {
     // Menus and footers are where a site keeps "Pricing" and "Docs": only hidden links are left out here.
     let mut site_links = Vec::new();
     for a in doc.select(&sel("a[href]")) {
@@ -132,7 +164,7 @@ pub fn html(body: &str, base: &Url) -> Extracted {
         };
         push_link(&mut site_links, base, v.attr("href").unwrap_or(""), text, String::new(), marginal(a));
     }
-    Extracted { title: collapse(&title), blocks: join_short(w.blocks), images, links, site_links, app_shell }
+    site_links
 }
 
 struct Walker<'a> {
