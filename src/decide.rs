@@ -98,9 +98,18 @@ pub fn choice(instructions: &str, criteria: Value) -> Value {
     json!({ "type": "choice", "instructions": instructions, "criteria": criteria })
 }
 
-/// Jev's endpoint. `JURL_JEV_URL` points jurl at another server with the same contract (a self-hosted model).
+/// `JURL_JEV_URL`: another server with Jev's contract (a self-hosted model), when set and not empty.
+pub fn custom_jev_url() -> Option<String> {
+    non_empty(std::env::var("JURL_JEV_URL").ok())
+}
+
+fn non_empty(v: Option<String>) -> Option<String> {
+    v.filter(|u| !u.trim().is_empty())
+}
+
+/// Jev's endpoint, or the one in `JURL_JEV_URL`.
 pub fn jev_url() -> String {
-    std::env::var("JURL_JEV_URL").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| JEV_URL.to_string())
+    custom_jev_url().unwrap_or_else(|| JEV_URL.to_string())
 }
 
 const JEV_URL: &str = "https://api.typesafe.ai/v1/systemone";
@@ -216,5 +225,14 @@ mod tests {
                 "clef": { "requests": 2, "input_tokens": 160, "images": 2 },
             })
         );
+    }
+
+    #[test]
+    fn jurl_jev_url_counts_only_when_not_empty() {
+        assert_eq!(non_empty(None), None);
+        assert_eq!(non_empty(Some(String::new())), None);
+        assert_eq!(non_empty(Some("  ".into())), None);
+        let url = "http://127.0.0.1:8000/v1/systemone";
+        assert_eq!(non_empty(Some(url.into())).as_deref(), Some(url));
     }
 }
