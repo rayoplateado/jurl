@@ -15,11 +15,12 @@ pub const JEV_MODEL: &str = "jev-1.13.0";
 
 pub const CLEF_MODEL: &str = "clef-flash";
 
-/// Everything this run asked of Jev and Clef, and the pages it read: what it cost, as `usage` in `--json`. Counted
-/// per process, so `jurl mcp` (calls side by side) doesn't report it.
+/// The Jev and Clef requests this run got replies to, and the pages it read: `usage` in `--json`. Counted per process,
+/// so `jurl mcp` (calls side by side) doesn't report it.
 pub static USAGE: Usage = Usage::new();
 
-/// Requests that came back with answers. A hedged Clef call that lost the race isn't counted: its answer never came.
+/// Requests that got a reply. Not counted: failed attempts (a retried 429 or 529 included), and a hedged Clef call
+/// cancelled once the other answered. One that reached the server may still be billed: the counts are a floor.
 #[derive(Debug, Default)]
 pub struct Usage {
     pub pages: AtomicU64,
