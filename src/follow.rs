@@ -23,6 +23,7 @@ use crate::{
     links::{self, FieldScores},
     load,
     output::{Rendered, missed, not_found},
+    rank,
     timing::Timer,
 };
 
@@ -725,12 +726,12 @@ impl Search {
     }
 }
 
-/// The start page's hints: the site's own map (see [`site_map`]), the pages that share words with the question first,
-/// each scored as a link. The start page is first, scored like a candidate too.
+/// The start page's hints: the site's own map (see [`site_map`]), the pages whose URLs best match the question (see
+/// [`rank::most_relevant`]), each scored as a link. The start page is first, scored like a candidate too.
 async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, site: &Site) -> Result<Vec<ScoredLink>> {
     let q = args.ask.as_deref().unwrap_or_default();
-    // The site's pages that share words with the question first, then the shallowest.
-    let mut links = links::most_relevant(q, site_map(client, start, site).await, MAX_HINTS);
+    // The site's pages most like the question first; equal scores keep the site map's order.
+    let mut links = rank::most_relevant(q, site_map(client, start, site).await, MAX_HINTS);
     // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
     links.retain(|l| links::key(&l.url) != links::key(start));
     links.insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false });
