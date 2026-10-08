@@ -7,7 +7,7 @@
 //! `jurl` would print. A miss ("the page doesn't say") is a normal result, as exit code 1 is; a failure (the page
 //! couldn't be read, a bad key, no credits) is a tool error, as exit code 2 is.
 
-use std::future::Future;
+use std::{collections::VecDeque, future::Future};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -26,6 +26,9 @@ const FOLLOW_PAGES: u64 = 5;
 /// A cap on `follow`, so one call can't read a whole site: a long search (15 pages) costs about $0.035.
 const FOLLOW_MAX: u64 = 20;
 const MAX_RESULTS: u64 = 50;
+/// Tool calls running at once. The rest wait their turn, in arrival order, so one agent's burst can't fetch every page
+/// at once.
+const MAX_CALLS: usize = 4;
 
 const VERBATIM: &str = "Everything returned is copied from the page, verbatim, with its links: jurl never writes, \
                         summarizes or guesses. When the page doesn't have it, the result says so (\"Not found\").";
@@ -352,8 +355,8 @@ fn text(r: &Rendered) -> String {
     text
 }
 
-/// Serve until the client closes stdin, then answer the calls still running. Tool calls run side by side: an agent
-/// may ask about several pages at once.
+/// Serve until the client closes stdin, then answer the calls still running. Tool calls run side by side, up to
+/// `MAX_CALLS`: an agent may ask about several pages at once.
 pub async fn serve(client: Client) -> Result<()> {
     let client = &client;
     drive(BufReader::new(tokio::io::stdin()), tokio::io::stdout(), move |argv: Vec<String>| async move {
@@ -371,10 +374,16 @@ where
     Fut: Future<Output = Value>,
 {
     let mut lines = input.lines();
-    let call = &call;
     let mut open = true;
+    let mut pending = VecDeque::new();
     let mut calls = FuturesUnordered::new();
     loop {
+        // Calls past the cap wait here, in arrival order.
+        while calls.len() < MAX_CALLS {
+            let Some((id, argv)) = pending.pop_front() else { break };
+            let fut = call(argv);
+            calls.push(async move { response(id, fut.await) });
+        }
         // Once stdin has closed, only the calls still running are left to answer.
         if !open && calls.is_empty() {
             return Ok(());
@@ -385,7 +394,7 @@ where
                 Some(line) => match handle(&line) {
                     Reply::Now(reply) => reply,
                     Reply::Run { id, argv } => {
-                        calls.push(async move { response(id, call(argv).await) });
+                        pending.push_back((id, argv));
                         continue;
                     }
                 },
@@ -408,6 +417,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     fn reply(msg: Value) -> Option<Value> {
         handle_raw(&msg.to_string())
@@ -603,5 +616,43 @@ mod tests {
         assert_eq!(replies[0]["id"], 1);
         assert_eq!(replies[1]["id"], 2);
         assert_eq!(replies[1]["result"]["content"][0]["text"], "ok");
+    }
+
+    #[tokio::test]
+    async fn tool_calls_run_four_at_a_time_in_arrival_order_and_a_ping_does_not_wait() {
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let call = |argv: Vec<String>| {
+            started.lock().unwrap().push(argv.last().unwrap().clone());
+            let (running, peak) = (running.clone(), peak.clone());
+            async move {
+                peak.fetch_max(running.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                for _ in 0..1000 {
+                    tokio::task::yield_now().await;
+                }
+                running.fetch_sub(1, Ordering::SeqCst);
+                json!({ "content": [{ "type": "text", "text": "ok" }] })
+            }
+        };
+        let mut input: String = (1..=10)
+            .map(|i| {
+                request(i, "tools/call", json!({ "name": "read_page", "arguments": { "url": format!("x{i}.com") } }))
+            })
+            .collect();
+        input += &request(100, "ping", json!({}));
+        let mut out = Vec::new();
+        drive(input.as_bytes(), &mut out, call).await.unwrap();
+
+        let replies = lines_of(&out);
+        assert_eq!(replies.len(), 11, "{replies:?}");
+        // The ping is answered while the calls are still running, not after them.
+        assert_eq!(replies[0]["id"], 100);
+        assert_eq!(peak.load(Ordering::SeqCst), MAX_CALLS);
+        let urls: Vec<String> = (1..=10).map(|i| format!("x{i}.com")).collect();
+        assert_eq!(*started.lock().unwrap(), urls);
+        let mut ids: Vec<u64> = replies[1..].iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, (1..=10).collect::<Vec<u64>>());
     }
 }
