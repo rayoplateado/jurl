@@ -246,6 +246,13 @@ enum Found {
     Blocks { scores: Vec<Option<f64>>, keep: Vec<(usize, f64)>, kind: Option<(String, f64)> },
 }
 
+/// A link on a page, and how likely following it leads to the answer: `p` is the link's own score, before hops and heat.
+struct ScoredLink {
+    url: Url,
+    text: String,
+    p: f64,
+}
+
 struct Visit {
     url: Url,
     ex: Extracted,
@@ -254,7 +261,7 @@ struct Visit {
     score: f64,
     /// How close the page is to the question at all: its best block's probability of helping answer it.
     warmth: f64,
-    links: Vec<(Url, String, f64)>,
+    links: Vec<ScoredLink>,
     /// Its menus and footers, see [`menus`].
     menus: HashSet<String>,
     /// The field scores this page asked Jev for, by link (see [`FieldScores`]): the search keeps them for later pages.
@@ -337,7 +344,7 @@ async fn visit(
             .zip(scores)
             .map(|(l, p)| {
                 let menu = long && menus.contains(&links::key(&l.url));
-                (l.url, l.text, if menu { p * LONG_MENU } else { p })
+                ScoredLink { url: l.url, text: l.text, p: if menu { p * LONG_MENU } else { p } }
             })
             .collect();
         match answer {
@@ -438,7 +445,7 @@ pub async fn run(
             Err(e) if is_api_error(&e) => return Err(e),
             Err(_) => vec![0.0; links.len()],
         };
-        Ok(links.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect::<Vec<_>>())
+        Ok(links.into_iter().zip(scores).map(|(l, p)| ScoredLink { url: l.url, text: l.text, p }).collect::<Vec<_>>())
     };
     let mut known = HashSet::new();
     let mut field_scores = FieldScores::new();
@@ -466,7 +473,7 @@ pub async fn run(
     // answering in passing (a FAQ line) counts for less than a pricing page that the site lists. The start page is
     // always the first hint (inserted above), so it's taken out here.
     let mut hints = hints;
-    let start_fit = hints.remove(0).2.max(COLD_PAGE);
+    let start_fit = hints.remove(0).p.max(COLD_PAGE);
 
     // A page that answers is ranked by how sure Jev is of the answer AND of the page: a blog post from two years ago
     // can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
@@ -485,17 +492,17 @@ pub async fn run(
         // A hub page (a docs index, a category) says nothing itself but links straight to the answer: it's as warm
         // as its best link. And warmth is relative: far from the answer (Paris → … → Aspirin) every page is cold,
         // but one whose best link looks better than the link that led here is getting warmer.
-        let best_link = v.links.iter().map(|l| l.2).fold(0.0, f64::max);
+        let best_link = v.links.iter().map(|l| l.p).fold(0.0, f64::max);
         let warmer = (best_link / lead_p.max(0.05)).min(1.0);
         let heat =
             if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link).max(warmer) };
         let decay = HOP_DECAY.powi(path.len() as i32 - 1);
-        for (url, text, p) in &v.links {
+        for l in &v.links {
             leads.push(Lead {
-                url: url.clone(),
-                text: text.clone(),
-                score: p * decay * heat,
-                p: *p,
+                url: l.url.clone(),
+                text: l.text.clone(),
+                score: l.p * decay * heat,
+                p: l.p,
                 path: path.clone(),
             });
         }
@@ -508,8 +515,8 @@ pub async fn run(
     };
     let first_path = vec![first.url.clone()];
     take(first, start_fit, 1.0, first_path, &mut leads, &mut found);
-    for (url, text, p) in hints {
-        leads.push(Lead { url, text, score: p, p, path: vec![start.clone()] });
+    for l in hints {
+        leads.push(Lead { url: l.url, text: l.text, score: l.p, p: l.p, path: vec![start.clone()] });
     }
 
     let empty = Extracted {
