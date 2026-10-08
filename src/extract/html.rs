@@ -20,7 +20,8 @@ const INLINE: &[&str] = &[
 
 /// Attributes where a lazy loader keeps an image's real address while `src` holds a placeholder, in the order read.
 const LAZY_SRC: &[&str] = &["data-src", "data-lazy-src"];
-/// The full-size file a lazy loader may keep as well. The image reads it after `LAZY_SRC`, never its preview does.
+/// The full-size file a lazy loader may keep as well. The image and its preview both read it after `LAZY_SRC` and
+/// before `src`, so a placeholder `src` is never the preview of an image that has a lazy one.
 const LAZY_FULL_SIZE: &str = "data-original";
 
 pub fn html(body: &str, base: &Url) -> Extracted {
@@ -92,13 +93,11 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
         }
         let a = |k| img.value().attr(k);
         let srcsets = a("srcset").or(a("data-srcset"));
-        let src = srcsets
-            .and_then(best_srcset)
-            .or(first_attr(img, LAZY_SRC).or(a(LAZY_FULL_SIZE)).or(a("src")).map(String::from));
+        // The image's own address: a lazy loader's attribute if it has one, else `src`, which may be a placeholder.
+        let own = first_attr(img, LAZY_SRC).or(a(LAZY_FULL_SIZE)).or(a("src"));
+        let src = srcsets.and_then(best_srcset).or(own.map(String::from));
         let Some(src) = src else { continue };
-        let preview = srcsets
-            .and_then(small_srcset)
-            .or(first_attr(img, LAZY_SRC).or(a("src")).filter(|s| !s.starts_with("data:")).map(String::from));
+        let preview = srcsets.and_then(small_srcset).or(own.filter(|s| !s.starts_with("data:")).map(String::from));
         let alt = collapse(a("alt").or(a("title")).unwrap_or(""));
         let caption = figcaption(img);
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
@@ -635,5 +634,21 @@ mod tests {
         let ex = html(page, &Url::parse("https://example.com/blog/post").unwrap());
         let urls: Vec<_> = ex.images.iter().map(|i| i.url.as_str()).collect();
         assert_eq!(urls, ["https://example.com/a.png"]);
+    }
+
+    #[test]
+    fn a_lazy_image_previews_its_full_file_not_the_placeholder() {
+        let ex = html(r#"<img src="/img/blank.gif" data-original="/photos/full.jpg">"#, &base());
+        assert_eq!(ex.images.len(), 1);
+        assert_eq!(ex.images[0].url.as_str(), "https://example.com/photos/full.jpg");
+        assert_eq!(ex.images[0].preview.as_str(), "https://example.com/photos/full.jpg");
+    }
+
+    #[test]
+    fn a_lazy_image_with_a_srcset_previews_the_small_candidate() {
+        let page = r#"<img srcset="/s/small.jpg 320w, /s/big.jpg 1280w" src="/img/blank.gif" data-original="/photos/full.jpg">"#;
+        let ex = html(page, &base());
+        assert_eq!(ex.images[0].url.as_str(), "https://example.com/s/big.jpg");
+        assert_eq!(ex.images[0].preview.as_str(), "https://example.com/s/small.jpg");
     }
 }
