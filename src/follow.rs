@@ -359,10 +359,11 @@ struct Lead {
 }
 
 /// Jev compares the best leads side by side ("which of these is the next step?"): scores given to links on different
-/// pages one at a time aren't on the same scale. Returns the shortlist reordered by Jev's choice, and the share that
-/// went to "none of these" (an option so the others aren't forced to look good). `None` when Jev gives no choice: the
-/// leads keep their own order. An API error ends the search.
-async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Result<Option<(Vec<usize>, f64)>> {
+/// pages one at a time aren't on the same scale. Returns the shortlist's indices, reordered by Jev's choice, or `None`
+/// when Jev gives no choice: the leads keep their own order. "None of these" is asked too (an option so the others
+/// aren't forced to look good), but its share isn't used: the rest are ordered by their own shares. An API error ends
+/// the search.
+async fn rank_next_step(ctx: &Ctx<'_>, leads: &[&Lead]) -> Result<Option<Vec<usize>>> {
     let q = ctx.ask();
     let items: Vec<Item> = leads
         .iter()
@@ -396,7 +397,7 @@ async fn shortlist(ctx: &Ctx<'_>, leads: &[&Lead]) -> Result<Option<(Vec<usize>,
         let p = |i: usize| probs.get(&format!("o{i}")).copied().unwrap_or(0.0);
         p(y).total_cmp(&p(x))
     });
-    Ok(Some((order, probs.get("none").copied().unwrap_or(0.0))))
+    Ok(Some(order))
 }
 
 pub async fn run(
@@ -558,12 +559,12 @@ pub async fn run(
         let short: Vec<&Lead> = leads.iter().take(SHORTLIST).collect();
         // On a long trail (`--follow 10` and up) no page "is the next step" to something far away, so Jev's side-by-side
         // pick only adds noise there: the leads' own scores decide.
-        let order = if short.len() > n && max < 10 { shortlist(&site_ctx, &short).await? } else { None };
+        let order = if short.len() > n && max < 10 { rank_next_step(&site_ctx, &short).await? } else { None };
         t.lap("next");
         // "None of these leads anywhere" isn't a reason to stop: on a long trail (Paris → … → Aspirin) no single step
         // looks like it leads to the answer. It only orders the shortlist.
         let picks: Vec<usize> = match order {
-            Some((order, _)) => order.into_iter().take(n).collect(),
+            Some(order) => order.into_iter().take(n).collect(),
             None => (0..n.min(leads.len())).collect(),
         };
         let mut batch: Vec<Lead> = Vec::new();
