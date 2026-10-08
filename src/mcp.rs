@@ -19,7 +19,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufRea
 use crate::{
     cli::Args,
     config::Config,
-    output::{NotFound, Rendered},
+    output::{Rendered, is_not_found},
     timing::Timer,
 };
 
@@ -386,7 +386,7 @@ async fn run(client: &Client, argv: &[String]) -> Value {
         // probability in it, instead of the text the CLI prints. The text is what the model needs, in fewer tokens.
         Ok(r) => json!({ "content": [{ "type": "text", "text": text(&r) }] }),
         // The page was read and doesn't say it: a plain result, so the model takes it as the answer.
-        Err(e) if e.chain().any(|c| c.is::<NotFound>()) => {
+        Err(e) if is_not_found(&e) => {
             json!({ "content": [{ "type": "text", "text": format!("Not found: {e:#}") }] })
         }
         Err(e) => tool_error(&format!("jurl: {e:#}")),

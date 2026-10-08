@@ -41,9 +41,19 @@ pub(crate) fn missed(message: String, closest: Rendered) -> anyhow::Error {
     NotFound { message, closest: Some(closest) }.into()
 }
 
+/// The NotFound in `e`'s chain, if it has one (context added on top doesn't hide it).
+fn not_found_in(e: &anyhow::Error) -> Option<&NotFound> {
+    e.chain().find_map(|c| c.downcast_ref::<NotFound>())
+}
+
+/// Whether a run ended in a miss rather than a failure: the error is a NotFound, or has one in its chain.
+pub(crate) fn is_not_found(e: &anyhow::Error) -> bool {
+    not_found_in(e).is_some()
+}
+
 /// 1 when nothing was found, 2 for every failure (fetching, the API, arguments), as grep does.
 pub(crate) fn exit_code(e: &anyhow::Error) -> u8 {
-    if e.chain().any(|c| c.is::<NotFound>()) { 1 } else { 2 }
+    if is_not_found(e) { 1 } else { 2 }
 }
 
 /// What goes to stdout. A miss prints nothing, except in JSON with --precise: what came closest, with
@@ -61,7 +71,7 @@ pub(crate) fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::U
         Ok(r) if args.json => json(&r.json).map(Some),
         Ok(r) => Ok(Some(r.text.clone())),
         Err(_) if !args.json => Ok(None),
-        Err(e) => match e.chain().find_map(|c| c.downcast_ref::<NotFound>()) {
+        Err(e) => match not_found_in(e) {
             Some(NotFound { closest: Some(r), .. }) => json(&r.json).map(Some),
             Some(n) if args.precise => json(&no_answer(args, &n.message)).map(Some),
             _ => Ok(None),
@@ -106,6 +116,9 @@ mod tests {
         assert_eq!(exit_code(&missed("no answer".into(), Rendered { text: String::new(), json: json!({}) })), 1);
         assert_eq!(exit_code(&anyhow!("https://x.com returned HTTP 404 Not Found")), 2);
         assert_eq!(exit_code(&anyhow!("api.typesafe.ai → HTTP 402: no credits")), 2);
+        // The MCP reply uses the same test: a miss is a plain result, a failure a tool error.
+        assert!(is_not_found(&not_found("no image".into()).context("reading x")));
+        assert!(!is_not_found(&anyhow!("HTTP 404")));
     }
 
     #[test]
