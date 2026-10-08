@@ -319,15 +319,21 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             (Kind::Heading, Some(level), rest.trim_start_matches('#').trim().to_string())
         } else if text.starts_with("```") || text.starts_with("~~~") {
             let mut lines = text.lines();
-            let lang = lines.next().unwrap_or("").trim_matches(|c| c == '`' || c == '~').trim().to_string();
-            let body: Vec<_> = lines.collect();
-            let body = body[..body.len().saturating_sub(1)].join("\n");
+            let first = lines.next().unwrap_or("");
+            let mark = first.chars().next().unwrap_or('`');
+            let fence: String = first.chars().take_while(|&x| x == mark).collect();
+            let lang = first.trim_matches(|c| c == '`' || c == '~').trim().to_string();
+            let mut body: Vec<_> = lines.collect();
+            // Only a line that closes the fence goes: a fence still open at the end of input keeps its last line.
+            if body.last().is_some_and(|l| closes_fence(l.trim_start(), &fence)) {
+                body.pop();
+            }
             blocks.push(Block {
                 i,
                 kind: Kind::Code,
                 level: None,
                 lang: Some(lang).filter(|l| !l.is_empty()),
-                text: body,
+                text: body.join("\n"),
                 list: None,
             });
             return;
@@ -1136,6 +1142,16 @@ mod tests {
             ex.blocks
         );
         assert!(ex.blocks.iter().any(|b| b.kind == Kind::Para && b.text == "The end."), "{:?}", ex.blocks);
+    }
+
+    #[test]
+    fn an_unclosed_fence_keeps_its_last_line() {
+        let code = |md: &str| -> Vec<String> {
+            markdown(md, &base()).blocks.into_iter().filter(|b| b.kind == Kind::Code).map(|b| b.text).collect()
+        };
+        assert_eq!(code("```\nline1\nline2\n"), ["line1\nline2"]);
+        // "```js" only starts like a closing fence, so it is code too.
+        assert_eq!(code("```\nline1\n```js\n"), ["line1\n```js"]);
     }
 
     #[test]
