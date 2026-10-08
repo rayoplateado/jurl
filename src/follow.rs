@@ -807,9 +807,16 @@ async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, si
     Ok(links.into_iter().zip(scores).map(|(l, p)| ScoredLink { url: l.url, text: l.text, p }).collect())
 }
 
-/// The path as the "found after reading" line prints it: each URL without its https:// scheme, joined by arrows.
+/// The path as the "found after reading" line prints it: each URL without its http:// or https:// scheme, joined by
+/// arrows.
 fn trail(path: &[Url]) -> String {
-    path.iter().map(|u| u.as_str().trim_start_matches("https://").to_string()).collect::<Vec<_>>().join(" → ")
+    path.iter()
+        .map(|u| {
+            let s = u.as_str();
+            s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")).unwrap_or(s).to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" → ")
 }
 
 pub async fn run(
@@ -910,6 +917,12 @@ mod tests {
     fn sitemap_locs() {
         let xml = "<urlset><url><loc>https://x.com/a?b=1&amp;c=2</loc></url><url><loc> https://x.com/pricing </loc></url></urlset>";
         assert_eq!(locs(xml), ["https://x.com/a?b=1&c=2", "https://x.com/pricing"]);
+    }
+
+    #[test]
+    fn the_trail_drops_the_scheme_of_http_and_https_pages_alike() {
+        let path = [Url::parse("https://x.com/").unwrap(), Url::parse("http://docs.x.com/pricing").unwrap()];
+        assert_eq!(trail(&path), "x.com/ → docs.x.com/pricing");
     }
 
     fn u(s: &str) -> Url {
