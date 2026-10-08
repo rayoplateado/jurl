@@ -281,7 +281,7 @@ The tools run the same code as the CLI, with the same keys (`jurl init` or the e
 
 Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`. A `.env` in the current directory is read too, for those API keys only.
 
-`--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. If Clef looks at none of the images, jurl says so on stderr and the result is from text alone. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
+`--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. If Clef looks at none of the images, jurl says so on stderr and the result is from text alone. Images over 15 MB aren't read. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
 
 `JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none, and only over https or to localhost: plain http to another host is refused. [bench/models](bench/models) compares such a server's answers with Jev's.
 
@@ -293,7 +293,7 @@ As with grep, a script can tell "not there" from "something broke":
 | --- | --- |
 | 0 | Something was printed: an answer, blocks, links or images |
 | 1 | The page (or the site, with `--follow`) was read and has nothing that answers: no exact answer, no image that looks like that, nothing above `--threshold`. With `--precise --json`, the JSON is still printed (`"answer": null` and what came `closest`); without `--precise`, nothing is printed |
-| 2 | An error: the page couldn't be read (HTTP error, timeout, a block page, no readable text), the API couldn't be asked (a bad key, no credits), or the arguments are wrong |
+| 2 | An error: the page couldn't be read (HTTP error, timeout, a block page, no readable text, or over 8 MB), the API couldn't be asked (a bad key, no credits), or the arguments are wrong |
 
 Before 0.1.11 every failure exited 1, and a `--json` miss exited 0.
 

@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use futures::future::join_all;
 use reqwest::Client;
@@ -34,6 +34,8 @@ fn vision_deadline() -> Duration {
 /// Clef's latency has a long tail: if a call is slower than this, race a duplicate.
 const VISION_HEDGE: Duration = Duration::from_millis(700);
 const VISION_PX: u32 = 384;
+/// The largest image downloaded for a look: a bigger one is not read, and its look fails.
+const IMAGE_MAX: usize = 15 << 20;
 const CONTENT_KINDS: &[&str] = &["photo", "chart", "diagram", "screenshot", "illustration", "product"];
 static VISUAL_KINDS: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
     json!({
@@ -422,9 +424,12 @@ where
     if done.is_ok() { done } else { other.await }
 }
 
-/// Download and shrink to a small JPEG: fewer vision tokens, faster Clef.
+/// Download and shrink to a small JPEG: fewer vision tokens, faster Clef. An image past `IMAGE_MAX` is not read.
 async fn thumbnail(client: &Client, url: &url::Url) -> Result<String> {
-    let bytes = fetch::fetch_bytes(client, url).await?;
+    let mut res = client.get(url.as_str()).send().await?.error_for_status()?;
+    let Some(bytes) = fetch::read_capped(&mut res, IMAGE_MAX).await? else {
+        bail!("{url}: image larger than {}", fetch::size_label(IMAGE_MAX));
+    };
     tokio::task::spawn_blocking(move || -> Result<String> {
         let img = image::load_from_memory(&bytes)?;
         let img =
@@ -604,6 +609,25 @@ mod tests {
             why_no_look(&url, &timed_out, 12, 73),
             "none of the 12 images it looked at answered within 2500 ms (JURL_VISION_TIMEOUT_MS) in https://example.test/page"
         );
+    }
+
+    #[tokio::test]
+    async fn an_image_past_its_cap_is_not_read() {
+        let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_string();
+        let url = url::Url::parse(&fetch::test_server::serve(head, vec![0u8; IMAGE_MAX + 1], true)).unwrap();
+        let err = thumbnail(&fetch::test_server::client(), &url).await.unwrap_err();
+        assert!(format!("{err:#}").ends_with("image larger than 15 MB"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_small_image_is_downloaded_and_shrunk_for_clef() {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(4, 4).write_to(&mut cursor, image::ImageFormat::Png).unwrap();
+        let png = cursor.into_inner();
+        let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", png.len());
+        let url = url::Url::parse(&fetch::test_server::serve(head, png, false)).unwrap();
+        let data = thumbnail(&fetch::test_server::client(), &url).await.unwrap();
+        assert!(data.starts_with("data:image/jpeg;base64,"), "{}", data.chars().take(40).collect::<String>());
     }
 
     #[test]
