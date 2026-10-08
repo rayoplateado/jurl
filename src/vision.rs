@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use futures::future::join_all;
 use reqwest::Client;
@@ -75,10 +75,34 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         return Err(not_found(format!("no images found in {}", ctx.url)));
     }
     let clef_keys = if ctx.args.vision { Some(ClefKeys::from_config(cfg)?) } else { None };
+    let items = judge_items(ex, ctx.args.ask.as_deref());
+    let query = ctx.args.ask.as_deref().filter(|_| ctx.args.vision);
+    // One HTTP/1 connection per Clef call: multiplexing them all over a single HTTP/2
+    // connection measured ~2x slower at the tail.
+    let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
+    let req = clef_keys.as_ref().map(|keys| LookRequest {
+        http: ctx.client,
+        clef: &clef_client,
+        keys,
+        title: &ex.title,
+        query,
+    });
 
+    let (a, looks) = judge_and_look(ctx, ex, items, req.as_ref(), query, t).await?;
+    let scored = score(ex, &a, &looks, query.is_some(), ctx.args.timing);
+    let best = scored.first().map(|(i, p)| (i.url.clone(), *p));
+    let limit = ctx.args.limit(if query.is_some() { 1 } else { usize::MAX });
+    let kept = keep(scored, ctx.args.threshold(), limit);
+    if kept.is_empty() {
+        return Err(nothing_kept(ctx, &looks, query, best));
+    }
+    Ok(render(ctx, ex, &kept))
+}
+
+/// Jev's items for the text-only judgement of each image.
+fn judge_items(ex: &Extracted, ask: Option<&str>) -> Vec<Item> {
     // Text-only judgement: alt, caption, file name and size are usually enough.
-    let items = ex
-        .images
+    ex.images
         .iter()
         .map(|i| Item {
             state: json!({
@@ -91,7 +115,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
             }),
             questions: vec![(
                 image_id(i),
-                match &ctx.args.ask {
+                match ask {
                     Some(q) => noul(format!(
                         "Judging by its file name, alt text and caption, the image in `images` with i={} shows: {q}",
                         i.i
@@ -104,88 +128,92 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
                 },
             )],
         })
-        .collect();
-    let query = ctx.args.ask.as_deref().filter(|_| ctx.args.vision);
+        .collect()
+}
 
-    // Clef starts at the same time as Jev, on the first images in page order (the noise
-    // filter already dropped icons and trackers), so --vision costs max(jev, clef), not the sum.
-    // One HTTP/1 connection per Clef call: multiplexing them all over a single HTTP/2
-    // connection measured ~2x slower at the tail.
-    let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
-    let req = clef_keys.as_ref().map(|keys| LookRequest {
-        http: ctx.client,
-        clef: &clef_client,
-        keys,
-        title: &ex.title,
-        query,
-    });
+/// Jev's answers and Clef's looks. With a query and more images than Clef looks at, Jev shortlists first and Clef
+/// looks at what it ranks best; otherwise Clef starts with Jev.
+async fn judge_and_look(
+    ctx: &Ctx<'_>,
+    ex: &Extracted,
+    items: Vec<Item>,
+    req: Option<&LookRequest<'_>>,
+    query: Option<&str>,
+    t: &mut Timer,
+) -> Result<(Answers, Looks)> {
     let cap = look_cap(query);
-    let (a, looks) = if needs_shortlist(ex.images.len(), cap, query) {
+    if needs_shortlist(ex.images.len(), cap, query) {
         // Too many to look at: Jev shortlists by text, then Clef looks at the shortlist.
         let a = ctx.judge("images", items, Map::new()).await?;
         t.lap(a.label());
         let picks = shortlist(&ex.images, cap, |img| text_score(&a, img));
-        let looks = look_all(req.as_ref(), picks).await;
+        let looks = look_all(req, picks).await;
         t.lap(format!("clef({} img)", looks.len()));
-        (a, looks)
+        Ok((a, looks))
     } else {
-        let (a, looks) = tokio::join!(
-            ctx.judge("images", items, Map::new()),
-            look_all(req.as_ref(), first_in_page_order(&ex.images, cap))
-        );
+        // Clef starts at the same time as Jev, on the first images in page order (the noise
+        // filter already dropped icons and trackers), so --vision costs max(jev, clef), not the sum.
+        let (a, looks) =
+            tokio::join!(ctx.judge("images", items, Map::new()), look_all(req, first_in_page_order(&ex.images, cap)));
         let a = a?;
         t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
-        (a, looks)
-    };
+        Ok((a, looks))
+    }
+}
 
+/// Every image with its score, best first (ties keep page order). A look that failed leaves the text score; with
+/// -t, the failure is reported on stderr.
+fn score<'a>(ex: &'a Extracted, a: &Answers, looks: &Looks, searching: bool, timing: bool) -> Vec<(&'a Image, f64)> {
     let mut scored: Vec<(&Image, f64)> = ex
         .images
         .iter()
         .map(|img| {
-            let p_text = text_score(&a, img);
+            let p_text = text_score(a, img);
             let pixels = match looks.get(img.i) {
                 Some(Ok(p_pixels)) => Some(*p_pixels),
                 Some(Err(e)) => {
-                    if ctx.args.timing {
+                    if timing {
                         eprintln!("jurl: clef skipped {}: {e:#}", img.url);
                     }
                     None
                 }
                 None => None,
             };
-            (img, blend(p_text, pixels, query.is_some()))
+            (img, blend(p_text, pixels, searching))
         })
         .collect();
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored
+}
 
-    let best = scored.first().map(|(i, p)| (i.url.clone(), *p));
-    let kept: Vec<_> = scored
-        .into_iter()
-        .filter(|(_, p)| *p >= ctx.args.threshold())
-        .take(ctx.args.limit(if query.is_some() { 1 } else { usize::MAX }))
-        .collect();
+/// The images at or above the threshold, in order, up to `limit`.
+fn keep(scored: Vec<(&Image, f64)>, threshold: f64, limit: usize) -> Vec<(&Image, f64)> {
+    scored.into_iter().filter(|(_, p)| *p >= threshold).take(limit).collect()
+}
+
+/// The error for a run that kept nothing: every look failed, or a query found nothing close enough, or no content
+/// image passed the threshold.
+fn nothing_kept(ctx: &Ctx<'_>, looks: &Looks, query: Option<&str>, best: Option<(url::Url, f64)>) -> anyhow::Error {
     // Every image failed: an error, not "nothing looks like that". Clef's own errors (a bad token, no credits) say
     // Clef couldn't look; any other error is about getting the images to Clef at all.
-    if kept.is_empty()
-        && let Some(e) = looks.all_failed()
-    {
+    if let Some(e) = looks.all_failed() {
         let what = if is_api_error(e) { "Clef couldn't look at any image" } else { "couldn't download any image" };
-        bail!("{what} in {}: {e:#}", ctx.url);
+        return anyhow!("{what} in {}: {e:#}", ctx.url);
     }
-    if kept.is_empty()
-        && let (Some(q), Some((url, p))) = (query, best)
-    {
-        return Err(not_found(format!("no image in {} looks like \"{q}\" (closest: {url}, p={p:.2})", ctx.url)));
+    if let (Some(q), Some((url, p))) = (query, best) {
+        return not_found(format!("no image in {} looks like \"{q}\" (closest: {url}, p={p:.2})", ctx.url));
     }
-    if kept.is_empty() {
-        return Err(not_found(format!("no content images in {} (try a lower --threshold)", ctx.url)));
-    }
+    not_found(format!("no content images in {} (try a lower --threshold)", ctx.url))
+}
+
+/// The result: each kept image's URL on its own line, and the same images as JSON.
+fn render(ctx: &Ctx<'_>, ex: &Extracted, kept: &[(&Image, f64)]) -> Rendered {
     let v: Vec<_> = kept
         .iter()
         .map(|(i, p)| json!({ "url": i.url.as_str(), "alt": i.alt, "caption": i.caption, "p": p }))
         .collect();
     let text = kept.iter().map(|(i, _)| format!("{}\n", i.url)).collect();
-    Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }) })
+    Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }) }
 }
 
 /// How many images Clef looks at: --find (a query) looks at more.
@@ -395,6 +423,27 @@ mod tests {
         let text = |i: &Image| [0.1, 0.9, 0.5, 0.9, 0.2, 0.5][i.i];
         let picked: Vec<usize> = shortlist(&images, 4, text).iter().map(|i| i.i).collect();
         assert_eq!(picked, vec![1, 3, 2, 5]);
+    }
+
+    #[test]
+    fn the_threshold_and_the_limit_keep_the_best_first() {
+        let images: Vec<Image> = (0..4).map(image).collect();
+        let scored = vec![(&images[0], 0.9), (&images[3], 0.7), (&images[1], 0.5), (&images[2], 0.49)];
+        let kept: Vec<usize> = keep(scored.clone(), 0.5, usize::MAX).iter().map(|(i, _)| i.i).collect();
+        assert_eq!(kept, vec![0, 3, 1]);
+        let one: Vec<usize> = keep(scored, 0.5, 1).iter().map(|(i, _)| i.i).collect();
+        assert_eq!(one, vec![0]);
+    }
+
+    #[test]
+    fn each_image_is_asked_under_the_id_its_score_is_read_from() {
+        let url = url::Url::parse("https://example.test/page").unwrap();
+        let ex = crate::extract::html(r#"<p>Text</p><img src="/a.jpg" width="200" height="150">"#, &url);
+        assert_eq!(ex.images.len(), 1);
+        let items = judge_items(&ex, None);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].questions[0].0, image_id(&ex.images[0]));
+        assert_eq!(items[0].questions[0].0, "img0");
     }
 
     #[test]
