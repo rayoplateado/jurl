@@ -19,6 +19,8 @@ use crate::{
 pub(crate) const PRECISE_THRESHOLD: f64 = 0.4;
 /// Blocks below this aren't searched for an answer at all.
 pub(crate) const PRECISE_BLOCK_FLOOR: f64 = 0.1;
+/// --precise looks for the answer in the best this many blocks.
+pub(crate) const PRECISE_BLOCKS: usize = 3;
 
 /// The --precise answer: a byte range of one block's text, and how sure Jev is that it's exactly the answer.
 pub(crate) struct Pick {
@@ -29,7 +31,7 @@ pub(crate) struct Pick {
 
 /// --precise: Jev scores spans of the best blocks as the exact answer.
 pub(crate) async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, f64)], t: &mut Timer) -> Result<Pick> {
-    let top: Vec<&Block> = keep.iter().take(3).map(|&(i, _)| &ex.blocks[i]).collect();
+    let top: Vec<&Block> = keep.iter().take(PRECISE_BLOCKS).map(|&(i, _)| &ex.blocks[i]).collect();
     let spans = candidate_spans(ctx, &top)?;
     let probs = pick_span(ctx, ex, &top, &spans, t).await?;
     let scored = ranked(&spans, &probs);

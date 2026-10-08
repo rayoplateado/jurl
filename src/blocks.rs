@@ -7,13 +7,19 @@ use anyhow::{Result, bail};
 use serde_json::{Map, json};
 
 use crate::{
-    answer::{PRECISE_BLOCK_FLOOR, precise_pick, render_precise},
+    answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, precise_pick, render_precise},
     decide::choice,
     extract::{self, Block, Extracted, Kind},
     judge::{Ctx, Item, STATE_TEXT_CHARS},
     output::{Rendered, missed, not_found},
     timing::Timer,
 };
+
+/// Blocks printed when `--max` doesn't say: 12, or 5 with `-q`.
+const DEFAULT_BLOCKS: usize = 12;
+const DEFAULT_ASK_BLOCKS: usize = 5;
+/// Code blocks printed by `--code` when `--max` doesn't say.
+const DEFAULT_CODE_BLOCKS: usize = 8;
 
 /// Default mode and --code: pick blocks, print them in page order.
 pub(crate) async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {
@@ -22,16 +28,16 @@ pub(crate) async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Resu
 
     // Top-N by probability, printed in page order. Headings survive when their section does.
     let default_max = if args.code {
-        8
+        DEFAULT_CODE_BLOCKS
     } else if args.ask.is_some() {
-        5
+        DEFAULT_ASK_BLOCKS
     } else {
-        12
+        DEFAULT_BLOCKS
     };
     // --precise looks inside the best few blocks even when none of them answers on its own: whether a span of
     // them is the answer is decided next, at the span's own threshold.
     if args.precise {
-        let keep = top(&scores, PRECISE_BLOCK_FLOOR, 3);
+        let keep = top(&scores, PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS);
         if keep.is_empty() {
             return Err(not_found(format!("nothing in {} answers that", ctx.url)));
         }

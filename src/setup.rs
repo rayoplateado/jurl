@@ -10,6 +10,8 @@ use crate::{config::Config, decide};
 
 const TYPESAFE_URL: &str = "https://console.typesafe.ai";
 const CLOUDFLARE_URL: &str = "https://dash.cloudflare.com/profile/api-tokens";
+/// How much of an error's first line goes on the "that didn't work" line.
+const SHORT_ERROR_CHARS: usize = 80;
 
 fn interactive() -> bool {
     stdin().is_terminal() && stderr().is_terminal()
@@ -112,7 +114,7 @@ fn short(e: &anyhow::Error) -> String {
     let s = e.to_string();
     match s.find("HTTP ") {
         Some(i) => s[i..].split(':').next().unwrap_or("").to_string(),
-        None => s.lines().next().unwrap_or("").chars().take(80).collect(),
+        None => s.lines().next().unwrap_or("").chars().take(SHORT_ERROR_CHARS).collect(),
     }
 }
 

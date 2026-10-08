@@ -8,6 +8,10 @@ use reqwest::{Client, redirect::Policy};
 
 const REPO: &str = "https://github.com/rayoplateado/jurl";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
+/// How long `jurl update` waits for GitHub to name the latest release.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the hint about a newer jurl may take on an unknown flag: the error must not wait on the network for long.
+const HINT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How this copy was installed, read from where the binary lives.
 #[derive(Debug, PartialEq)]
@@ -76,13 +80,13 @@ fn newer(a: &str, b: &str) -> bool {
 
 /// A line to add to an "unexpected argument" error when a newer jurl is out, which may know the flag.
 pub(crate) async fn hint() -> Option<String> {
-    let latest = latest(Duration::from_secs(3)).await.ok()?;
+    let latest = latest(HINT_TIMEOUT).await.ok()?;
     newer(&latest, CURRENT)
         .then(|| format!("you have jurl {CURRENT} and {latest} is out, which may have it: run `jurl update`"))
 }
 
 pub(crate) async fn run() -> Result<()> {
-    let latest = latest(Duration::from_secs(10)).await.context("couldn't reach GitHub to check the latest release")?;
+    let latest = latest(CHECK_TIMEOUT).await.context("couldn't reach GitHub to check the latest release")?;
     if !newer(&latest, CURRENT) {
         eprintln!("jurl {CURRENT} is the latest.");
         return Ok(());

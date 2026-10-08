@@ -4,6 +4,9 @@ use clap::Parser;
 
 use crate::answer::PRECISE_THRESHOLD;
 
+/// The bar a result needs when `--threshold` isn't given.
+const DEFAULT_THRESHOLD: f64 = 0.5;
+
 /// curl, but it reads the page for you. Jev picks what matters; Clef looks at
 /// the images. Everything printed is literally in the page.
 #[derive(Parser)]
@@ -61,7 +64,7 @@ pub(crate) struct Args {
 impl Args {
     /// The probability a result needs to be kept: `--threshold`, or 0.5.
     pub(crate) fn threshold(&self) -> f64 {
-        self.threshold.unwrap_or(0.5)
+        self.threshold.unwrap_or(DEFAULT_THRESHOLD)
     }
 
     /// The same bar for a mode: `precise` is `--precise`, whose answer has its own default (`PRECISE_THRESHOLD`).

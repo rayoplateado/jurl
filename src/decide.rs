@@ -15,6 +15,15 @@ const JEV_MODEL: &str = "jev-1.13.0";
 
 const CLEF_MODEL: &str = "clef-flash";
 
+/// A 429 or 529 reply is retried this many times before it is an error.
+const MAX_RETRIES: u32 = 2;
+/// The wait before a retry when the reply has no `Retry-After`. It doubles on each retry.
+const RETRY_BASE: Duration = Duration::from_millis(300);
+/// The longest wait before a retry, even when `Retry-After` asks for more.
+const RETRY_CAP: Duration = Duration::from_secs(5);
+/// How much of a failed reply goes into the error message.
+const SNIPPET_CHARS: usize = 400;
+
 /// The Jev and Clef requests this run got replies to, and the pages it read: `usage` in `--json`. Counted per process,
 /// so `jurl mcp` (calls side by side) doesn't report it.
 pub(crate) static USAGE: Usage = Usage::new();
@@ -209,13 +218,13 @@ async fn post(client: &Client, url: &str, bearer: &str, body: &Value) -> Result<
             return parse_reply(url, &text);
         }
         let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.as_u16() == 529;
-        if retryable && attempt < 2 {
+        if retryable && attempt < MAX_RETRIES {
             let wait = res
                 .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok()?.parse::<f64>().ok())
-                .map_or(Duration::from_millis(300 << attempt), Duration::from_secs_f64);
-            tokio::time::sleep(wait.min(Duration::from_secs(5))).await;
+                .map_or(RETRY_BASE * 2u32.pow(attempt), Duration::from_secs_f64);
+            tokio::time::sleep(wait.min(RETRY_CAP)).await;
             attempt += 1;
             continue;
         }
@@ -231,7 +240,7 @@ fn parse_reply(url: &str, text: &str) -> Result<Value> {
 
 /// The start of a reply, for an error message.
 fn snippet(text: &str) -> String {
-    text.chars().take(400).collect()
+    text.chars().take(SNIPPET_CHARS).collect()
 }
 
 #[cfg(test)]

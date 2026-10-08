@@ -36,6 +36,13 @@ use crate::{
     timing::Timer,
 };
 
+/// One request's whole time: a page, an image or a model call.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long an unused connection is kept, so the ones `page` warms are still open when the calls come.
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// A JS app with less text than this (in bytes, headings aside) is rendered rather than read as it is.
+const APP_SHELL_TEXT: usize = 300;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = match Args::try_parse() {
@@ -67,8 +74,8 @@ async fn run(mut args: Args) -> Result<()> {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/",
             env!("CARGO_PKG_VERSION")
         ))
-        .timeout(Duration::from_secs(20))
-        .pool_idle_timeout(Duration::from_secs(30))
+        .timeout(HTTP_TIMEOUT)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .build()?;
     if args.url == "update" {
         return update::run().await;
@@ -194,7 +201,7 @@ pub(crate) async fn load(
 
     // A JS app with (almost) no server-rendered text: render it instead of giving up.
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
-    if !args.render && ex.app_shell && text < 300 {
+    if !args.render && ex.app_shell && text < APP_SHELL_TEXT {
         match lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await {
             Ok(bin) => {
                 eprintln!("jurl: no text without JavaScript, rendering with Lightpanda…");

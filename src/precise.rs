@@ -18,6 +18,17 @@ pub(crate) struct Span {
 /// More than this and the request stops being one cheap call.
 const MAX_CANDIDATES: usize = 200;
 const MAX_SPAN_CHARS: usize = 400;
+/// A run of tokens from a number (a value, and the words after it) is at most this many tokens.
+const MAX_VALUE_RUN: usize = 4;
+/// A name runs for at most this many words.
+const MAX_NAME_WORDS: usize = 8;
+/// A code block of at most this many lines is also a candidate whole.
+const SHORT_SNIPPET_LINES: usize = 3;
+/// The words either side of a link's answer, so the browser finds the right occurrence.
+const CONTEXT_WORDS: usize = 3;
+/// A fragment longer than this many words is linked by its first and last `FRAGMENT_EDGE_WORDS`.
+const LONG_FRAGMENT_WORDS: usize = 10;
+const FRAGMENT_EDGE_WORDS: usize = 5;
 /// Lowercase words a name or title can have inside it ("The Coal Question", "Bank of England").
 const CONNECTORS: &[&str] = &["of", "the", "and", "for", "de", "del", "la", "von", "van", "&"];
 const DANGLING: &[&str] =
@@ -118,7 +129,7 @@ fn code_spans(text: &str) -> Vec<Range<usize>> {
         out.push(start..start + line.len());
         start += line.len();
     }
-    if out.len() <= 3 {
+    if out.len() <= SHORT_SNIPPET_LINES {
         out.push(0..text.len());
     }
     out
@@ -157,7 +168,7 @@ fn prose_spans(text: &str) -> Vec<Range<usize>> {
             }
         }
         for from in starts.into_iter().flatten() {
-            for len in 1..=4 {
+            for len in 1..=MAX_VALUE_RUN {
                 let Some(end) = tokens.get(t + len - 1) else { break };
                 // "10 million included per" says less than "10 million": a run can't end on a little word.
                 if len > 1 && DANGLING.contains(&text[end.clone()].to_lowercase().trim_end_matches([',', '.']).trim()) {
@@ -185,7 +196,7 @@ fn prose_spans(text: &str) -> Vec<Range<usize>> {
         let mut end = t;
         let mut k = t + 1;
         while k < tokens.len()
-            && k - t < 8
+            && k - t < MAX_NAME_WORDS
             && same_line(&tokens[k - 1], &tokens[k])
             && !ends_sentence(&text[tokens[k - 1].clone()])
             && (capital(&tokens[k]) || connector(&tokens[k]))
@@ -517,7 +528,7 @@ pub(crate) fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
         words
             .map(|w| w.trim_matches(['*', '_', '`']))
             .take_while(|w| w.chars().any(char::is_alphanumeric) && !w.contains(['<', '[', ']', '|']))
-            .take(3)
+            .take(CONTEXT_WORDS)
             .map(String::from)
             .collect::<Vec<_>>()
     };
@@ -532,8 +543,9 @@ pub(crate) fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
         // Text fragments don't match across block boundaries in one piece: give the first and last line.
         let edge = |l: &str| enc(&words(l).join(" "));
         format!("{},{}", edge(lines[0]), edge(lines[lines.len() - 1]))
-    } else if span.len() > 10 {
-        format!("{},{}", enc(&span[..5].join(" ")), enc(&span[span.len() - 5..].join(" ")))
+    } else if span.len() > LONG_FRAGMENT_WORDS {
+        let edge = FRAGMENT_EDGE_WORDS;
+        format!("{},{}", enc(&span[..edge].join(" ")), enc(&span[span.len() - edge..].join(" ")))
     } else {
         enc(&span.join(" "))
     };
