@@ -101,11 +101,11 @@ impl Site {
     }
 }
 
-/// `robots.txt` for every crawler (`User-agent: *`) on one host: the paths jurl won't open. Patterns with wildcards are
-/// left out rather than guessed at.
+/// `robots.txt` for every crawler (`User-agent: *`) on one host: the paths jurl won't open, decided as RFC 9309 §2.2.2
+/// decides them (see [`Robots::allows`]).
 #[derive(Default)]
 struct Robots {
-    disallow: Vec<String>,
+    rules: Vec<Rule>,
 }
 
 impl Robots {
@@ -117,7 +117,7 @@ impl Robots {
     }
 
     fn parse(body: &str) -> Self {
-        let mut disallow = Vec::new();
+        let mut rules = Vec::new();
         let (mut ours, mut in_rules) = (false, false);
         for line in body.lines() {
             let line = line.split('#').next().unwrap_or("").trim();
@@ -134,19 +134,93 @@ impl Robots {
                 }
                 "disallow" | "allow" => {
                     in_rules = true;
-                    if ours && field == "disallow" && !value.is_empty() && !value.contains(['*', '$']) {
-                        disallow.push(value.to_string());
+                    // An empty pattern says nothing; a rule in no group is not one of ours.
+                    if ours && !value.is_empty() {
+                        rules.push(Rule::new(field == "allow", value));
                     }
                 }
                 _ => {}
             }
         }
-        Robots { disallow }
+        Robots { rules }
     }
 
+    /// Whether the rules allow `u`, as RFC 9309 §2.2.2 says: the rule that matches with the most octets decides, and
+    /// an allow wins a tie. No rule matching allows it, and so does `/robots.txt` itself.
     fn allows(&self, u: &Url) -> bool {
-        !self.disallow.iter().any(|d| u.path().starts_with(d.as_str()))
+        if u.path() == "/robots.txt" {
+            return true;
+        }
+        let path = match u.query() {
+            Some(query) => normalize(&format!("{}?{query}", u.path())),
+            None => normalize(u.path()),
+        };
+        self.rules.iter().filter(|r| r.matches(&path)).max_by_key(|r| (r.len, r.allow)).is_none_or(|r| r.allow)
     }
+}
+
+/// One `Allow` or `Disallow` line of the `*` group.
+struct Rule {
+    allow: bool,
+    /// The line's pattern as written, `*` and `$` included: its length is the octets a match is judged by.
+    len: usize,
+    /// The pattern between its `*`s, each piece in the form [`normalize`] gives it.
+    pieces: Vec<String>,
+    /// The pattern ends in `$`: the match must reach the end of the path and query.
+    anchored: bool,
+}
+
+impl Rule {
+    fn new(allow: bool, pattern: &str) -> Self {
+        let (body, anchored) = match pattern.strip_suffix('$') {
+            Some(body) => (body, true),
+            None => (pattern, false),
+        };
+        Rule { allow, len: pattern.len(), pieces: body.split('*').map(normalize).collect(), anchored }
+    }
+
+    /// Whether the pattern matches the start of `path` (normalized, with its query): the first piece is a prefix, each
+    /// middle piece is found after the one before, and the last piece is at the end when the pattern is anchored, or
+    /// anywhere after the rest when it is not.
+    fn matches(&self, path: &str) -> bool {
+        let Some((first, rest)) = self.pieces.split_first() else { return false };
+        let Some(mut at) = path.strip_prefix(first.as_str()) else { return false };
+        let Some((last, middle)) = rest.split_last() else { return !self.anchored || at.is_empty() };
+        for piece in middle {
+            let Some(i) = at.find(piece.as_str()) else { return false };
+            at = &at[i + piece.len()..];
+        }
+        if self.anchored { at.ends_with(last.as_str()) } else { at.contains(last.as_str()) }
+    }
+}
+
+/// `s` as RFC 9309 §2.2.2 compares a path: an unreserved octet (a letter, a digit, `-`, `.`, `_` or `~`) is itself,
+/// raw or percent-encoded, and every other octet is percent-encoded in upper-case hex. So `/foo/bar/ツ` and
+/// `/foo/bar/%E3%83%84` are the same path, and `%62` is `b`. Both the rules and the URL are compared in this form.
+fn normalize(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let (octet, next) = match (bytes[i], bytes.get(i + 1), bytes.get(i + 2)) {
+            (b'%', Some(&h), Some(&l)) if h.is_ascii_hexdigit() && l.is_ascii_hexdigit() => {
+                (hex_value(h) * 16 + hex_value(l), i + 3)
+            }
+            (octet, _, _) => (octet, i + 1),
+        };
+        if octet.is_ascii_alphanumeric() || matches!(octet, b'-' | b'.' | b'_' | b'~') {
+            out.push(octet as char);
+        } else {
+            out.push_str(&format!("%{octet:02X}"));
+        }
+        i = next;
+    }
+    out
+}
+
+/// The value of a hex digit (checked by the caller).
+fn hex_value(digit: u8) -> u8 {
+    (digit as char).to_digit(16).unwrap_or_default() as u8
 }
 
 /// The key a host's `robots.txt` is kept under: the host without `www.`, as [`Site`] counts hosts.
@@ -917,6 +991,105 @@ mod tests {
         assert!(!r.allows(&Url::parse("https://x.com/admin/users").unwrap()));
         assert!(r.allows(&Url::parse("https://x.com/g/page").unwrap()));
         assert!(r.allows(&Url::parse("https://x.com/pricing").unwrap()));
+    }
+
+    /// RFC 9309 §5.1's example file, rules verbatim: its `*` group is jurl's, and the named groups after it are not.
+    const RFC_5_1: &str = "User-Agent: *\nDisallow: *.gif$\nDisallow: /example/\nAllow: /publications/\n\n\
+        User-Agent: foobot\nDisallow:/\nAllow:/example/page.html\nAllow:/example/allowed.gif\n\n\
+        User-Agent: barbot\nUser-Agent: bazbot\nDisallow: /example/page.html\n\nUser-Agent: quxbot\n";
+
+    /// Whether the `*` group of `robots` allows `path` on x.com.
+    fn allowed(robots: &str, path: &str) -> bool {
+        Robots::parse(robots).allows(&Url::parse(&format!("https://x.com{path}")).unwrap())
+    }
+
+    #[test]
+    fn the_simple_example_of_rfc_9309_is_jurls_rules() {
+        assert!(allowed(RFC_5_1, "/publications/paper.html"));
+        assert!(!allowed(RFC_5_1, "/example/page.html"));
+        assert!(!allowed(RFC_5_1, "/images/logo.gif"));
+        // `$` ends the match at the end of the path and query: a `.gif` with a query isn't one.
+        assert!(allowed(RFC_5_1, "/images/logo.gif?v=2"));
+        // The longer Allow beats `*.gif$` for a file under /publications/.
+        assert!(allowed(RFC_5_1, "/publications/chart.gif"));
+        // foobot's `Disallow:/` is not jurl's rule.
+        assert!(allowed(RFC_5_1, "/index.html"));
+    }
+
+    #[test]
+    fn the_longest_match_wins_whatever_the_order_as_in_rfc_9309_5_2() {
+        let rules = "User-Agent: *\nAllow: /example/page/\nDisallow: /example/page/disallowed.gif\n";
+        assert!(!allowed(rules, "/example/page/disallowed.gif"));
+        assert!(allowed(rules, "/example/page/disallow.gif"));
+        let reversed = "User-Agent: *\nDisallow: /example/page/disallowed.gif\nAllow: /example/page/\n";
+        assert!(!allowed(reversed, "/example/page/disallowed.gif"));
+    }
+
+    #[test]
+    fn an_allow_and_a_disallow_of_equal_length_allow() {
+        // RFC 9309 §2.2.2: "If an 'allow' rule and a 'disallow' rule are equivalent, then the 'allow' rule SHOULD be
+        // used."
+        let rules = "User-Agent: *\nDisallow: /folder\nAllow: /folder\n";
+        assert!(allowed(rules, "/folder/page.html"));
+    }
+
+    #[test]
+    fn a_rule_matches_from_the_first_octet_and_case_counts() {
+        // RFC 9309 §2.2.2: the match starts with the first octet of the path, and it is case sensitive.
+        let rules = "User-Agent: *\nDisallow: /fish\n";
+        assert!(!allowed(rules, "/fish"));
+        assert!(!allowed(rules, "/fish.html"));
+        assert!(!allowed(rules, "/fishheads/yummy.html"));
+        assert!(allowed(rules, "/Fish.asp"));
+        assert!(allowed(rules, "/catfish"));
+    }
+
+    #[test]
+    fn a_star_is_any_sequence_and_a_dollar_ends_the_pattern() {
+        // RFC 9309 §2.2.3, Figure 5.
+        let exact = "User-Agent: *\nDisallow: /this/path/exactly$\n";
+        assert!(!allowed(exact, "/this/path/exactly"));
+        assert!(allowed(exact, "/this/path/exactly/"));
+        assert!(allowed(exact, "/this/path/exactly?x=1"));
+        let star = "User-Agent: *\nDisallow: /this/*/exactly\n";
+        assert!(!allowed(star, "/this/a/b/exactly/more"));
+        assert!(allowed(star, "/this/exactly"));
+    }
+
+    #[test]
+    fn the_query_is_part_of_what_a_rule_matches() {
+        assert!(!allowed("User-Agent: *\nDisallow: /*?q=\n", "/search?q=shoes"));
+        assert!(allowed("User-Agent: *\nDisallow: /*?q=\n", "/search"));
+        assert!(allowed("User-Agent: *\nDisallow: /*.php$\n", "/index.php?x=1"));
+        assert!(!allowed("User-Agent: *\nDisallow: /*.php$\n", "/index.php"));
+    }
+
+    #[test]
+    fn percent_encoding_is_compared_as_rfc_9309_figure_4_has_it() {
+        assert!(!allowed("User-Agent: *\nDisallow: /foo/bar/ツ\n", "/foo/bar/%E3%83%84"));
+        assert!(!allowed("User-Agent: *\nDisallow: /foo/bar/%E3%83%84\n", "/foo/bar/ツ"));
+        assert!(!allowed("User-Agent: *\nDisallow: /foo/bar/%62%61%7A\n", "/foo/bar/baz"));
+        assert!(!allowed(
+            "User-Agent: *\nDisallow: /foo/bar?baz=https://foo.bar\n",
+            "/foo/bar?baz=https%3A%2F%2Ffoo.bar"
+        ));
+    }
+
+    #[test]
+    fn an_escaped_star_or_dollar_matches_the_one_it_escapes() {
+        // RFC 9309 §2.2.3, Figure 6: `%2A` is a `*` in the URL and `%24` a `$`.
+        let rules = "User-Agent: *\nDisallow: /path/file-with-a-%2A.html\nDisallow: /path/foo-%24\n";
+        assert!(!allowed(rules, "/path/file-with-a-*.html"));
+        assert!(!allowed(rules, "/path/foo-$"));
+    }
+
+    #[test]
+    fn robots_txt_is_always_allowed_and_a_rule_in_no_group_is_ignored() {
+        // RFC 9309 §2.2.2: /robots.txt is implicitly allowed.
+        assert!(allowed("User-Agent: *\nDisallow: /\n", "/robots.txt"));
+        assert!(!allowed("User-Agent: *\nDisallow: /\n", "/pricing"));
+        // §2.2.2: a rule before any user-agent line is in no group, and is ignored.
+        assert!(allowed("Disallow: /\nUser-Agent: *\nAllow: /\n", "/pricing"));
     }
 
     #[test]
