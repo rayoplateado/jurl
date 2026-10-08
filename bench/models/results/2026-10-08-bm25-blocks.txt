@@ -1,0 +1,365 @@
+blocks purpose: 824,556 tokens over 2,740,265 request chars = 0.3009 tokens/char; all input tokens in base-all: 2,061,780
+real-world tokens: company 393,420, support 173,266, product 362,517, docs 478,860, es 239,303, trap 321,972; all 1,969,338 (95.5% of base-all); unattributed real-world-question tokens 92,442
+!! answer page https://help.kagi.com/kagi/support-and-community/ has no block visit
+
+real-world searches 30; page visits 101; candidate block questions 5,650
+visits with a second full request pass (first pass used): [('https://usal.es/', 2)]
+answered real-world searches: 24 (trap searches have no answer and are left out)
+
+=== mode bm25: BM25 top-K (ties by block i)
+  K group     pages  filt  q saved  tok saved   %ALL   %grp  top3 kept  (pos)  maxp kept  (pos)  ans kept  (pos)
+ 20 company      20    10    56.2%     60,381  2.93% 15.35%      13/19      1       5/10      0       4/6      0
+ 20 support      10     5    58.6%     30,961  1.50% 17.87%        4/5      0        2/5      0       3/3      0
+ 20 product      14    12    78.1%    134,238  6.51% 37.03%      18/24      1       9/12      1       5/5      0
+ 20 docs         22    13    81.6%    148,362  7.20% 30.98%      14/26      0       7/13      0       3/6      0
+ 20 es           13    10    68.6%     50,335  2.44% 21.03%      12/12      1      10/10      2       4/4      0
+ 20 trap         22    13    54.7%     57,377  2.78% 17.82%        1/4      1      11/13      8       0/0      0
+ 20 all         101    63    70.5%    481,654 23.36% 24.46%      62/90      4      44/63     11     19/24      0
+    K=20: kept per filtered page 20.0 on average; max-p block dropped on 19 of 63 filtered pages (mean loss 0.205 p)
+ 30 company      20     8    43.9%     47,794  2.32% 12.15%      15/16      3        6/8      1       5/6      0
+ 30 support      10     5    46.2%     23,689  1.15% 13.67%        4/5      0        3/5      1       3/3      0
+ 30 product      14     7    70.1%    121,149  5.88% 33.42%      17/21      1        4/7      0       5/5      0
+ 30 docs         22    10    75.4%    137,314  6.66% 28.68%      16/24      2       5/10      1       3/6      0
+ 30 es           13     6    57.9%     42,036  2.04% 17.57%        7/7      0        6/6      0       4/4      0
+ 30 trap         22     9    41.1%     42,210  2.05% 13.11%        1/4      1        8/9      6       0/0      0
+ 30 all         101    45    61.1%    414,191 20.09% 21.03%      60/77      7      32/45      9     20/24      0
+    K=30: kept per filtered page 30.0 on average; max-p block dropped on 13 of 45 filtered pages (mean loss 0.275 p)
+ 40 company      20     7    34.1%     37,554  1.82%  9.55%      12/13      3        5/7      1       5/6      0
+ 40 support      10     4    33.7%     17,320  0.84% 10.00%        4/5      0        2/4      0       3/3      0
+ 40 product      14     5    65.3%    112,612  5.46% 31.06%      14/15      0        5/5      0       5/5      0
+ 40 docs         22     8    70.4%    128,186  6.22% 26.77%      12/19      0        3/8      0       3/6      0
+ 40 es           13     5    50.1%     35,291  1.71% 14.75%        4/4      0        5/5      0       4/4      0
+ 40 trap         22     5    30.9%     31,789  1.54%  9.87%        1/4      1        4/5      3       0/0      0
+ 40 all         101    34    53.9%    362,751 17.59% 18.42%      47/60      4      24/34      4     20/24      0
+    K=40: kept per filtered page 40.0 on average; max-p block dropped on 10 of 34 filtered pages (mean loss 0.340 p)
+ 60 company      20     3    20.7%     22,123  1.07%  5.62%        3/4      0        2/3      1       5/6      0
+ 60 support      10     3    14.6%      7,756  0.38%  4.48%        4/5      0        2/3      0       3/3      0
+ 60 product      14     5    57.0%     97,255  4.72% 26.83%      14/15      0        5/5      0       5/5      0
+ 60 docs         22     8    61.6%    112,786  5.47% 23.55%      17/19      4        6/8      2       5/6      1
+ 60 es           13     3    38.8%     24,789  1.20% 10.36%        4/4      0        3/3      0       4/4      0
+ 60 trap         22     3    20.0%     20,558  1.00%  6.39%        2/3      0        3/3      2       0/0      0
+ 60 all         101    25    43.3%    285,267 13.84% 14.49%      44/50      4      21/25      5     22/24      1
+    K=60: kept per filtered page 60.0 on average; max-p block dropped on 4 of 25 filtered pages (mean loss 0.547 p)
+
+=== mode digits: BM25 top-K, plus every digit/currency block when the question asks for a number
+  K group     pages  filt  q saved  tok saved   %ALL   %grp  top3 kept  (pos)  maxp kept  (pos)  ans kept  (pos)
+ 20 company      20    10    45.3%     47,068  2.28% 11.96%      16/19      2       8/10      1       5/6      0
+ 20 support      10     5    53.6%     29,428  1.43% 16.98%        4/5      0        2/5      0       3/3      0
+ 20 product      14    12    64.2%    112,005  5.43% 30.90%      19/24      1       9/12      1       5/5      0
+ 20 docs         22    13    81.6%    148,362  7.20% 30.98%      14/26      0       7/13      0       3/6      0
+ 20 es           13    10    68.6%     50,335  2.44% 21.03%      12/12      1      10/10      2       4/4      0
+ 20 trap         22    13    54.7%     57,377  2.78% 17.82%        1/4      1      11/13      8       0/0      0
+ 20 all         101    63    65.8%    444,576 21.56% 22.57%      66/90      5      47/63     12     20/24      0
+    K=20: kept per filtered page 24.2 on average; max-p block dropped on 16 of 63 filtered pages (mean loss 0.237 p)
+ 30 company      20     8    35.6%     37,095  1.80%  9.43%      15/16      3        6/8      1       5/6      0
+ 30 support      10     5    41.4%     22,233  1.08% 12.83%        4/5      0        3/5      1       3/3      0
+ 30 product      14     7    57.4%    100,848  4.89% 27.82%      17/21      1        4/7      0       5/5      0
+ 30 docs         22    10    75.4%    137,314  6.66% 28.68%      16/24      2       5/10      1       3/6      0
+ 30 es           13     6    57.9%     42,036  2.04% 17.57%        7/7      0        6/6      0       4/4      0
+ 30 trap         22     9    41.1%     42,210  2.05% 13.11%        1/4      1        8/9      6       0/0      0
+ 30 all         101    45    57.0%    381,735 18.51% 19.38%      60/77      7      32/45      9     20/24      0
+    K=30: kept per filtered page 35.2 on average; max-p block dropped on 13 of 45 filtered pages (mean loss 0.275 p)
+ 40 company      20     7    27.5%     28,593  1.39%  7.27%      12/13      3        5/7      1       5/6      0
+ 40 support      10     4    29.0%     15,864  0.77%  9.16%        4/5      0        2/4      0       3/3      0
+ 40 product      14     5    53.8%     94,303  4.57% 26.01%      14/15      0        5/5      0       5/5      0
+ 40 docs         22     8    70.4%    128,186  6.22% 26.77%      12/19      0        3/8      0       3/6      0
+ 40 es           13     5    50.1%     35,291  1.71% 14.75%        4/4      0        5/5      0       4/4      0
+ 40 trap         22     5    30.9%     31,789  1.54%  9.87%        1/4      1        4/5      3       0/0      0
+ 40 all         101    34    50.3%    334,024 16.20% 16.96%      47/60      4      24/34      4     20/24      0
+    K=40: kept per filtered page 46.1 on average; max-p block dropped on 10 of 34 filtered pages (mean loss 0.340 p)
+ 60 company      20     3    16.2%     16,669  0.81%  4.24%        3/4      0        2/3      1       5/6      0
+ 60 support      10     3    12.9%      7,193  0.35%  4.15%        4/5      0        2/3      0       3/3      0
+ 60 product      14     5    48.6%     85,006  4.12% 23.45%      14/15      0        5/5      0       5/5      0
+ 60 docs         22     8    61.6%    112,786  5.47% 23.55%      17/19      4        6/8      2       5/6      1
+ 60 es           13     3    38.8%     24,789  1.20% 10.36%        4/4      0        3/3      0       4/4      0
+ 60 trap         22     3    20.0%     20,558  1.00%  6.39%        2/3      0        3/3      2       0/0      0
+ 60 all         101    25    40.8%    267,000 12.95% 13.56%      44/50      4      21/25      5     22/24      1
+    K=60: kept per filtered page 65.6 on average; max-p block dropped on 4 of 25 filtered pages (mean loss 0.547 p)
+
+=== mode pos: baseline with no BM25: the first K candidates in page order
+  K group     pages  filt  q saved  tok saved   %ALL   %grp  top3 kept  (pos)  maxp kept  (pos)  ans kept  (pos)
+ 20 company      20    10    56.2%     61,283  2.97% 15.58%       7/19      3       3/10      1       4/6      0
+ 20 support      10     5    58.6%     32,899  1.60% 18.99%        3/5      0        2/5      1       3/3      0
+ 20 product      14    12    78.1%    135,957  6.59% 37.50%       8/24      1       7/12      1       4/5      0
+ 20 docs         22    13    81.6%    150,214  7.29% 31.37%       7/26      3       5/13      1       3/6      0
+ 20 es           13    10    68.6%     54,353  2.64% 22.71%       5/12      1       7/10      2       3/4      0
+ 20 trap         22    13    54.7%     57,921  2.81% 17.99%        1/4      1      11/13      9       0/0      0
+ 20 all         101    63    70.5%    492,627 23.89% 25.01%      31/90      9      35/63     15     17/24      0
+    K=20: kept per filtered page 20.0 on average; max-p block dropped on 28 of 63 filtered pages (mean loss 0.453 p)
+ 30 company      20     8    43.9%     48,220  2.34% 12.26%      11/16      3        4/8      1       4/6      0
+ 30 support      10     5    46.2%     26,456  1.28% 15.27%        3/5      0        2/5      1       3/3      0
+ 30 product      14     7    70.1%    123,573  5.99% 34.09%       5/21      1        2/7      0       4/5      0
+ 30 docs         22    10    75.4%    138,830  6.73% 28.99%      15/24      5       7/10      2       5/6      1
+ 30 es           13     6    57.9%     46,161  2.24% 19.29%        3/7      0        4/6      0       3/4      0
+ 30 trap         22     9    41.1%     42,556  2.06% 13.22%        1/4      1        7/9      6       0/0      0
+ 30 all         101    45    61.1%    425,796 20.65% 21.62%      38/77     10      26/45     10     19/24      1
+    K=30: kept per filtered page 30.0 on average; max-p block dropped on 19 of 45 filtered pages (mean loss 0.392 p)
+ 40 company      20     7    34.1%     37,747  1.83%  9.59%       8/13      3        4/7      2       4/6      0
+ 40 support      10     4    33.7%     19,089  0.93% 11.02%        3/5      0        1/4      0       3/3      0
+ 40 product      14     5    65.3%    116,313  5.64% 32.08%       0/15      0        0/5      0       4/5      0
+ 40 docs         22     8    70.4%    129,664  6.29% 27.08%      11/19      4        6/8      2       5/6      1
+ 40 es           13     5    50.1%     38,923  1.89% 16.27%        0/4      0        3/5      0       3/4      0
+ 40 trap         22     5    30.9%     31,774  1.54%  9.87%        1/4      1        3/5      3       0/0      0
+ 40 all         101    34    53.9%    373,510 18.12% 18.97%      23/60      8      17/34      7     19/24      1
+    K=40: kept per filtered page 40.0 on average; max-p block dropped on 17 of 34 filtered pages (mean loss 0.429 p)
+ 60 company      20     3    20.7%     22,061  1.07%  5.61%        3/4      0        2/3      1       5/6      0
+ 60 support      10     3    14.6%      8,267  0.40%  4.77%        3/5      0        1/3      0       3/3      0
+ 60 product      14     5    57.0%    103,870  5.04% 28.65%       0/15      0        0/5      0       4/5      0
+ 60 docs         22     8    61.6%    114,918  5.57% 24.00%      16/19      5        7/8      3       5/6      1
+ 60 es           13     3    38.8%     28,971  1.41% 12.11%        0/4      0        1/3      0       3/4      0
+ 60 trap         22     3    20.0%     20,561  1.00%  6.39%        0/3      0        2/3      2       0/0      0
+ 60 all         101    25    43.3%    298,648 14.48% 15.16%      22/50      5      13/25      6     20/24      1
+    K=60: kept per filtered page 60.0 on average; max-p block dropped on 12 of 25 filtered pages (mean loss 0.526 p)
+
+=== answer block per answered real-world search
+[company] hetzner.com              '1997' rule rule 1 n=  9 bm25 rank 1 score 1.29 p 0.98 | Hetzner is a German IT company and one of Europe’s largest and most trusted int…
+[company] santander.com            '1857' rule rule 1 n=117 bm25 rank 21 score 1.42 p 0.98 | On 15 May 1857, Queen Isabella II of Spain signed a Royal Decree authorising th…
+[company] bitwarden.com            'Santa Barbara, CA 9310' rule rule 1 n= 18 bm25 rank 1 score 0.86 p 0.99 | Bitwarden, Inc. 1 North Calle Cesar Chavez, Suite 102 Santa Barbara, CA 93103 U…
+[company] proton.me                '2014' rule rule 1 n=  7 bm25 rank 2 score 0.68 p 0.98 | Proton was born in Switzerland in 2014 when a team of scientists who met at CER…
+[company] basecamp.com             'Jason Fried' rule rule 1 n= 18 bm25 rank 2 score 1.15 p 0.84 | Jason Fried, jason@basecamp.com
+[company] brave.com                '48 2nd St, Floor 3, Sa' rule rule 1 n=136 bm25 rank 65 score 0.53 p 0.98 | Brave has offices in San Francisco and London, and staff members all over the w…
+[support] mullvad.net              'support@mullvadvpn.net' rule rule 1 n= 10 bm25 rank 1 score 4.48 p 0.7 | From now on, our Support Team can be reached at a new email address: support@mu…
+[support] www.ikea.com/us/en/      '365 days' rule rule 1 n= 12 bm25 rank 1 score 7.79 p 0.99 | If you’re not totally satisfied with your IKEA purchase you can return new and …
+[support] plausible.io             'Email hello@plausible.' rule rule 1 n= 80 bm25 rank 11 score 3.24 p 0.96 | Still stuck? Email hello@plausible.io
+[product] obsidian.md              '5 MB maximum file size' rule rule 1 n= 22 bm25 rank 1 score 4.90 p 0.98 | Sign up 1 synced vault 1 GB total storage 5 MB maximum file size 1 month versio…
+[product] telegram.org             '2 GB' rule rule 1 n=400 bm25 rank 1 score 11.72 p 0.97 | File sharing Send and receive files of any type, up to 2 GB in size each (or 4 …
+[product] mega.io                  '20 GB' rule rule 1 n= 31 bm25 rank 5 score 2.45 p 0.95 | 1.25 * per TB per month 20 GB free storage End-to-end encryption Password manag…
+[product] sync.com                 '5 GB' rule rule 1 n= 15 bm25 rank 3 score 2.54 p 0.95 | Compare Plans Get 5 GB Free
+[product] dropbox.com              '2,000 GB' rule rule 1 n=  7 bm25 rank 1 score 2.42 p 0.98 | Dropbox Plus gives you 2,000 GB of encrypted cloud storage for photos, videos, …
+[docs] vite.dev/guide/          '`5173`' rule rule 1 n=105 bm25 rank 43 score 2.06 p 0.98 | * **Type:** `number` * **Default:** `5173`
+[docs] gohugo.io/documentation/ '-p, --port int        ' rule rule 2 n= 10 bm25 rank 2 score 1.84 p 0.14 | --appendPort append port to baseURL (default true) -b, --baseURL string hostnam…
+[docs] prometheus.io/docs/intro '0.0.0.0:9090' rule rule 1 n=  2 bm25 rank 1 score 3.23 p 0.97 | | Flag | Description | Default | | -h, --help | Show context-sensitive help (al…
+[docs] caddyserver.com/docs/    'localhost:2019' rule rule 1 n=304 bm25 rank 4 score 7.50 p 0.98 | Default: localhost:2019, unless the CADDY_ADMIN environment variable is set.
+[docs] docs.djangoproject.com/e '2621440 (i.e. 2.5 MB)' rule rule 1 n=715 bm25 rank 264 score 1.96 p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+[docs] grafana.com/docs/grafana '3000' rule rule 1 n=143 bm25 rank 60 score 0.00 p 0.95 | Browse to http://localhost:3000.
+[es] usal.es                  '1218' rule rule 1 n= 21 bm25 rank 3 score 2.99 p 0.97 | Alfonso IX de León quiso tener estudios superiores en su reino y por ello creó …
+[es] once.es                  '1938' rule rule 1 n=  9 bm25 rank 2 score 3.26 p 0.87 | Así, tras un periodo de puesta en común y negociación con la Administración de …
+[es] cabify.com/es            '2011' rule rule 1 n= 25 bm25 rank 2 score 2.95 p 0.96 | Nacimos en Madrid (España) en 2011 y hemos sido pioneros en la creación de una …
+[es] docs.python.org/es/3/    '1000' rule rule 1 n=132 bm25 rank 1 score 7.75 p 0.98 | Cuando esta variable se establece en un valor entero, determina el número máxim…
+
+=== answer misses (answer page cut, answer block dropped)
+K=20 bm25: 5
+  [company] santander.com | In what year was Santander founded? | block 59 of 117 | bm25 rank 21 score 1.42 | p 0.98 | On 15 May 1857, Queen Isabella II of Spain signed a Royal Decree authorising the incorporation of Banco Santa…
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [docs] vite.dev/guide/ | What port does the Vite dev server use by default? | block 27 of 105 | bm25 rank 43 score 2.06 | p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | What port does Grafana listen on by default? | block 31 of 143 | bm25 rank 60 score 0.00 | p 0.95 | Browse to http://localhost:3000.
+K=20 digits: 4
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [docs] vite.dev/guide/ | What port does the Vite dev server use by default? | block 27 of 105 | bm25 rank 43 score 2.06 | p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | What port does Grafana listen on by default? | block 31 of 143 | bm25 rank 60 score 0.00 | p 0.95 | Browse to http://localhost:3000.
+K=20 pos: 7
+  [company] santander.com | In what year was Santander founded? | block 59 of 117 | bm25 rank 21 score 1.42 | p 0.98 | On 15 May 1857, Queen Isabella II of Spain signed a Royal Decree authorising the incorporation of Banco Santa…
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [product] telegram.org | What is the largest file you can send on Telegram without Premium? | block 221 of 400 | bm25 rank 1 score 11.72 | p 0.97 | File sharing Send and receive files of any type, up to 2 GB in size each (or 4 GB with Premium), access them …
+  [docs] caddyserver.com/docs/ | What is the default address of Caddy's admin endpoint? | block 38 of 304 | bm25 rank 4 score 7.50 | p 0.98 | Default: localhost:2019, unless the CADDY_ADMIN environment variable is set.
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | What port does Grafana listen on by default? | block 31 of 143 | bm25 rank 60 score 0.00 | p 0.95 | Browse to http://localhost:3000.
+  [es] docs.python.org/es/3/ | ¿Cuál es el valor predeterminado de sys.tracebacklimit? | block 189 of 132 | bm25 rank 1 score 7.75 | p 0.98 | Cuando esta variable se establece en un valor entero, determina el número máximo de niveles de información de…
+K=30 bm25: 4
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [docs] vite.dev/guide/ | What port does the Vite dev server use by default? | block 27 of 105 | bm25 rank 43 score 2.06 | p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | What port does Grafana listen on by default? | block 31 of 143 | bm25 rank 60 score 0.00 | p 0.95 | Browse to http://localhost:3000.
+K=30 digits: 4
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [docs] vite.dev/guide/ | What port does the Vite dev server use by default? | block 27 of 105 | bm25 rank 43 score 2.06 | p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | What port does Grafana listen on by default? | block 31 of 143 | bm25 rank 60 score 0.00 | p 0.95 | Browse to http://localhost:3000.
+K=30 pos: 5
+  [company] santander.com | In what year was Santander founded? | block 59 of 117 | bm25 rank 21 score 1.42 | p 0.98 | On 15 May 1857, Queen Isabella II of Spain signed a Royal Decree authorising the incorporation of Banco Santa…
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [product] telegram.org | What is the largest file you can send on Telegram without Premium? | block 221 of 400 | bm25 rank 1 score 11.72 | p 0.97 | File sharing Send and receive files of any type, up to 2 GB in size each (or 4 GB with Premium), access them …
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [es] docs.python.org/es/3/ | ¿Cuál es el valor predeterminado de sys.tracebacklimit? | block 189 of 132 | bm25 rank 1 score 7.75 | p 0.98 | Cuando esta variable se establece en un valor entero, determina el número máximo de niveles de información de…
+K=40 bm25: 4
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [docs] vite.dev/guide/ | What port does the Vite dev server use by default? | block 27 of 105 | bm25 rank 43 score 2.06 | p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | What port does Grafana listen on by default? | block 31 of 143 | bm25 rank 60 score 0.00 | p 0.95 | Browse to http://localhost:3000.
+K=40 digits: 4
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [docs] vite.dev/guide/ | What port does the Vite dev server use by default? | block 27 of 105 | bm25 rank 43 score 2.06 | p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | What port does Grafana listen on by default? | block 31 of 143 | bm25 rank 60 score 0.00 | p 0.95 | Browse to http://localhost:3000.
+K=40 pos: 5
+  [company] santander.com | In what year was Santander founded? | block 59 of 117 | bm25 rank 21 score 1.42 | p 0.98 | On 15 May 1857, Queen Isabella II of Spain signed a Royal Decree authorising the incorporation of Banco Santa…
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [product] telegram.org | What is the largest file you can send on Telegram without Premium? | block 221 of 400 | bm25 rank 1 score 11.72 | p 0.97 | File sharing Send and receive files of any type, up to 2 GB in size each (or 4 GB with Premium), access them …
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [es] docs.python.org/es/3/ | ¿Cuál es el valor predeterminado de sys.tracebacklimit? | block 189 of 132 | bm25 rank 1 score 7.75 | p 0.98 | Cuando esta variable se establece en un valor entero, determina el número máximo de niveles de información de…
+K=60 bm25: 2
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+K=60 digits: 2
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+K=60 pos: 4
+  [company] brave.com | Where is Brave headquartered? | block 175 of 136 | bm25 rank 65 score 0.53 | p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd…
+  [product] telegram.org | What is the largest file you can send on Telegram without Premium? | block 221 of 400 | bm25 rank 1 score 11.72 | p 0.97 | File sharing Send and receive files of any type, up to 2 GB in size each (or 4 GB with Premium), access them …
+  [docs] docs.djangoproject.com/en/stable/ | What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | block 290 of 715 | bm25 rank 264 score 1.96 | p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [es] docs.python.org/es/3/ | ¿Cuál es el valor predeterminado de sys.tracebacklimit? | block 189 of 132 | bm25 rank 1 score 7.75 | p 0.98 | Cuando esta variable se establece en un valor entero, determina el número máximo de niveles de información de…
+
+=== digit rule trigger (real-world questions)
+  YES How many days do I have to return new, unopened products to IKEA?
+  YES How much free storage does MEGA include?
+  YES How much free storage does Sync include?
+  YES How much storage does Dropbox Plus include?
+  YES In what year was Hetzner founded?
+  YES In what year was Proton founded?
+  YES In what year was Santander founded?
+  no  What email address do I use to get help from Plausible?
+  YES What is 1Password's support phone number?
+  no  What is Fastmail's CEO's salary?
+  no  What is Kagi's support email address?
+  no  What is Mullvad's support email address?
+  no  What is the default address of Caddy's admin endpoint?
+  no  What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting?
+  no  What is the default value of Prometheus's --web.listen-address flag?
+  no  What is the largest file you can send on Telegram without Premium?
+  YES What is the maximum file size on Obsidian Sync's Standard plan?
+  no  What port does Grafana listen on by default?
+  no  What port does hugo server listen on by default?
+  no  What port does the Vite dev server use by default?
+  no  What was Canonical's revenue in 2024?
+  no  What was Doist's revenue in 2024?
+  no  Where does pCloud's CEO live?
+  no  Where is Bitwarden's corporate headquarters?
+  no  Where is Brave headquartered?
+  no  Who is the CEO of Basecamp?
+  no  ¿Cuál es el valor predeterminado de sys.tracebacklimit?
+  no  ¿En qué año nació Cabify?
+  no  ¿En qué año se creó la ONCE?
+  no  ¿En qué año se fundó la Universidad de Salamanca?
+  K=20: adds 266 blocks on 13 filtered pages
+  K=30: adds 232 blocks on 10 filtered pages
+  K=40: adds 206 blocks on 7 filtered pages
+  K=60: adds 140 blocks on 6 filtered pages
+
+=== footnote: Wikipedia-based visits (BM25 only)
+  K=20: 0/0 visits filtered; questions removed 0/0 (0.0%); tokens 0 = 0.00% of all tokens
+  K=30: 0/0 visits filtered; questions removed 0/0 (0.0%); tokens 0 = 0.00% of all tokens
+  K=40: 0/0 visits filtered; questions removed 0/0 (0.0%); tokens 0 = 0.00% of all tokens
+  K=60: 0/0 visits filtered; questions removed 0/0 (0.0%); tokens 0 = 0.00% of all tokens
+rule suffix, digit rule on; answered searches analysed: 24; page visits: 101
+
+=== K=20
+answer blocks missed: 4 of 24 (answer pages with more than K candidates: 13)
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175 of 136 candidates, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor 3, San Francisco, CA 94105.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27 of 105 candidates, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | page docs.djangoproject.com/en/6.1/ref/settings | block 290 of 715 candidates, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31 of 143 candidates, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+max-p block missed: 16 of 63 filtered pages
+  [company] bitwarden.com | Q: Where is Bitwarden's corporate headquarters? | page bitwarden.com/ | block 57, BM25 rank 43 (score 0.00), Jev p 0.03 | CISO, yellow arrow (MSP, Netherlands)
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor…
+  [support] kagi.com | Q: What is Kagi's support email address? | page kagi.com/ | block 25, BM25 rank 27 (score 0.00), Jev p 0.02 | Get these powerful, private tools on your favorite device
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/ | block 73, BM25 rank 52 (score 0.00), Jev p 0.03 | Custom Contact us Everything in Business 10+ sites 10+ team members
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/docs | block 80, BM25 rank 72 (score 0.00), Jev p 0.1 | Can't find what you're looking for? Contact us. Have a feature request? Check our feedback board and roadmap.
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.92 | !{freePlanStorage} storage
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.91 | !{freePlanStorage} storage
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.9 | !{freePlanStorage} storage
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/guide | block 78, BM25 rank 67 (score 0.00), Jev p 0.98 | The index.html will be served on http://localhost:5173.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] gohugo.io/documentatio | Q: What port does hugo server listen on by default? | page gohugo.io/configuration/server | block 23, BM25 rank 28 (score 0.00), Jev p 0.21 | headers: - for: /** values: Content-Security-Policy: script-src localhost:1313 Referrer-Policy: strict-origin-when-cros…
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1 | block 46, BM25 rank 50 (score 0.00), Jev p 0.15 | Settings: Overview | Full list of settings
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1/ref/settings | block 290, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+  [trap] canonical.com | Q: What was Canonical's revenue in 2024? | page canonical.com/blog/latest-news | block 1, BM25 rank 21 (score 0.00), Jev p 0.01 | Your submission was sent successfully! Close
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 261, BM25 rank 45 (score 0.76), Jev p 0.24 | pCloud: Yet Another Cloud Storage Company, in Bulgaria
+Jev top-3 blocks missed: 24 of 90 (filtered pages)
+  [company] santander.com | Q: In what year was Santander founded? | page santander.com/en/home | block 32, BM25 rank 22 (score 0.00), Jev p 0.27 | supporting education, employability and entrepreneurship
+  [company] proton.me | Q: In what year was Proton founded? | page proton.me/ | block 89, BM25 rank 27 (score 0.46), Jev p 0.93 | Proton is led by scientists, including Sir Tim Berners-Lee, the inventor of the World Wide Web, and we work for the pub…
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor…
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/docs | block 80, BM25 rank 72 (score 0.00), Jev p 0.1 | Can't find what you're looking for? Contact us. Have a feature request? Check our feedback board and roadmap.
+  [product] telegram.org | Q: What is the largest file you can send on Telegram without Premium? | page telegram.org/faq | block 90, BM25 rank 112 (score 0.87), Jev p 0.54 | Thanks to Telegram's multi-data center infrastructure and encryption, it is faster and way more secure. On top of that,…
+  [product] telegram.org | Q: What is the largest file you can send on Telegram without Premium? | page telegram.org/faq | block 88, BM25 rank 26 (score 3.32), Jev p 0.45 | Unlike WhatsApp, Telegram is a cloud-based messenger with seamless sync. As a result, you can access your messages from…
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.92 | !{freePlanStorage} storage
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.91 | !{freePlanStorage} storage
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.9 | !{freePlanStorage} storage
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/guide | block 78, BM25 rank 67 (score 0.00), Jev p 0.98 | The index.html will be served on http://localhost:5173.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/guide | block 75, BM25 rank 23 (score 0.38), Jev p 0.18 | $ bunx vite
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] gohugo.io/documentatio | Q: What port does hugo server listen on by default? | page gohugo.io/configuration/server | block 23, BM25 rank 28 (score 0.00), Jev p 0.21 | headers: - for: /** values: Content-Security-Policy: script-src localhost:1313 Referrer-Policy: strict-origin-when-cros…
+  [docs] gohugo.io/documentatio | Q: What port does hugo server listen on by default? | page gohugo.io/configuration/server | block 25, BM25 rank 30 (score 0.00), Jev p 0.1 | { "headers": [ { "for": "/**", "values": { "Content-Security-Policy": "script-src localhost:1313", "Referrer-Policy": "…
+  [docs] caddyserver.com/docs/ | Q: What is the default address of Caddy's admin endpoint? | page caddyserver.com/docs/api | block 27, BM25 rank 24 (score 1.36), Jev p 0.73 | curl "http://localhost:2019/load" \ -H "Content-Type: application/json" \ -d @caddy.json
+  [docs] caddyserver.com/docs/ | Q: What is the default address of Caddy's admin endpoint? | page caddyserver.com/docs/api | block 34, BM25 rank 53 (score 0.00), Jev p 0.41 | curl -X POST "http://localhost:2019/stop"
+  [docs] caddyserver.com/docs/ | Q: What is the default address of Caddy's admin endpoint? | page caddyserver.com/docs/caddyfile/options | block 54, BM25 rank 36 (score 3.16), Jev p 0.29 | { admin :2019 { origins http://localhost:2019 http://example.com:8080 enforce_origin } }
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1 | block 46, BM25 rank 50 (score 0.00), Jev p 0.15 | Settings: Overview | Full list of settings
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1/ref/settings | block 290, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 20, BM25 rank 55 (score 0.00), Jev p 0.17 | Ensure all services are up-and-running: Bash docker-compose ps In the State column, it should say Up for all services.
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 261, BM25 rank 45 (score 0.76), Jev p 0.24 | pCloud: Yet Another Cloud Storage Company, in Bulgaria
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 207, BM25 rank 55 (score 0.68), Jev p 0.14 | pCloud Tops Ranking of Bulgaria's Most Successful Start-ups in 2015
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 241, BM25 rank 65 (score 0.62), Jev p 0.12 | pCloud Reincorporates in Switzerland to Support Global Expansion and to Offer Users Increased File Security
+
+=== K=30
+answer blocks missed: 4 of 24 (answer pages with more than K candidates: 10)
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175 of 136 candidates, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor 3, San Francisco, CA 94105.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27 of 105 candidates, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | page docs.djangoproject.com/en/6.1/ref/settings | block 290 of 715 candidates, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31 of 143 candidates, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+max-p block missed: 13 of 45 filtered pages
+  [company] bitwarden.com | Q: Where is Bitwarden's corporate headquarters? | page bitwarden.com/ | block 57, BM25 rank 43 (score 0.00), Jev p 0.03 | CISO, yellow arrow (MSP, Netherlands)
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor…
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/ | block 73, BM25 rank 52 (score 0.00), Jev p 0.03 | Custom Contact us Everything in Business 10+ sites 10+ team members
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/docs | block 80, BM25 rank 72 (score 0.00), Jev p 0.1 | Can't find what you're looking for? Contact us. Have a feature request? Check our feedback board and roadmap.
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.92 | !{freePlanStorage} storage
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.91 | !{freePlanStorage} storage
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.9 | !{freePlanStorage} storage
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/guide | block 78, BM25 rank 67 (score 0.00), Jev p 0.98 | The index.html will be served on http://localhost:5173.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1 | block 46, BM25 rank 50 (score 0.00), Jev p 0.15 | Settings: Overview | Full list of settings
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1/ref/settings | block 290, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 261, BM25 rank 45 (score 0.76), Jev p 0.24 | pCloud: Yet Another Cloud Storage Company, in Bulgaria
+Jev top-3 blocks missed: 17 of 77 (filtered pages)
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor…
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/docs | block 80, BM25 rank 72 (score 0.00), Jev p 0.1 | Can't find what you're looking for? Contact us. Have a feature request? Check our feedback board and roadmap.
+  [product] telegram.org | Q: What is the largest file you can send on Telegram without Premium? | page telegram.org/faq | block 90, BM25 rank 112 (score 0.87), Jev p 0.54 | Thanks to Telegram's multi-data center infrastructure and encryption, it is faster and way more secure. On top of that,…
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.92 | !{freePlanStorage} storage
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.91 | !{freePlanStorage} storage
+  [product] mega.io | Q: How much free storage does MEGA include? | page mega.io/pricing | block 139, BM25 rank 35 (score 2.43), Jev p 0.9 | !{freePlanStorage} storage
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/guide | block 78, BM25 rank 67 (score 0.00), Jev p 0.98 | The index.html will be served on http://localhost:5173.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] caddyserver.com/docs/ | Q: What is the default address of Caddy's admin endpoint? | page caddyserver.com/docs/api | block 34, BM25 rank 53 (score 0.00), Jev p 0.41 | curl -X POST "http://localhost:2019/stop"
+  [docs] caddyserver.com/docs/ | Q: What is the default address of Caddy's admin endpoint? | page caddyserver.com/docs/caddyfile/options | block 54, BM25 rank 36 (score 3.16), Jev p 0.29 | { admin :2019 { origins http://localhost:2019 http://example.com:8080 enforce_origin } }
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1 | block 46, BM25 rank 50 (score 0.00), Jev p 0.15 | Settings: Overview | Full list of settings
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1/ref/settings | block 290, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 20, BM25 rank 55 (score 0.00), Jev p 0.17 | Ensure all services are up-and-running: Bash docker-compose ps In the State column, it should say Up for all services.
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 261, BM25 rank 45 (score 0.76), Jev p 0.24 | pCloud: Yet Another Cloud Storage Company, in Bulgaria
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 207, BM25 rank 55 (score 0.68), Jev p 0.14 | pCloud Tops Ranking of Bulgaria's Most Successful Start-ups in 2015
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 241, BM25 rank 65 (score 0.62), Jev p 0.12 | pCloud Reincorporates in Switzerland to Support Global Expansion and to Offer Users Increased File Security
+
+=== K=40
+answer blocks missed: 4 of 24 (answer pages with more than K candidates: 9)
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175 of 136 candidates, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor 3, San Francisco, CA 94105.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27 of 105 candidates, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com/en/stable/ | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE setting? | page docs.djangoproject.com/en/6.1/ref/settings | block 290 of 715 candidates, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafana/latest/ | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31 of 143 candidates, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+max-p block missed: 10 of 34 filtered pages
+  [company] bitwarden.com | Q: Where is Bitwarden's corporate headquarters? | page bitwarden.com/ | block 57, BM25 rank 43 (score 0.00), Jev p 0.03 | CISO, yellow arrow (MSP, Netherlands)
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor…
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/ | block 73, BM25 rank 52 (score 0.00), Jev p 0.03 | Custom Contact us Everything in Business 10+ sites 10+ team members
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/docs | block 80, BM25 rank 72 (score 0.00), Jev p 0.1 | Can't find what you're looking for? Contact us. Have a feature request? Check our feedback board and roadmap.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/guide | block 78, BM25 rank 67 (score 0.00), Jev p 0.98 | The index.html will be served on http://localhost:5173.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1 | block 46, BM25 rank 50 (score 0.00), Jev p 0.15 | Settings: Overview | Full list of settings
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1/ref/settings | block 290, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 261, BM25 rank 45 (score 0.76), Jev p 0.24 | pCloud: Yet Another Cloud Storage Company, in Bulgaria
+Jev top-3 blocks missed: 13 of 60 (filtered pages)
+  [company] brave.com | Q: Where is Brave headquartered? | page brave.com/about | block 175, BM25 rank 65 (score 0.53), Jev p 0.98 | Brave has offices in San Francisco and London, and staff members all over the world. Our HQ address is 48 2nd St, Floor…
+  [support] plausible.io | Q: What email address do I use to get help from Plausible? | page plausible.io/docs | block 80, BM25 rank 72 (score 0.00), Jev p 0.1 | Can't find what you're looking for? Contact us. Have a feature request? Check our feedback board and roadmap.
+  [product] telegram.org | Q: What is the largest file you can send on Telegram without Premium? | page telegram.org/faq | block 90, BM25 rank 112 (score 0.87), Jev p 0.54 | Thanks to Telegram's multi-data center infrastructure and encryption, it is faster and way more secure. On top of that,…
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/guide | block 78, BM25 rank 67 (score 0.00), Jev p 0.98 | The index.html will be served on http://localhost:5173.
+  [docs] vite.dev/guide/ | Q: What port does the Vite dev server use by default? | page vite.dev/config/server-options.md | block 27, BM25 rank 43 (score 2.06), Jev p 0.98 | * **Type:** `number` * **Default:** `5173`
+  [docs] caddyserver.com/docs/ | Q: What is the default address of Caddy's admin endpoint? | page caddyserver.com/docs/api | block 34, BM25 rank 53 (score 0.00), Jev p 0.41 | curl -X POST "http://localhost:2019/stop"
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1 | block 46, BM25 rank 50 (score 0.00), Jev p 0.15 | Settings: Overview | Full list of settings
+  [docs] docs.djangoproject.com | Q: What is the default value of Django's DATA_UPLOAD_MAX_MEMORY_SIZE sett | page docs.djangoproject.com/en/6.1/ref/settings | block 290, BM25 rank 264 (score 1.96), Jev p 0.99 | Default: 2621440 (i.e. 2.5 MB).
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 31, BM25 rank 60 (score 0.00), Jev p 0.95 | Browse to http://localhost:3000.
+  [docs] grafana.com/docs/grafa | Q: What port does Grafana listen on by default? | page grafana.com/tutorials/grafana-fundamentals | block 20, BM25 rank 55 (score 0.00), Jev p 0.17 | Ensure all services are up-and-running: Bash docker-compose ps In the State column, it should say Up for all services.
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 261, BM25 rank 45 (score 0.76), Jev p 0.24 | pCloud: Yet Another Cloud Storage Company, in Bulgaria
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 207, BM25 rank 55 (score 0.68), Jev p 0.14 | pCloud Tops Ranking of Bulgaria's Most Successful Start-ups in 2015
+  [trap] pcloud.com | Q: Where does pCloud's CEO live? | page pcloud.com/company/press | block 241, BM25 rank 65 (score 0.62), Jev p 0.12 | pCloud Reincorporates in Switzerland to Support Global Expansion and to Offer Users Increased File Security

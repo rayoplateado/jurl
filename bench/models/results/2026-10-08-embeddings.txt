@@ -1,0 +1,260 @@
+EMBEDDING PRE-FILTER AND FIELD EXPERIMENT (offline, from recordings; no Jev calls)
+visits: 131 long (pages with f), 72 short (l only); links: 30269 long, 5049 short
+fixed map constants (p5 and p95 of all long-page cosines, per config): 8M t: lo -0.0837, hi 0.3304; 8M tc: lo -0.0629, hi 0.4151; 128M t: lo -0.0743, hi 0.3323; 128M tc: lo -0.0494, hi 0.4087
+models: potion-base-8M (8M t); potion-multilingual-128M (128M t); variants: t = link text + path words, tc = t + context
+
+T0. models and embedding time (CPU, arm64, model2vec 0.9.0, numpy 2.5.3, Python 3.13.13)
+                               size (MB)    load (s)   t: med ms   t: p90 ms  tc: med ms  tc: p90 ms  t: total s tc: total s
+potion-base-8M                      30.9        0.12         2.2         2.5         3.5         5.2        0.34        0.64
+potion-multilingual-128M           531.0        1.31         2.5         2.9         4.1         6.3        0.41        0.76
+(encode per page = one encode() call on one page's link texts: median 250 links on long pages, 46.5 on short; the 203 pages' 35318 links in all. Sizes: model.safetensors + tokenizer.json + config.json.)
+
+FIELD STRATA (share of a page's links with Jev's f >= 0.5): varies = 10% to 90%, mostly yes > 90%, mostly no < 10%
+  varies: 47 pages, mostly yes: 29 pages, mostly no: 55 pages; f constant (Spearman undefined): 0 pages
+  per stratum: mean f, sd of f within pages (mean), mean p, median floor Spearman(s, p) and its range
+    varies      f mean 0.53, sd within page 0.19, p mean 0.065; floor Spearman median 0.494 (min -0.205, max 0.920)
+    mostly yes  f mean 0.88, sd within page 0.13, p mean 0.080; floor Spearman median 0.802 (min 0.124, max 0.944)
+    mostly no   f mean 0.19, sd within page 0.07, p mean 0.038; floor Spearman median 0.749 (min 0.249, max 0.963)
+
+Q1. cosine vs Jev's f and jurl's ranking s = p + (1-p)*0.3*f (long pages). mm = min-max per page; fx = fixed map
+
+  stratum: all (131 pages)
+                                              floor (f=0)         8M t        8M tc       128M t      128M tc
+  pages where Spearman(cos,f) is undefined (f constant)            -            0            0            0            0
+  Spearman(cos, f), mean over defined pages             -        0.146        0.136        0.130        0.133
+    (defined on n pages)                                -          131          131          131          131
+  Spearman(cos, p), reference                           -        0.133        0.138        0.080        0.082
+  Spearman(s, s'), min-max                          0.636        0.413        0.401        0.387        0.383
+  top-1 same, min-max                               73.3%        61.8%        63.4%        59.5%        58.0%
+  top-3 Jaccard, min-max                            0.618        0.427        0.424        0.433        0.446
+  top-10 Jaccard, min-max                           0.539        0.353        0.347        0.328        0.329
+  Spearman(s, s'), fixed                                -        0.391        0.414        0.351        0.380
+  top-1 same, fixed                                     -        61.8%        64.1%        61.8%        62.6%
+  top-3 Jaccard, fixed                                  -        0.419        0.466        0.446        0.470
+  top-10 Jaccard, fixed                                 -        0.344        0.376        0.315        0.346
+
+  stratum: varies (47 pages)
+                                              floor (f=0)         8M t        8M tc       128M t      128M tc
+  pages where Spearman(cos,f) is undefined (f constant)            -            0            0            0            0
+  Spearman(cos, f), mean over defined pages             -        0.222        0.191        0.200        0.202
+    (defined on n pages)                                -           47           47           47           47
+  Spearman(cos, p), reference                           -        0.109        0.097        0.057        0.056
+  Spearman(s, s'), min-max                          0.456        0.412        0.381        0.386        0.378
+  top-1 same, min-max                               72.3%        68.1%        72.3%        68.1%        68.1%
+  top-3 Jaccard, min-max                            0.621        0.526        0.485        0.489        0.515
+  top-10 Jaccard, min-max                           0.453        0.363        0.356        0.374        0.355
+  Spearman(s, s'), fixed                                -        0.380        0.371        0.353        0.369
+  top-1 same, fixed                                     -        68.1%        72.3%        70.2%        70.2%
+  top-3 Jaccard, fixed                                  -        0.511        0.515        0.500        0.532
+  top-10 Jaccard, fixed                                 -        0.333        0.356        0.353        0.371
+
+  stratum: mostly yes (29 pages)
+                                              floor (f=0)         8M t        8M tc       128M t      128M tc
+  pages where Spearman(cos,f) is undefined (f constant)            -            0            0            0            0
+  Spearman(cos, f), mean over defined pages             -        0.141        0.114        0.146        0.134
+    (defined on n pages)                                -           29           29           29           29
+  Spearman(cos, p), reference                           -        0.279        0.269        0.208        0.197
+  Spearman(s, s'), min-max                          0.758        0.613        0.595        0.604        0.587
+  top-1 same, min-max                               96.6%        96.6%        96.6%        79.3%        79.3%
+  top-3 Jaccard, min-max                            0.948        0.731        0.738        0.783        0.790
+  top-10 Jaccard, min-max                           0.861        0.679        0.643        0.601        0.611
+  Spearman(s, s'), fixed                                -        0.558        0.558        0.552        0.552
+  top-1 same, fixed                                     -        96.6%        96.6%        82.8%        82.8%
+  top-3 Jaccard, fixed                                  -        0.772        0.790        0.817        0.834
+  top-10 Jaccard, fixed                                 -        0.701        0.706        0.613        0.639
+
+  stratum: mostly no (55 pages)
+                                              floor (f=0)         8M t        8M tc       128M t      128M tc
+  pages where Spearman(cos,f) is undefined (f constant)            -            0            0            0            0
+  Spearman(cos, f), mean over defined pages             -        0.083        0.100        0.062        0.074
+    (defined on n pages)                                -           55           55           55           55
+  Spearman(cos, p), reference                           -        0.076        0.105        0.033        0.045
+  Spearman(s, s'), min-max                          0.725        0.309        0.315        0.273        0.280
+  top-1 same, min-max                               61.8%        38.2%        38.2%        41.8%        38.2%
+  top-3 Jaccard, min-max                            0.440        0.184        0.205        0.200        0.205
+  top-10 Jaccard, min-max                           0.443        0.172        0.184        0.144        0.159
+  Spearman(s, s'), fixed                                -        0.314        0.376        0.244        0.299
+  top-1 same, fixed                                     -        38.2%        40.0%        43.6%        45.5%
+  top-3 Jaccard, fixed                                  -        0.155        0.255        0.204        0.225
+  top-10 Jaccard, fixed                                 -        0.165        0.218        0.126        0.171
+
+Sweep of the weight w in s_w = p + (1-p)*w*g(cos) against jurl's s (8M t, fixed map)
+                           w=0.0      w=0.05       w=0.1       w=0.2       w=0.3
+  all: Spearman            0.636       0.608       0.543       0.449       0.391
+  all: top-1 same          73.3%       72.5%       69.5%       66.4%       61.8%
+  all: top-10 Jaccard       0.539       0.523       0.491       0.404       0.344
+  varies: Spearman         0.456       0.495       0.473       0.420       0.380
+  varies: top-1 same       72.3%       74.5%       74.5%       74.5%       68.1%
+  varies: top-10 Jaccard       0.453       0.470       0.466       0.392       0.333
+  paired difference from the floor (w=0), Spearman with s, mean (SE) and pages where the cosine term is better:
+    all     w=0.05 -0.028 (SE 0.009), better on 49 of 131 pages, worse on 82
+    all     w=0.1  -0.093 (SE 0.014), better on 29 of 131 pages, worse on 102
+    all     w=0.3  -0.245 (SE 0.020), better on 18 of 131 pages, worse on 113
+    varies  w=0.05 +0.039 (SE 0.014), better on 32 of 47 pages, worse on 15
+    varies  w=0.1  +0.017 (SE 0.020), better on 21 of 47 pages, worse on 26
+    varies  w=0.3  -0.077 (SE 0.029), better on 15 of 47 pages, worse on 32
+
+Q1 noise ceiling and floor on the 15 pages with a Jev re-send (merge's B; strata: varies 6, mostly yes 6, mostly no 3)
+                         ceiling B       floor     8M t mm     8M t fx    8M tc mm    8M tc fx   128M t mm   128M t fx  128M tc mm  128M tc fx
+  Spearman(s, s')            0.940       0.667       0.490       0.441       0.452       0.433       0.480       0.431       0.472       0.452
+  top-1 same                 73.3%       80.0%       86.7%       86.7%       80.0%       80.0%       73.3%       73.3%       73.3%       73.3%
+  top-3 Jaccard              0.900       0.747       0.667       0.700       0.600       0.633       0.673       0.673       0.713       0.680
+  top-10 Jaccard             0.749       0.632       0.517       0.501       0.478       0.504       0.486       0.465       0.495       0.495
+    varies      (6 pages): ceiling Spearman 0.970, floor 0.482, 8M t mm 0.516; ceiling top-10 0.777, floor top-10 0.552
+    mostly yes  (6 pages): ceiling Spearman 0.942, floor 0.866, 8M t mm 0.632; ceiling top-10 0.747, floor top-10 0.914
+    mostly no   (3 pages): ceiling Spearman 0.874, floor 0.637, 8M t mm 0.153; ceiling top-10 0.698, floor top-10 0.226
+  Jev's own p on the same pages, Spearman(p_A, p_B) mean: 0.880; Jev's own f, Spearman(f_A, f_B) mean: 0.917 (per page: 0.94, 0.95, 0.80, 0.88, 0.87, 0.89, 0.98, 0.87, 0.97, 0.90, 0.97, 0.82, 0.94, 0.98, 0.99)
+
+Q2. pre-filter by cosine, long pages (131 pages; top-10 by s = p + (1-p)*0.3*f with Jev's f)
+                                                      N=60       N=100       N=120       N=150
+  pages with more than N links                         128         124         122         120
+  share of link questions not asked                  74.2%       57.6%       49.5%       37.5%
+  [8M t]
+    top-10 recall (long)                             53.3%       66.4%       72.4%       79.6%
+    top-10 recall, pages with more than N links only (n) 52.2% (128) 64.5% (124) 70.3% (122) 77.8% (120)
+    trail-step recall, steps on pages with more than N links  56.2% (32)  59.4% (32)  71.9% (32)  75.0% (32)
+    top-10 recall, f-varies pages only (47)          55.5%       67.7%       73.0%       80.2%
+    trail-step recall (32 steps)                     56.2%       59.4%       71.9%       75.0%
+  [8M tc]
+    top-10 recall (long)                             53.8%       67.8%       72.2%       80.2%
+    top-10 recall, pages with more than N links only (n) 52.7% (128) 66.0% (124) 70.2% (122) 78.4% (120)
+    trail-step recall, steps on pages with more than N links  56.2% (32)  75.0% (32)  78.1% (32)  81.2% (32)
+    top-10 recall, f-varies pages only (47)          53.8%       67.2%       69.8%       79.4%
+    trail-step recall (32 steps)                     56.2%       75.0%       78.1%       81.2%
+  [128M t]
+    top-10 recall (long)                             51.6%       66.4%       72.3%       79.2%
+    top-10 recall, pages with more than N links only (n) 50.5% (128) 64.5% (124) 70.2% (122) 77.3% (120)
+    trail-step recall, steps on pages with more than N links  56.2% (32)  65.6% (32)  71.9% (32)  78.1% (32)
+    top-10 recall, f-varies pages only (47)          54.5%       68.1%       72.6%       78.1%
+    trail-step recall (32 steps)                     56.2%       65.6%       71.9%       78.1%
+  [128M tc]
+    top-10 recall (long)                             49.5%       66.4%       71.9%       79.6%
+    top-10 recall, pages with more than N links only (n) 48.3% (128) 64.5% (124) 69.8% (122) 77.8% (120)
+    trail-step recall, steps on pages with more than N links  56.2% (32)  62.5% (32)  68.8% (32)  75.0% (32)
+    top-10 recall, f-varies pages only (47)          51.7%       68.7%       73.8%       80.0%
+    trail-step recall (32 steps)                     56.2%       62.5%       68.8%       75.0%
+
+Q3. pre-filter by cosine, short pages (72 pages; top-10 by p)
+                                                      N=60       N=100       N=120       N=150
+  pages with more than N links                          21          12          12          11
+  share of link questions not asked                  45.4%       32.5%       27.7%       21.1%
+  [8M t]
+    top-10 recall (short)                            89.2%       93.3%       94.7%       96.4%
+    top-10 recall, pages with more than N links only (n)  62.9% (21)  60.0% (12)  68.3% (12)  76.4% (11)
+    trail-step recall, steps on pages with more than N links  100.0% (8)  100.0% (5)  100.0% (5)  100.0% (5)
+    trail-step recall (16 steps)                    100.0%      100.0%      100.0%      100.0%
+  [8M tc]
+    top-10 recall (short)                            90.0%       93.2%       93.6%       94.4%
+    top-10 recall, pages with more than N links only (n)  65.7% (21)  59.2% (12)  61.7% (12)  63.6% (11)
+    trail-step recall, steps on pages with more than N links  100.0% (8)  100.0% (5)  100.0% (5)  100.0% (5)
+    trail-step recall (16 steps)                    100.0%      100.0%      100.0%      100.0%
+  [128M t]
+    top-10 recall (short)                            89.0%       93.3%       94.9%       95.6%
+    top-10 recall, pages with more than N links only (n)  62.4% (21)  60.0% (12)  69.2% (12)  70.9% (11)
+    trail-step recall, steps on pages with more than N links   75.0% (8)  100.0% (5)  100.0% (5)  100.0% (5)
+    trail-step recall (16 steps)                     87.5%      100.0%      100.0%      100.0%
+  [128M tc]
+    top-10 recall (short)                            89.2%       93.6%       94.3%       94.9%
+    top-10 recall, pages with more than N links only (n)  62.9% (21)  61.7% (12)  65.8% (12)  66.4% (11)
+    trail-step recall, steps on pages with more than N links   87.5% (8)  100.0% (5)  100.0% (5)  100.0% (5)
+    trail-step recall (16 steps)                     93.8%      100.0%      100.0%      100.0%
+  short pages by search group (top-10 recall by p at N=60 and N=120; trail link steps):
+    pricing   35 pages   top-10 at N=60  96.3%, N=120 100.0%   trail link steps 8
+    docs      13 pages   top-10 at N=60  89.2%, N=120  93.8%   trail link steps 3
+    wiki      11 pages   top-10 at N=60  53.6%, N=120  72.7%   trail link steps 4
+    trap      13 pages   top-10 at N=60 100.0%, N=120 100.0%   trail link steps 1
+  (trail steps: link steps of follow-opt-base.json trails; sitemap leads and earlier-page menu links are not link steps, see the appendix)
+  long trail link steps: 32 (median cos rank of the next link: 22.5 of its page, median rank by s: 0.0); short: 16
+
+Ties.   long pages, s: 0 of 131 pages have a top-10 link with score 0 (mean 0.00 such links per top-10); links with score 0 per page: median 0
+      short pages, p: 0 of 72 pages have a top-10 link with score 0 (mean 0.00 such links per top-10); links with score 0 per page: median 0
+
+Q1 disagreement, f-varies pages, 8M t: metric |rank_f - rank_cos| / n (average ranks; 1 = best)
+       d      f     cos      p    rank f  rank cos  link text (path)  [question]
+   0.986   0.94  -0.123   0.05     4/250   250/250  'quasar' (/wiki/Quasar)  [How many moons does Mars have?]
+   0.978   0.88  -0.097   0.05     6/250   250/250  'Jean-Baptiste Dumas' (/wiki/Jean-Baptiste_Dumas)  [What is the chemical formula of aspirin?]
+   0.974   0.60  -0.112   0.02     2/250   246/250  'Nihonium' (/wiki/Nihonium)  [In what year did the Titanic sink?]
+   0.960   0.69  -0.128   0.06     2/250   242/250  'Isaac Newton' (/wiki/Isaac_Newton)  [What is the speed of sound in air?]
+   0.958   0.93  -0.102   0.09     2/250   241/250  'The Entombment' (/wiki/The_Entombment_(Titian,_1559))  [Who painted the Mona Lisa?]
+  candidates in f-varies pages: 11011 links; median d 0.240
+
+APPENDIX. trail steps (follow-opt-base.json): class, the cos rank of the next link on its page (of n), and by s or p
+  pricing    linear.app             k=0 short link         cos   0/45  p   0  https://linear.app/pricing
+  pricing    loom.com               k=0 short link         cos   0/15  p   0  https://www.loom.com/pricing
+  pricing    calendly.com           k=0 short link         cos   0/55  p   0  https://calendly.com/pricing
+  pricing    cal.com                k=0 short link         cos   0/57  p   0  https://cal.com/pricing
+  pricing    tailscale.com          k=0 short link         cos   0/55  p   0  https://tailscale.com/pricing
+  pricing    vercel.com             k=0 short sitemap lead -  https://vercel.com/docs/plans/pro-plan
+  pricing    raycast.com            k=0 short link         cos   0/77  p   0  https://www.raycast.com/pricing
+  pricing    notion.com             k=0 short link         cos   0/54  p   0  https://www.notion.com/pricing
+  docs       docs.github.com        k=0 short link         cos   9/36  p   0  https://docs.github.com/en/rest
+  docs       docs.github.com        k=1 short link         cos   4/214 p   0  https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the
+  docs       developers.cloudflare. k=0 short sitemap lead -  https://developers.cloudflare.com/workers/platform/limits/
+  docs       kubernetes.io/docs/hom k=0 short link         cos  27/250 p   0  https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/
+  wikipedia  en.wikipedia.org/wiki/ k=0 short link         cos   0/250 p   0  https://en.wikipedia.org/wiki/Aspirin
+  wikipedia  en.wikipedia.org/wiki/ k=0 short link         cos  21/250 p   1  https://en.wikipedia.org/wiki/Exposition_Universelle_(1889)
+  wikipedia  en.wikipedia.org/wiki/ k=1 short link         cos   1/250 p   0  https://en.wikipedia.org/wiki/Gustave_Eiffel
+  wikipedia  en.wikipedia.org/wiki/ k=0 short link         cos   0/70  p   0  https://en.wikipedia.org/wiki/Ethanol
+  long       en.wikipedia.org/wiki/ k=0 long  link         cos   2/250 s   1  https://en.wikipedia.org/wiki/French_Academy_of_Sciences
+  long       en.wikipedia.org/wiki/ k=1 long  link         cos   0/250 s   0  https://en.wikipedia.org/wiki/Chemistry
+  long       en.wikipedia.org/wiki/ k=2 long  link         cos   0/250 s   2  https://en.wikipedia.org/wiki/Chemical_compound
+  long       en.wikipedia.org/wiki/ k=3 long  link         cos   3/205 s   0  https://en.wikipedia.org/wiki/Dictionary_of_chemical_formulas
+  trap       tailscale.com          k=0 short link         cos   2/55  p   3  https://tailscale.com/contact/sales
+  trap       tailscale.com          k=1 short earlier page -  https://tailscale.com/docs
+  trap       raycast.com            k=0 short link         cos   0/77  p   0  https://www.raycast.com/pricing
+  long       en.wikipedia.org/wiki/ k=0 long  link         cos 173/250 s   1  https://en.wikipedia.org/wiki/Colchicine
+  long       en.wikipedia.org/wiki/ k=1 long  link         cos   3/250 s   0  https://en.wikipedia.org/wiki/Chemical_formula
+  long       en.wikipedia.org/wiki/ k=2 long  link         cos  33/169 s   0  https://en.wikipedia.org/wiki/Periodic_table
+  long       en.wikipedia.org/wiki/ k=0 long  link         cos 116/250 s   0  https://en.wikipedia.org/wiki/Harmonica
+  long       en.wikipedia.org/wiki/ k=1 long  link         cos 116/250 s   1  https://en.wikipedia.org/wiki/Benjamin_Franklin
+  long       en.wikipedia.org/wiki/ k=2 long  link         cos 144/250 s   0  https://en.wikipedia.org/wiki/Natural_philosophy
+  long       en.wikipedia.org/wiki/ k=3 long  link         cos  67/250 s   2  https://en.wikipedia.org/wiki/Nature
+  long       en.wikipedia.org/wiki/ k=4 long  link         cos   0/250 s   0  https://en.wikipedia.org/wiki/Mars
+  long       en.wikipedia.org/wiki/ k=0 long  link         cos 184/250 s   0  https://en.wikipedia.org/wiki/Nylon
+  long       en.wikipedia.org/wiki/ k=1 long  link         cos   0/250 s   0  https://en.wikipedia.org/wiki/Melting_point
+  long       en.wikipedia.org/wiki/ k=2 long  link         cos   2/250 s   0  https://en.wikipedia.org/wiki/Mercury_(element)
+  long       en.wikipedia.org/wiki/ k=0 long  link         cos  24/250 s   3  https://en.wikipedia.org/wiki/Aeneid
+  long       en.wikipedia.org/wiki/ k=1 long  link         cos 159/250 s   0  https://en.wikipedia.org/wiki/Western_canon
+  long       en.wikipedia.org/wiki/ k=2 long  link         cos   2/250 s   0  https://en.wikipedia.org/wiki/Miguel_de_Cervantes
+  heldout    en.wikipedia.org/wiki/ k=0 long  link         cos 174/250 s   0  https://en.wikipedia.org/wiki/Smithsonian_Institution
+  heldout    en.wikipedia.org/wiki/ k=1 long  link         cos   1/250 s   0  https://en.wikipedia.org/wiki/Portrait_painting
+  heldout    en.wikipedia.org/wiki/ k=2 long  link         cos   2/250 s   1  https://en.wikipedia.org/wiki/Leonardo_da_Vinci
+  heldout    en.wikipedia.org/wiki/ k=0 long  link         cos 204/250 s   0  https://en.wikipedia.org/wiki/Mathematics
+  heldout    en.wikipedia.org/wiki/ k=1 long  link         cos 102/250 s   1  https://en.wikipedia.org/wiki/Analysis_(mathematics)
+  heldout    en.wikipedia.org/wiki/ k=2 long  link         cos   0/250 s   0  https://en.wikipedia.org/wiki/Sound
+  heldout    en.wikipedia.org/wiki/ k=3 long  link         cos   0/250 s   0  https://en.wikipedia.org/wiki/Speed_of_sound
+  heldout    en.wikipedia.org/wiki/ k=0 long  link         cos 104/250 s   2  https://en.wikipedia.org/wiki/Tea
+  heldout    en.wikipedia.org/wiki/ k=1 long  link         cos 155/250 s   2  https://en.wikipedia.org/wiki/Germany
+  heldout    en.wikipedia.org/wiki/ k=0 long  link         cos 166/250 s   0  https://en.wikipedia.org/wiki/SI
+  heldout    en.wikipedia.org/wiki/ k=1 long  link         cos 185/250 s   1  https://en.wikipedia.org/wiki/Radioactive_decay
+  heldout    en.wikipedia.org/wiki/ k=2 long  link         cos   0/250 s   0  https://en.wikipedia.org/wiki/Carbon-14
+  heldout    en.wikipedia.org/wiki/ k=0 long  link         cos  21/250 s   0  https://en.wikipedia.org/wiki/Graphite
+  heldout    en.wikipedia.org/wiki/ k=1 long  link         cos   0/250 s   0  https://en.wikipedia.org/wiki/Solar_System
+
+TRAILS: long searches with link steps: 10 (the trail's every link step must be in the top N by cosine)
+                            N=60       N=100       N=120       N=150
+  8M t                   2 of 10     2 of 10     2 of 10     3 of 10   intact trails
+  8M tc                  2 of 10     3 of 10     4 of 10     4 of 10   intact trails
+  128M t                 2 of 10     4 of 10     4 of 10     4 of 10   intact trails
+  128M tc                3 of 10     3 of 10     3 of 10     4 of 10   intact trails
+  trails cut at N=150, 8M t (step, cos rank of the next link, f, p):
+    What is the atomic num / Banana              step k=0 'colchicine'                 cos rank 173/250  f 0.73  p 0.08
+    What is the boiling po / Tennis              step k=0 'nylon'                      cos rank 184/250  f 0.82  p 0.03
+    Who wrote Don Quixote? / Pizza               step k=1 'Western canon'              cos rank 159/250  f 0.90  p 0.09
+    Who painted the Mona L / Volcano             step k=0 'Smithsonian Institution'    cos rank 174/250  f 0.13  p 0.22
+    What is the speed of s / Chess               step k=0 'mathematics'                cos rank 204/250  f 0.17  p 0.07
+    Who composed The Magic / Coffee              step k=1 'Germany'                    cos rank 155/250  f 0.24  p 0.16
+    What is the half-life  / Association_football step k=0 'metric'                     cos rank 166/250  f 0.46  p 0.04
+    What is the half-life  / Association_football step k=1 'activity referred to a r'   cos rank 185/250  f 0.58  p 0.19
+  first hop (k=0): 10 steps; cut at N=150 (8M t): 5
+  later hops (k>0): 22 steps; cut at N=150 (8M t): 3
+  next-hop links at N=150 (8M t): f and p of the cut ones vs the kept ones (medians):
+    cut    8 steps: f median 0.52, p median 0.085
+    kept  24 steps: f median 0.83, p median 0.350
+  disagreements in the other direction (cos ranks it higher than f): 5546 of 11011 links in f-varies pages
+  top-5 in that direction (by the same d):
+    d 0.957  f 0.44  cos 0.247  p 0.05  rank f 135/140  rank cos 1/140  'age of the universe' (/wiki/Age_of_the_universe)  [What is the half-life of carbon-14?]
+    d 0.950  f 0.21  cos 0.264  p 0.07  rank f 244/250  rank cos 7/250  'technologies' (/wiki/Technology)  [What is the speed of sound in air?]
+    d 0.940  f 0.09  cos 0.206  p 0.03  rank f 245/250  rank cos 10/250  'kidney' (/wiki/Kidney)  [What is the atomic number of uranium?]
+    d 0.936  f 0.22  cos 0.255  p 0.08  rank f 250/250  rank cos 16/250  'Aristotle' (/wiki/Aristotle)  [Who painted the Mona Lisa?]
+    d 0.932  f 0.16  cos 0.201  p 0.03  rank f 236/250  rank cos 3/250  'architecture' (/wiki/Architecture)  [What is the speed of sound in air?]
