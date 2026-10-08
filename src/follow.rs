@@ -72,6 +72,18 @@ impl Site {
         self.front_door.then(|| self.root.clone())
     }
 
+    /// The context to ask Jev about one of the site's pages: the owner rides along (see [`Site::owner`]).
+    fn ctx<'a>(
+        &self,
+        args: &'a Args,
+        client: &'a Client,
+        api_key: &'a str,
+        url: &'a Url,
+        ex: &'a Extracted,
+    ) -> Ctx<'a> {
+        Ctx { owner: self.owner(), ..Ctx::new(args, client, api_key, url, ex) }
+    }
+
     fn contains(&self, u: &Url) -> bool {
         let lower = u.path().to_lowercase();
         matches!(u.scheme(), "http" | "https")
@@ -306,7 +318,7 @@ async fn visit(
     let (url, ex) = load(args, cfg, client, url, &mut t).await?;
     let menus = menus(&ex);
     let (found, score, warmth, links, new_field_scores) = {
-        let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, api_key, &url, &ex) };
+        let ctx = site.ctx(args, client, api_key, &url, &ex);
         // The links `--links -q` would score, menus and footers included, as long as they stay on the site. A menu
         // link is scored on the first page it's on, not again on every page: on a page far from the question, the
         // site's "Main page" and "Search" would outscore everything in its text.
@@ -454,7 +466,7 @@ pub async fn run(
             site_links: Vec::new(),
             app_shell: false,
         };
-        let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, api_key, &start, &empty) };
+        let ctx = site.ctx(args, client, api_key, &start, &empty);
         let scores = match links::score(&ctx, &links, "The page at the URL in `links`", None).await {
             Ok((scores, _)) => scores,
             Err(e) if is_api_error(&e) => return Err(e),
@@ -538,7 +550,7 @@ pub async fn run(
         site_links: Vec::new(),
         app_shell: false,
     };
-    let site_ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, api_key, &start, &empty) };
+    let site_ctx = site.ctx(args, client, api_key, &start, &empty);
     let mut cold = false;
     while opened < max {
         leads.sort_by(|a, b| b.score.total_cmp(&a.score));
