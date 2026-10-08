@@ -13,7 +13,7 @@ use serde_json::Map;
 use url::Url;
 
 use crate::{
-    PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick,
+    answer::{PRECISE_BLOCK_FLOOR, PRECISE_THRESHOLD, Pick, precise_pick, render_precise},
     cli::Args,
     config::Config,
     decide::is_api_error,
@@ -22,7 +22,7 @@ use crate::{
     links::{self, FieldScores, key, overlap},
     load,
     output::{Rendered, missed, not_found},
-    precise_pick, render_blocks, render_precise, score_blocks,
+    render_blocks, score_blocks,
     timing::Timer,
     top,
 };
