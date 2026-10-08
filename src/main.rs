@@ -741,6 +741,51 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>,
         .filter(|s| s.block == best.block && s.range != best.range)
         .filter(|s| s.range.start >= best.range.start && s.range.end <= best.range.end)
         .collect();
+    let text = top[best.block].text.as_str();
+    let context = || {
+        vec![Item {
+            id: "ctx".to_string(),
+            state: json!({ "block": top[best.block].i, "text": text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
+            question: None,
+        }]
+    };
+    if p >= threshold && top[best.block].kind != Kind::Code && precise::refinable(text, best) {
+        // A long winner (a line, clause or sentence) may hold the answer and more. Its pieces, the shorter
+        // candidates inside it and the winner itself are scored once more with the same question; a piece wins
+        // only when Jev likes it at least as much as the whole, and at the answer's own threshold.
+        let mut options: Vec<std::ops::Range<usize>> = vec![best.range.clone()];
+        for r in inside.iter().map(|s| s.range.clone()).chain(precise::refinements(text, &best.range)) {
+            if !options.contains(&r) && options.len() <= precise::MAX_REFINE {
+                options.push(r);
+            }
+        }
+        let mut criteria = Map::new();
+        for (k, r) in options.iter().enumerate() {
+            criteria.insert(format!("o{k}"), json!(&text[r.clone()]));
+        }
+        criteria.insert("none".to_string(), json!("None of these is exactly the answer"));
+        let refine = choice(
+            &format!(
+                "Which of these spans from the block is exactly the answer to this question, with nothing missing \
+                 and nothing extra? {q}"
+            ),
+            Value::Object(criteria),
+        );
+        let b = ctx.judge("blocks", context(), Map::from_iter([("refine".to_string(), refine)])).await?;
+        t.lap(b.label());
+        let probs = b.probabilities("refine").unwrap_or_default();
+        let whole = probs.get("o0").copied().unwrap_or(0.0);
+        let piece = (1..options.len())
+            .map(|k| (k, probs.get(&format!("o{k}")).copied().unwrap_or(0.0)))
+            .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
+        if let Some((k, pk)) = piece
+            && pk >= PRECISE_THRESHOLD
+            && pk >= whole
+        {
+            return Ok(Pick { block: top[best.block].i, range: options[k].clone(), p });
+        }
+        return Ok(Pick { block: top[best.block].i, range: best.range.clone(), p });
+    }
     if p >= threshold && !inside.is_empty() {
         let options: Vec<&precise::Span> = std::iter::once(best).chain(inside).collect();
         let mut criteria = Map::new();
@@ -754,12 +799,7 @@ async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>,
             ),
             Value::Object(criteria),
         );
-        let context = vec![Item {
-            id: "ctx".to_string(),
-            state: json!({ "block": top[best.block].i, "text": top[best.block].text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
-            question: None,
-        }];
-        let b = ctx.judge("blocks", context, Map::from_iter([("tighter".to_string(), tighter)])).await?;
+        let b = ctx.judge("blocks", context(), Map::from_iter([("tighter".to_string(), tighter)])).await?;
         t.lap(b.label());
         if let Some((k, c)) = b.choice("tighter")
             && c >= 0.5

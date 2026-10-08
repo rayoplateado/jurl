@@ -336,6 +336,83 @@ fn only_separators(gap: &str) -> bool {
     true
 }
 
+/// A winner longer than this many words may carry more than the answer, and gets its own pieces scored. Values,
+/// names and short phrases stay whole: "5,000 requests per hour" (4 words), "629.88 K (356.73 °C, 674.11 °F)" (7).
+const REFINE_WORDS: usize = 8;
+/// At most this many pieces of a winner are scored, in one more call.
+pub const MAX_REFINE: usize = 100;
+
+/// Whether the winning span is long enough that a part of it could be the answer: a line, clause or sentence of
+/// prose, not a value, a name or a table cell (those are labelled, or short).
+pub fn refinable(text: &str, span: &Span) -> bool {
+    span.label.is_none() && text[span.range.clone()].split_whitespace().count() > REFINE_WORDS
+}
+
+/// Contiguous pieces of `text[range]`, each trimmed like any candidate and never the whole span: first those that
+/// start and end at punctuation or a link's edge, never cutting a link or parenthesis ("…: [A](…), [B](…)" → "[A](…)", "[A](…), [B](…)"), then any
+/// run of words, longest first. At most `MAX_REFINE`.
+pub fn refinements(text: &str, range: &Range<usize>) -> Vec<Range<usize>> {
+    let words: Vec<Range<usize>> =
+        tokens(&text[range.clone()]).into_iter().map(|t| range.start + t.start..range.start + t.end).collect();
+    let n = words.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    // Where an item can start: the first word, a word after one ending in punctuation, a link's `[`.
+    let opens = |k: usize| {
+        k == 0
+            || text[words[k].clone()].starts_with('[')
+            || text[words[k - 1].clone()].ends_with([',', ';', ':', '.', '·', ')'])
+            || text[words[k - 1].clone()] == *"·"
+    };
+    // Where an item can end: the last word, a word ending in punctuation or closing a link.
+    let closes = |k: usize| {
+        k + 1 == n
+            || text[words[k].clone()].ends_with([',', ';', ':', '.', ')'])
+            || text[words[k + 1].clone()] == *"·"
+            || text[words[k + 1].clone()].starts_with('(')
+    };
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for a in (0..n).filter(|&a| opens(a)) {
+        for b in (a..n).filter(|&b| closes(b)) {
+            pairs.push((a, b));
+        }
+    }
+    let mut runs: Vec<(usize, usize)> = (0..n).flat_map(|a| (a + 1..n).map(move |b| (a, b))).collect();
+    runs.sort_by_key(|&(a, b)| (a as isize - b as isize, a));
+    let mut out: Vec<Range<usize>> = Vec::new();
+    let whole = trim(text, range.clone());
+    for (a, b) in pairs.into_iter().chain(runs) {
+        let Some(r) = trim(text, words[a].start..words[b].end) else { continue };
+        if Some(&r) == whole.as_ref()
+            || out.contains(&r)
+            || text[r.clone()].chars().count() > MAX_SPAN_CHARS
+            || !balanced(&text[r.clone()])
+        {
+            continue;
+        }
+        out.push(r);
+        if out.len() >= MAX_REFINE {
+            break;
+        }
+    }
+    out
+}
+
+/// Every bracket closed, in order: a piece never cuts a link or a parenthesis in half.
+fn balanced(s: &str) -> bool {
+    let mut open = Vec::new();
+    for c in s.chars() {
+        match c {
+            '(' | '[' => open.push(c),
+            ')' if open.pop() != Some('(') => return false,
+            ']' if open.pop() != Some('[') => return false,
+            _ => {}
+        }
+    }
+    open.is_empty()
+}
+
 /// "Spotify." or "Spotify.[289]": a name doesn't run past it.
 fn ends_sentence(token: &str) -> bool {
     strip_note(token).ends_with(['.', '!', '?', ';', ':'])
@@ -649,6 +726,42 @@ mod tests {
         let t =
             texts(&block(Kind::Para, "See [one](https://a.example/1) for setup and the [guide](https://a.example/2)."));
         assert!(!t.iter().any(|s| s.starts_with("[one]") && s.ends_with("2)")), "{t:?}");
+    }
+
+    #[test]
+    fn short_winners_stay_whole() {
+        for text in ["5,000 requests per hour", "629.88 K (356.73 °C, 674.11 °F)", "count back from the last item"] {
+            let span = Span { block: 0, range: 0..text.len(), label: None };
+            assert!(!refinable(text, &span), "{text}");
+        }
+        let text = "| Limit | Free | Paid |";
+        let cell = Span { block: 0, range: 0..text.len(), label: Some("x".into()) };
+        assert!(!refinable(text, &cell));
+        assert!(refinable(FOOTER, &Span { block: 0, range: 0..FOOTER.len(), label: None }));
+    }
+
+    #[test]
+    fn pieces_of_a_long_winner() {
+        let start = FOOTER.find("Ray can").unwrap();
+        let r = start..FOOTER.len();
+        let pieces: Vec<&str> = refinements(FOOTER, &r).iter().map(|p| &FOOTER[p.clone()]).collect();
+        assert!(pieces.len() <= MAX_REFINE);
+        // The list, each book, and never the whole span; every piece is the page's own text.
+        let books = &FOOTER[FOOTER.find("[La Única Verdad]").unwrap()..FOOTER.rfind('.').unwrap()];
+        assert!(pieces.contains(&books), "{pieces:?}");
+        assert!(pieces.contains(&"[The Only Truth](https://www.amazon.com/dp/B0C8TSVW7F) (in English)"), "{pieces:?}");
+        assert!(pieces.contains(&"[La Única Verdad](https://www.amazon.es/dp/B08LQYLVLK)"), "{pieces:?}");
+        assert!(!pieces.contains(&&FOOTER[trim(FOOTER, r.clone()).unwrap()]), "{pieces:?}");
+        // Punctuation-aligned pieces come first.
+        let first = pieces.iter().position(|p| *p == books).unwrap();
+        assert!(first < 30, "{first}: {pieces:?}");
+        for p in refinements(FOOTER, &r) {
+            assert!(FOOTER.get(p.clone()).is_some() && p.start >= r.start && p.end <= r.end, "{p:?}");
+            // A link's markdown is never cut in half.
+            let s = &FOOTER[p];
+            assert_eq!(s.matches('(').count(), s.matches(')').count(), "{s}");
+        }
+        assert!(refinements("one", &(0..3)).is_empty());
     }
 
     #[test]
