@@ -1,4 +1,9 @@
-use std::{collections::HashMap, env, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    env, fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 
@@ -41,12 +46,7 @@ impl Config {
             .collect();
         lines.push(format!("{key}={value}"));
         fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(&path, lines.join("\n") + "\n")?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        }
+        write_private(&path, &(lines.join("\n") + "\n"))?;
         self.file.insert(key.to_string(), value.to_string());
         Ok(path)
     }
@@ -76,9 +76,47 @@ fn merge(user: &str, dotenv: &str) -> HashMap<String, String> {
     file
 }
 
+/// Write `text` to `path`, readable only by its owner (0600 on Unix). The mode is set before the text goes in, so
+/// the key is never readable by others, not even briefly.
+fn write_private(path: &Path, text: &str) -> Result<()> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // `mode` only applies to a new file: an older jurl may have left this one looser.
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(text.as_bytes())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn writes_0600_whether_the_file_is_new_or_looser() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = env::temp_dir().join(format!("jurl-config-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let loose = dir.join("loose");
+        fs::write(&loose, "OLD=1\n").unwrap();
+        fs::set_permissions(&loose, fs::Permissions::from_mode(0o644)).unwrap();
+        for path in [loose, dir.join("fresh")] {
+            write_private(&path, "KEY=value\n").unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "KEY=value\n");
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn dotenv_supplies_only_the_api_keys() {
