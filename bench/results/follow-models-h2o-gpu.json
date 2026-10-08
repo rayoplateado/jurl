@@ -1,0 +1,350 @@
+[
+ {
+  "start": "linear.app",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$10 per user/month",
+  "right": true,
+  "pages": 3,
+  "tokens": 62449,
+  "ms": 15861,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/pricing"
+  ]
+ },
+ {
+  "start": "loom.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": null,
+  "right": false,
+  "pages": 5,
+  "tokens": 94026,
+  "ms": 20963,
+  "path": [
+   "https://loom.com/",
+   "https://www.loom.com/pricing"
+  ]
+ },
+ {
+  "start": "calendly.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": null,
+  "right": false,
+  "pages": 5,
+  "tokens": 99787,
+  "ms": 22715,
+  "path": [
+   "https://calendly.com/",
+   "https://calendly.com/pricing"
+  ]
+ },
+ {
+  "start": "cal.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$16/user/month",
+  "right": false,
+  "pages": 5,
+  "tokens": 141822,
+  "ms": 34541,
+  "path": [
+   "https://cal.com/"
+  ]
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$1",
+  "right": false,
+  "pages": 5,
+  "tokens": 107370,
+  "ms": 25782,
+  "path": [
+   "https://tailscale.com/",
+   "https://tailscale.com/pricing"
+  ]
+ },
+ {
+  "start": "vercel.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$20/mo",
+  "right": true,
+  "pages": 5,
+  "tokens": 101975,
+  "ms": 24846,
+  "path": [
+   "https://vercel.com/",
+   "https://vercel.com/pricing"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$8/month",
+  "right": false,
+  "pages": 3,
+  "tokens": 60823,
+  "ms": 14286,
+  "path": [
+   "https://www.raycast.com/",
+   "https://www.raycast.com/pro"
+  ]
+ },
+ {
+  "start": "notion.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": null,
+  "right": false,
+  "pages": 5,
+  "tokens": 134759,
+  "ms": 29480,
+  "path": [
+   "https://notion.com/",
+   "https://www.notion.com/pricing",
+   "https://www.notion.com/help/understand-pricing-for-workers"
+  ]
+ },
+ {
+  "start": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "group": "docs",
+  "answer": "5,000 requests per hour",
+  "right": true,
+  "pages": 5,
+  "tokens": 137943,
+  "ms": 27991,
+  "path": [
+   "https://docs.github.com/en",
+   "https://docs.github.com/en/rest",
+   "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "4 vCPU",
+  "right": false,
+  "pages": 3,
+  "tokens": 59606,
+  "ms": 14779,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/"
+  ]
+ },
+ {
+  "start": "kubernetes.io/docs/home/",
+  "q": "What is the default restart policy of a Pod?",
+  "group": "docs",
+  "answer": "Never",
+  "right": false,
+  "pages": 3,
+  "tokens": 111226,
+  "ms": 31163,
+  "path": [
+   "https://kubernetes.io/docs/home/",
+   "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Medicine",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "wikipedia",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 40269,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "Who designed the Eiffel Tower?",
+  "group": "wikipedia",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20526,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Alcohol",
+  "q": "What is the boiling point of ethanol?",
+  "group": "wikipedia",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 41430,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Paris",
+  "q": "What is the chemical formula of aspirin?",
+  "group": "long",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20543,
+  "path": []
+ },
+ {
+  "start": "tailscale.com",
+  "q": "What is the phone number for customer support?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 66704,
+  "ms": 27630,
+  "path": []
+ },
+ {
+  "start": "linear.app",
+  "q": "What is the name of the CEO's dog?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 8,
+  "tokens": 95813,
+  "ms": 26133,
+  "path": [
+   "https://linear.app/",
+   "https://linear.app/asks"
+  ]
+ },
+ {
+  "start": "raycast.com",
+  "q": "What is the price of the Ultra plan?",
+  "group": "trap",
+  "answer": "$480 / year",
+  "right": false,
+  "pages": 3,
+  "tokens": 57225,
+  "ms": 13421,
+  "path": [
+   "https://www.raycast.com/",
+   "https://www.raycast.com/pricing"
+  ]
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Banana",
+  "q": "What is the atomic number of uranium?",
+  "group": "long",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20522,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Jazz",
+  "q": "How many moons does Mars have?",
+  "group": "long",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20510,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Tennis",
+  "q": "What is the boiling point of mercury?",
+  "group": "long",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20490,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Pizza",
+  "q": "Who wrote Don Quixote?",
+  "group": "long",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20473,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Volcano",
+  "q": "Who painted the Mona Lisa?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20493,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Chess",
+  "q": "What is the speed of sound in air?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20548,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Coffee",
+  "q": "Who composed The Magic Flute?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20599,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Association_football",
+  "q": "What is the half-life of carbon-14?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20535,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Guitar",
+  "q": "What is the largest planet in the Solar System?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20613,
+  "path": []
+ },
+ {
+  "start": "en.wikipedia.org/wiki/Bicycle",
+  "q": "In what year did the Titanic sink?",
+  "group": "heldout",
+  "answer": null,
+  "right": false,
+  "pages": null,
+  "tokens": null,
+  "ms": 20528,
+  "path": []
+ }
+]
