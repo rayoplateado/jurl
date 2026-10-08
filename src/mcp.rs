@@ -267,7 +267,11 @@ fn handle(line: &str) -> Reply {
     };
     // Batches (MCP 2025-03-26 only) aren't served: say so, rather than drop the line as junk below.
     if msg.is_array() {
-        return Reply::Now(Some(error(Value::Null, -32600, "batches aren't supported: send one message per line")));
+        return Reply::Now(Some(error(
+            Value::Null,
+            -32600,
+            "Invalid Request: batches aren't supported, send one message per line",
+        )));
     }
     let Some(method) = msg.get("method").and_then(Value::as_str) else {
         // A response to a request we never send, or junk: nothing to answer.
@@ -476,6 +480,7 @@ mod tests {
             let r = reply(batch).expect("a batch got no reply");
             assert_eq!(r["error"]["code"], -32600);
             assert_eq!(r["id"], Value::Null);
+            assert!(r["error"]["message"].as_str().unwrap().starts_with("Invalid Request: "));
         }
     }
 
