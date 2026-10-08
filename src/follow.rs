@@ -17,7 +17,7 @@ use crate::{
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Link},
-    links::{self, key, overlap},
+    links::{self, FieldScores, key, overlap},
     load, missed, precise_pick, render_blocks, render_precise, score_blocks, top,
 };
 
@@ -208,6 +208,8 @@ struct Visit {
     links: Vec<(Url, String, f64)>,
     /// Its menus and footers, see [`menus`].
     menus: HashSet<String>,
+    /// The field scores this page asked Jev for, by link (see [`FieldScores`]): the search keeps them for later pages.
+    new_field_scores: FieldScores,
 }
 
 /// A page's links outside its text: menus and footers, which a site repeats on every page.
@@ -217,7 +219,8 @@ fn menus(ex: &Extracted) -> HashSet<String> {
 }
 
 /// Read one page: is the answer here, and which of its links lead on? Both questions go to Jev at once. `known` holds
-/// the menu links of the pages read before.
+/// the menu links of the pages read before, and `field_scores` the field scores the search has so far.
+#[allow(clippy::too_many_arguments)]
 async fn visit(
     args: &Args,
     cfg: &Config,
@@ -226,11 +229,12 @@ async fn visit(
     url: &Url,
     site: &Site,
     known: &HashSet<String>,
+    field_scores: &FieldScores,
 ) -> Result<Visit> {
     let mut t = Timer::new();
     let (url, ex) = load(args, cfg, client, url, &mut t).await?;
     let menus = menus(&ex);
-    let (found, score, warmth, links) = {
+    let (found, score, warmth, links, new_field_scores) = {
         let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &url, &ex) };
         // The links `--links -q` would score, menus and footers included, as long as they stay on the site. A menu
         // link is scored on the first page it's on, not again on every page: on a page far from the question, the
@@ -268,15 +272,16 @@ async fn visit(
                 Ok(((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth))
             }
         };
-        // `--links -q` on the same page, at the same time; a long search also asks for the answer's field.
+        // `--links -q` on the same page, at the same time; a long search also asks for the answer's field, except for
+        // the links whose field the search already has.
         let long = args.follow.unwrap_or(5) >= 10;
-        let leads = links::score(&ctx, &candidates, "Following the link in `links`", long);
+        let leads = links::score(&ctx, &candidates, "Following the link in `links`", long.then_some(field_scores));
         let (answer, scores) = tokio::join!(answer, leads);
         let (answer, warmth) = answer?;
-        let scores = match scores {
+        let (scores, new_field_scores) = match scores {
             Ok(s) => s,
             Err(e) if is_api_error(&e) => return Err(e),
-            Err(_) => vec![0.0; candidates.len()],
+            Err(_) => (vec![0.0; candidates.len()], FieldScores::new()),
         };
         let links = candidates
             .into_iter()
@@ -287,11 +292,11 @@ async fn visit(
             })
             .collect();
         match answer {
-            Some((found, score)) => (Some(found), score, warmth, links),
-            None => (None, 0.0, warmth, links),
+            Some((found, score)) => (Some(found), score, warmth, links, new_field_scores),
+            None => (None, 0.0, warmth, links, new_field_scores),
         }
     };
-    Ok(Visit { url, ex, found, score, warmth, links, menus })
+    Ok(Visit { url, ex, found, score, warmth, links, menus, new_field_scores })
 }
 
 /// A page waiting to be opened, and how jurl would get there.
@@ -371,16 +376,22 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
             app_shell: false,
         };
         let ctx = Ctx { owner: site.owner(), ..Ctx::new(args, client, key, &start, &empty) };
-        let scores = links::score(&ctx, &links, "The page at the URL in `links`", false)
+        let scores = links::score(&ctx, &links, "The page at the URL in `links`", None)
             .await
+            .map(|(scores, _)| scores)
             .unwrap_or_else(|_| vec![0.0; links.len()]);
         links.into_iter().zip(scores).map(|(l, p)| (l.url, l.text, p)).collect::<Vec<_>>()
     };
     let mut known = HashSet::new();
-    let (first, hints, robots) =
-        tokio::join!(visit(args, cfg, client, key, &start, &site, &known), hints, Robots::load(client, &start));
-    let first = first?;
+    let mut field_scores = FieldScores::new();
+    let (first, hints, robots) = tokio::join!(
+        visit(args, cfg, client, key, &start, &site, &known, &field_scores),
+        hints,
+        Robots::load(client, &start)
+    );
+    let mut first = first?;
     known.extend(first.menus.iter().cloned());
+    field_scores.extend(std::mem::take(&mut first.new_field_scores));
     t.lap(format!("page 1 + site map ({} pages listed)", hints.len()));
 
     let mut visited: HashSet<String> = [self::key(&start), self::key(&first.url)].into_iter().collect();
@@ -487,14 +498,18 @@ pub async fn run(args: &Args, cfg: &Config, client: &Client, key: &str, start: U
         for l in &batch {
             visited.insert(self::key(&l.url));
         }
-        let results = join_all(batch.iter().map(|l| visit(args, cfg, client, key, &l.url, &site, &known))).await;
+        // The pages of a batch are read side by side: each reads the field scores from before the batch, and what it
+        // asked is kept once the batch is in.
+        let results =
+            join_all(batch.iter().map(|l| visit(args, cfg, client, key, &l.url, &site, &known, &field_scores))).await;
         pages += batch.len();
         t.lap(format!("{} more", batch.len()));
         for (lead, r) in batch.into_iter().zip(results) {
             match r {
-                Ok(v) => {
+                Ok(mut v) => {
                     visited.insert(self::key(&v.url));
                     known.extend(v.menus.iter().cloned());
+                    field_scores.extend(std::mem::take(&mut v.new_field_scores));
                     let mut path = lead.path.clone();
                     path.push(v.url.clone());
                     take(v, lead.score, lead.p, path, &mut leads, &mut found);

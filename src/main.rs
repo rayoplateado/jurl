@@ -864,7 +864,7 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered>
         if candidates.is_empty() {
             return Err(not_found(format!("no links found in {}", ctx.url)));
         }
-        let scores = links::score(ctx, &candidates, "Following the link in `links`", false).await?;
+        let (scores, _) = links::score(ctx, &candidates, "Following the link in `links`", None).await?;
         t.lap(format!("{} links", candidates.len()));
         (candidates, scores.into_iter().map(Some).collect())
     } else {
