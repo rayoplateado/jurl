@@ -155,7 +155,7 @@ fn read(links: &[Link], a: &Answers, field: Option<&FieldScores>) -> (Vec<f64>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Args, extract};
+    use crate::{cli::Args, extract};
     use clap::Parser;
     use reqwest::Client;
 

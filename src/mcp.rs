@@ -16,7 +16,7 @@ use reqwest::Client;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
-use crate::{Args, NotFound, Rendered, config::Config, timing::Timer};
+use crate::{NotFound, Rendered, cli::Args, config::Config, timing::Timer};
 
 /// The protocol versions that start with `initialize`, newest first. 2026-07-28 replaced the handshake with
 /// `server/discover`; clients on it fall back to `initialize` when that method isn't found, as it isn't here.

@@ -1,3 +1,4 @@
+mod cli;
 mod config;
 mod decide;
 mod extract;
@@ -26,74 +27,12 @@ use reqwest::Client;
 use serde_json::{Map, Value, json};
 
 use crate::{
+    cli::Args,
     config::Config,
     decide::{Answers, choice, is_api_error, noul},
     extract::{Block, Extracted, Image, Kind, Link},
     timing::Timer,
 };
-
-/// curl, but it reads the page for you. Jev picks what matters; Clef looks at
-/// the images. Everything printed is literally in the page.
-#[derive(Parser)]
-#[command(version)]
-struct Args {
-    /// The page to read, `init` to set up your API keys, `update` to install the latest jurl, or `mcp` to serve
-    /// jurl's tools to an AI agent (MCP over stdio)
-    url: String,
-    /// Keep what helps answer this question instead of a general summary
-    #[arg(short = 'q', long)]
-    ask: Option<String>,
-    /// Print the page's content images (one URL per line, best first)
-    #[arg(short, long)]
-    image: bool,
-    /// With --image: let Clef look at the pixels (slower)
-    #[arg(long)]
-    vision: bool,
-    /// Find the images that show this ("a cathedral"): Clef looks at every candidate
-    #[arg(short, long, value_name = "WHAT")]
-    find: Option<String>,
-    /// Print the links worth following (one URL per line, best first)
-    #[arg(short, long)]
-    links: bool,
-    /// Only code blocks: examples, commands, snippets
-    #[arg(short, long)]
-    code: bool,
-    /// With -q: print just the answer, in the page's own words, then the block it's in and a link to it.
-    /// Exits 1 when no part of the page is exactly the answer (2 on errors)
-    #[arg(short, long)]
-    precise: bool,
-    /// With -q: when the page doesn't answer, follow its links within the same site, most promising first,
-    /// reading up to this many pages in all [default: 5]
-    #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]
-    follow: Option<usize>,
-    /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text)
-    #[arg(short, long)]
-    render: bool,
-    /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
-    #[arg(short = 'n', long)]
-    max: Option<usize>,
-    /// No max: keep everything that passes the threshold
-    #[arg(short, long)]
-    all: bool,
-    /// Minimum probability to keep a result [default: 0.5, or 0.4 for the --precise answer]
-    #[arg(long)]
-    threshold: Option<f64>,
-    #[arg(long)]
-    json: bool,
-    /// Per-phase timings on stderr
-    #[arg(short, long)]
-    timing: bool,
-}
-
-impl Args {
-    fn threshold(&self) -> f64 {
-        self.threshold.unwrap_or(0.5)
-    }
-
-    fn limit(&self, default: usize) -> usize {
-        if self.all { usize::MAX } else { self.max.unwrap_or(default) }
-    }
-}
 
 /// The answer's share of one choice over every span and "none". On 30 pricing pages every answer at or above
 /// this was right; the wrong ones scored 0.37 or less.
