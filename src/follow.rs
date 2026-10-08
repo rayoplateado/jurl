@@ -767,7 +767,7 @@ impl Search {
             },
         };
         let Ranked { visit: v, path, .. } = ranked;
-        let ctx = Ctx::new(args, client, api_key, &v.url, &v.ex);
+        let ctx = self.site.ctx(args, client, api_key, &v.url, &v.ex);
         let rendered = match &v.found {
             Some(Found::Precise(pick)) => render_precise(&ctx, &v.ex, pick, Some(&path)),
             Some(Found::Blocks { scores, keep, kind }) => {
