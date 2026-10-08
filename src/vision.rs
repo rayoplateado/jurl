@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     config::Config,
-    decide::{self, choice, is_api_error, noul},
+    decide::{self, Answers, choice, is_api_error, noul},
     extract::{Extracted, Image},
     fetch,
     judge::{Ctx, Item},
@@ -90,7 +90,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
                 "height": i.height,
             }),
             questions: vec![(
-                format!("img{}", i.i),
+                image_id(i),
                 match &ctx.args.ask {
                     Some(q) => noul(format!(
                         "Judging by its file name, alt text and caption, the image in `images` with i={} shows: {q}",
@@ -119,22 +119,19 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         title: &ex.title,
         query,
     });
-    let cap = if query.is_some() { FIND_MAX } else { VISION_MAX };
-    let (a, looks) = if query.is_some() && ex.images.len() > cap {
+    let cap = look_cap(query);
+    let (a, looks) = if needs_shortlist(ex.images.len(), cap, query) {
         // Too many to look at: Jev shortlists by text, then Clef looks at the shortlist.
         let a = ctx.judge("images", items, Map::new()).await?;
         t.lap(a.label());
-        let mut ranked: Vec<&Image> = ex.images.iter().collect();
-        let p = |i: &Image| a.noul(&format!("img{}", i.i)).unwrap_or(0.0);
-        ranked.sort_by(|x, y| p(y).total_cmp(&p(x)));
-        ranked.truncate(cap);
-        let looks = look_all(req.as_ref(), ranked).await;
+        let picks = shortlist(&ex.images, cap, |img| text_score(&a, img));
+        let looks = look_all(req.as_ref(), picks).await;
         t.lap(format!("clef({} img)", looks.len()));
         (a, looks)
     } else {
         let (a, looks) = tokio::join!(
             ctx.judge("images", items, Map::new()),
-            look_all(req.as_ref(), ex.images.iter().take(cap).collect())
+            look_all(req.as_ref(), first_in_page_order(&ex.images, cap))
         );
         let a = a?;
         t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
@@ -145,7 +142,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         .images
         .iter()
         .map(|img| {
-            let p_text = a.noul(&format!("img{}", img.i)).unwrap_or(0.0);
+            let p_text = text_score(&a, img);
             let pixels = match looks.get(img.i) {
                 Some(Ok(p_pixels)) => Some(*p_pixels),
                 Some(Err(e)) => {
@@ -189,6 +186,39 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         .collect();
     let text = kept.iter().map(|(i, _)| format!("{}\n", i.url)).collect();
     Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }) })
+}
+
+/// How many images Clef looks at: --find (a query) looks at more.
+fn look_cap(query: Option<&str>) -> usize {
+    if query.is_some() { FIND_MAX } else { VISION_MAX }
+}
+
+/// Whether Jev has to shortlist: a query, and more images than Clef looks at.
+fn needs_shortlist(images: usize, cap: usize, query: Option<&str>) -> bool {
+    query.is_some() && images > cap
+}
+
+/// The `cap` images that Jev's text score ranks best, best first (ties keep page order).
+fn shortlist(images: &[Image], cap: usize, text: impl Fn(&Image) -> f64) -> Vec<&Image> {
+    let mut ranked: Vec<&Image> = images.iter().collect();
+    ranked.sort_by(|x, y| text(y).total_cmp(&text(x)));
+    ranked.truncate(cap);
+    ranked
+}
+
+/// The first `cap` images in page order: what Clef looks at when no shortlist is needed.
+fn first_in_page_order(images: &[Image], cap: usize) -> Vec<&Image> {
+    images.iter().take(cap).collect()
+}
+
+/// The question id of an image's answer from Jev.
+fn image_id(img: &Image) -> String {
+    format!("img{}", img.i)
+}
+
+/// Jev's text score for an image, 0 when Jev didn't answer it.
+fn text_score(a: &Answers, img: &Image) -> f64 {
+    a.noul(&image_id(img)).unwrap_or(0.0)
 }
 
 /// An image's score from Jev's text score and, when Clef answered, its pixel score. Without an answer the text score
@@ -325,6 +355,46 @@ mod tests {
         };
         let got = hedged(call, Duration::from_millis(100)).await;
         (got, calls.into_inner())
+    }
+
+    /// An image known only by its index, for the choosing tests.
+    fn image(i: usize) -> Image {
+        let url = url::Url::parse(&format!("https://example.test/{i}.jpg")).unwrap();
+        Image {
+            i,
+            url: url.clone(),
+            preview: url,
+            alt: String::new(),
+            caption: String::new(),
+            width: None,
+            height: None,
+        }
+    }
+
+    #[test]
+    fn a_query_looks_at_more_images_and_shortlists_past_its_cap() {
+        assert_eq!(look_cap(None), VISION_MAX);
+        assert_eq!(look_cap(Some("a cat")), FIND_MAX);
+        // Without a query there is never a shortlist: the first images in page order are looked at.
+        assert!(!needs_shortlist(90, look_cap(None), None));
+        // With a query, every image up to the cap is looked at, and one more than the cap needs a shortlist.
+        assert!(!needs_shortlist(FIND_MAX, look_cap(Some("a cat")), Some("a cat")));
+        assert!(needs_shortlist(FIND_MAX + 1, look_cap(Some("a cat")), Some("a cat")));
+    }
+
+    #[test]
+    fn without_a_shortlist_the_first_images_in_page_order_are_looked_at() {
+        let images: Vec<Image> = (0..15).map(image).collect();
+        let looked: Vec<usize> = first_in_page_order(&images, look_cap(None)).iter().map(|i| i.i).collect();
+        assert_eq!(looked, (0..VISION_MAX).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_shortlist_is_the_best_text_scores_with_ties_in_page_order() {
+        let images: Vec<Image> = (0..6).map(image).collect();
+        let text = |i: &Image| [0.1, 0.9, 0.5, 0.9, 0.2, 0.5][i.i];
+        let picked: Vec<usize> = shortlist(&images, 4, text).iter().map(|i| i.i).collect();
+        assert_eq!(picked, vec![1, 3, 2, 5]);
     }
 
     #[test]
