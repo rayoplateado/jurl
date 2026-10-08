@@ -4,11 +4,15 @@
 //! page looks closest, backtracking when a trail goes cold (hot and cold). The site's own map (`llms.txt`,
 //! `sitemap.xml`) is read alongside the first page: it often names the right page outright.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use anyhow::Result;
+use encoding_rs::Encoding;
 use futures::future::join_all;
-use reqwest::Client;
+use reqwest::{Client, header};
 use serde_json::Map;
 use url::Url;
 
@@ -188,16 +192,46 @@ impl RobotsByHost {
     }
 }
 
+/// The most a small text file (robots.txt, llms.txt, a sitemap) is read: a body past this is refused as it arrives, not
+/// read whole first.
+const SMALL_TEXT_MAX: usize = 5_000_000;
+/// How long a small text file may take, the body included.
+const SMALL_TEXT_TIMEOUT: Duration = Duration::from_secs(4);
+
 /// A small text file from the site (robots.txt, llms.txt, a sitemap), or nothing.
 async fn small_text(client: &Client, url: &Url) -> Option<String> {
-    let res = client.get(url.as_str()).timeout(std::time::Duration::from_secs(4)).send().await.ok()?;
+    small_text_within(client, url, SMALL_TEXT_MAX).await
+}
+
+/// [`small_text`] with its cap given. The body is read with fetch.rs's capped reader and decoded as fetch.rs decodes a
+/// page (see [`decode`]).
+async fn small_text_within(client: &Client, url: &Url, max: usize) -> Option<String> {
+    let mut res = client.get(url.as_str()).timeout(SMALL_TEXT_TIMEOUT).send().await.ok()?;
     if !res.status().is_success() {
         return None;
     }
-    let body = res.text().await.ok()?;
-    (!body.trim_start().starts_with('<') || body.contains("<urlset") || body.contains("<sitemapindex"))
-        .then_some(body)
-        .filter(|b| b.len() < 5_000_000)
+    let content_type =
+        res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    let bytes = crate::fetch::read_capped(&mut res, max).await.ok().flatten()?;
+    let body = decode(&content_type, &bytes);
+    (!body.trim_start().starts_with('<') || body.contains("<urlset") || body.contains("<sitemapindex")).then_some(body)
+}
+
+/// The text of a body as fetch.rs decodes a page: the charset its Content-Type names, UTF-8 when it names none, and a
+/// byte order mark over both.
+fn decode(content_type: &str, bytes: &[u8]) -> String {
+    charset_of(content_type).decode(bytes).0.into_owned()
+}
+
+/// The encoding a Content-Type names. A copy of `charset_of` in fetch.rs, which is private there: the two must agree.
+fn charset_of(content_type: &str) -> &'static Encoding {
+    content_type
+        .split(';')
+        .skip(1)
+        .filter_map(|param| param.split_once('='))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
+        .and_then(|(_, label)| Encoding::for_label(label.trim().trim_matches('"').as_bytes()))
+        .unwrap_or(encoding_rs::UTF_8)
 }
 
 /// The pages the site lists itself: `llms.txt` (written for exactly this) and `sitemap.xml`, shallowest first. A page
@@ -848,7 +882,7 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::answer::PRECISE_THRESHOLD;
+    use crate::{answer::PRECISE_THRESHOLD, fetch::test_server};
 
     #[test]
     fn menus_are_the_links_outside_the_text() {
@@ -917,6 +951,33 @@ mod tests {
     fn sitemap_locs() {
         let xml = "<urlset><url><loc>https://x.com/a?b=1&amp;c=2</loc></url><url><loc> https://x.com/pricing </loc></url></urlset>";
         assert_eq!(locs(xml), ["https://x.com/a?b=1&c=2", "https://x.com/pricing"]);
+    }
+
+    #[tokio::test]
+    async fn a_small_file_is_decoded_as_a_page_is() {
+        // 0xE9 is é and 0x80 is € in windows-1252: read as fetch.rs reads a page, and as reqwest's text() reads it.
+        let head =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=windows-1252\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let body = b"Caf\xE9 costs \x80 5".to_vec();
+        let url = |s: String| Url::parse(&s).unwrap();
+        let ours = small_text(&test_server::client(), &url(test_server::serve(head.into(), body.clone(), true)))
+            .await
+            .expect("a small file");
+        let page = crate::fetch::fetch(&test_server::client(), &test_server::serve(head.into(), body.clone(), true))
+            .await
+            .expect("a page");
+        let res = test_server::client().get(test_server::serve(head.into(), body, true)).send().await.expect("a reply");
+        assert_eq!(ours, "Café costs € 5");
+        assert_eq!(ours, page.body);
+        assert_eq!(ours, res.text().await.expect("text"));
+    }
+
+    #[tokio::test]
+    async fn a_small_file_past_its_cap_is_refused_and_one_at_it_is_read() {
+        let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let url = |body: Vec<u8>| Url::parse(&test_server::serve(head.into(), body, true)).unwrap();
+        assert_eq!(small_text_within(&test_server::client(), &url(vec![b'a'; 4096]), 1024).await, None);
+        assert!(small_text_within(&test_server::client(), &url(vec![b'a'; 1024]), 1024).await.is_some());
     }
 
     #[test]
