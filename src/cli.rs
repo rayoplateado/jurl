@@ -50,6 +50,7 @@ pub(crate) struct Args {
     /// Minimum probability to keep a result [default: 0.5, or 0.4 for the --precise answer]
     #[arg(long)]
     pub(crate) threshold: Option<f64>,
+    /// Print the result as JSON, with `usage` for what the run cost
     #[arg(long)]
     pub(crate) json: bool,
     /// Per-phase timings on stderr
@@ -75,7 +76,16 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
+    use clap::CommandFactory;
+
     use super::*;
+
+    #[test]
+    fn every_flag_has_help_text() {
+        for arg in Args::command().get_arguments() {
+            assert!(arg.get_help().is_some(), "--{} has no help text", arg.get_id());
+        }
+    }
 
     #[test]
     fn each_mode_has_its_default_bar_and_threshold_overrides_both() {
