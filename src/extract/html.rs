@@ -75,7 +75,15 @@ fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool) -> Vec<Block> {
         .select(&sel("div[hidden][id^='S:']"))
         .filter_map(|e| Some((e.value().id()?.strip_prefix("S:")?.to_string(), e)))
         .collect();
-    let mut w = Walker { blocks: Vec::new(), skip_header: in_body, buf: String::new(), segments, list: None, lists: 0 };
+    let mut w = Walker {
+        blocks: Vec::new(),
+        skip_header: in_body,
+        buf: String::new(),
+        segments,
+        list: None,
+        lists: 0,
+        depth: 0,
+    };
     w.container(root);
     w.flush();
     w.blocks
@@ -173,6 +181,10 @@ fn collect_site_links(doc: &Html, base: &Url) -> Vec<Link> {
     site_links
 }
 
+/// How deep the walk recurses into a page before it reads a subtree flat. A page nested this deep is hostile or broken,
+/// and the stack is finite: the walk and the inline text both stop here.
+const MAX_WALK_DEPTH: usize = 256;
+
 struct Walker<'a> {
     blocks: Vec<Block>,
     skip_header: bool,
@@ -181,6 +193,8 @@ struct Walker<'a> {
     /// The list being walked, and how many lists came before it.
     list: Option<usize>,
     lists: usize,
+    /// How many containers the walk is inside of, capped at `MAX_WALK_DEPTH`.
+    depth: usize,
 }
 
 impl<'a> Walker<'a> {
@@ -200,6 +214,14 @@ impl<'a> Walker<'a> {
 
     /// Generic container: inline runs become paragraphs, block children recurse.
     fn container(&mut self, el: ElementRef<'a>) {
+        if self.depth >= MAX_WALK_DEPTH {
+            // Too deep to walk into: its text, read flat, carries on the paragraph in progress.
+            self.buf.push(BREAK);
+            self.buf.push_str(&flat_text(el, self.skip_header));
+            self.buf.push(BREAK);
+            return;
+        }
+        self.depth += 1;
         for child in el.children() {
             match child.value() {
                 Node::Text(t) => self.buf.push_str(t),
@@ -227,6 +249,7 @@ impl<'a> Walker<'a> {
                 _ => {}
             }
         }
+        self.depth -= 1;
     }
 
     /// The streamed content that belongs where this `<template id="B:n">` is.
@@ -313,6 +336,11 @@ impl<'a> Walker<'a> {
 }
 
 fn inline_text(el: ElementRef) -> String {
+    inline_text_at(el, 0)
+}
+
+/// `inline_text` of `el`, which is `depth` levels down: past `MAX_WALK_DEPTH` a subtree is read flat.
+fn inline_text_at(el: ElementRef, depth: usize) -> String {
     let mut out = String::new();
     for c in el.children() {
         match c.value() {
@@ -327,11 +355,48 @@ fn inline_text(el: ElementRef) -> String {
                     if block {
                         out.push(BREAK);
                     }
-                    out.push_str(&inline_text(c));
+                    if depth < MAX_WALK_DEPTH {
+                        out.push_str(&inline_text_at(c, depth + 1));
+                    } else {
+                        // Inline text keeps the words of a header, as `inline_text` does.
+                        out.push_str(&flat_text(c, false));
+                    }
                     if block {
                         out.push(BREAK);
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The text under `el`, read without recursion for a subtree the walk won't go into. It leaves out what the walk leaves
+/// out (script, hidden elements, page chrome, and a masthead `<header>` when `skip_header`), and a block element starts
+/// and ends a line.
+fn flat_text(el: ElementRef, skip_header: bool) -> String {
+    let mut out = String::new();
+    // A stack instead of recursion. A `None` marks the end of a block element.
+    let mut stack: Vec<_> = el.children().rev().map(Some).collect();
+    while let Some(next) = stack.pop() {
+        let Some(node) = next else {
+            out.push(BREAK);
+            continue;
+        };
+        match node.value() {
+            Node::Text(t) => out.push_str(t),
+            Node::Element(e) if e.name() == "br" => out.push(BREAK),
+            Node::Element(_) => {
+                let Some(child) = ElementRef::wrap(node) else { continue };
+                if skipped(child, skip_header, true) || permalink(child) {
+                    continue;
+                }
+                if !INLINE.contains(&child.value().name()) {
+                    out.push(BREAK);
+                    stack.push(None);
+                }
+                stack.extend(child.children().rev().map(Some));
             }
             _ => {}
         }
@@ -634,6 +699,67 @@ mod tests {
         let ex = html(page, &Url::parse("https://example.com/blog/post").unwrap());
         let urls: Vec<_> = ex.images.iter().map(|i| i.url.as_str()).collect();
         assert_eq!(urls, ["https://example.com/a.png"]);
+    }
+
+    /// The stack the deep-nesting tests run on: a tokio worker's, which is where the walk runs in production. In a debug
+    /// build the walk at its depth cap needs between 0.5 and 1 MB of it, and the worst case (the walk at its cap, then
+    /// inline text at its cap) between 1 and 1.5 MB.
+    const DEEP_STACK: usize = 2 << 20;
+
+    /// The block texts of `page`, read on a thread of `DEEP_STACK` bytes. A recursion too deep for that aborts the test.
+    fn texts_on_a_deep_stack(page: String) -> Vec<String> {
+        std::thread::Builder::new()
+            .stack_size(DEEP_STACK)
+            .spawn(move || html(&page, &base()).blocks.into_iter().map(|b| b.text).collect())
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_page_nested_deeper_than_the_walk_recurses_is_read_flat() {
+        // Without the cap, 600 levels overflow DEEP_STACK in a debug build. This is 1,000, which parses in about 60 ms:
+        // html5ever scans the open elements for each <div>, so parsing costs the square of the nesting.
+        let page = format!("<body>{}Deep text is still read.{}</body>", "<div>".repeat(1_000), "</div>".repeat(1_000));
+        let texts = texts_on_a_deep_stack(page);
+        assert!(texts.iter().any(|t| t == "Deep text is still read."), "{texts:?}");
+    }
+
+    #[test]
+    fn inline_elements_nested_deeper_than_the_walk_recurses_are_read_flat() {
+        // Without the cap, 4,000 spans overflow DEEP_STACK in a debug build. This is 8,000.
+        let page = format!("<body><p>{}Deep words.{}</p></body>", "<span>".repeat(8_000), "</span>".repeat(8_000));
+        let texts = texts_on_a_deep_stack(page);
+        assert!(texts.iter().any(|t| t == "Deep words."), "{texts:?}");
+    }
+
+    #[test]
+    fn the_walk_and_the_inline_text_at_their_caps_fit_the_stack_together() {
+        // The walk reaches its cap, then a paragraph there reaches the inline cap: the worst case. Without the caps it
+        // overflows DEEP_STACK in a debug build; with them it fits.
+        let page = format!(
+            "<body>{}<p>{}Deep words.{}</p>{}</body>",
+            "<div>".repeat(255),
+            "<span>".repeat(4_000),
+            "</span>".repeat(4_000),
+            "</div>".repeat(255)
+        );
+        let texts = texts_on_a_deep_stack(page);
+        assert!(texts.iter().any(|t| t == "Deep words."), "{texts:?}");
+    }
+
+    #[test]
+    fn a_deep_subtree_keeps_what_a_reader_sees_and_no_more() {
+        // Past the depth cap the text is read flat, which must leave out script, hidden text and a masthead header as
+        // the walk does.
+        let page = format!(
+            r#"<body>{}<p>Shown text.</p><script>evil()</script><div style="display: none">Hidden text.</div><header>Masthead words.</header>{}</body>"#,
+            "<div>".repeat(300),
+            "</div>".repeat(300)
+        );
+        let text: String = html(&page, &base()).blocks.into_iter().map(|b| b.text + "|").collect();
+        assert!(text.contains("Shown text."), "{text}");
+        assert!(!text.contains("evil()") && !text.contains("Hidden text.") && !text.contains("Masthead"), "{text}");
     }
 
     #[test]
