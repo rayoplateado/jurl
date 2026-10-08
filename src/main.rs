@@ -11,7 +11,7 @@ mod setup;
 mod update;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{Write, stdout},
     process::ExitCode,
     time::{Duration, Instant},
@@ -231,29 +231,9 @@ impl<'a> Ctx<'a> {
                  interstitial standing in for the real page, not a page whose content merely discusses those topics.",
             ),
         );
-        let mut chunks: Vec<(Vec<Value>, Map<String, Value>)> = vec![(Vec::new(), extra)];
-        let mut size = 0;
-        for item in items {
-            let len = item.state.to_string().len();
-            let full = {
-                let qs = &chunks.last().unwrap().1;
-                !qs.is_empty() && (qs.len() >= MAX_QUESTIONS || size + len > MAX_STATE_CHARS)
-            };
-            if item.question.is_some() && full {
-                chunks.push((Vec::new(), Map::new()));
-                size = 0;
-            }
-            let (state, qs) = chunks.last_mut().unwrap();
-            size += len;
-            state.push(item.state);
-            if let Some(q) = item.question {
-                qs.insert(item.id, q);
-            }
-        }
-        chunks.retain(|(_, qs)| !qs.is_empty());
-
-        let n = chunks.len();
-        let results = join_all(chunks.into_iter().map(|(entries, qs)| {
+        let requests = chunks(items, extra);
+        let n = requests.len();
+        let results = join_all(requests.into_iter().map(|(entries, qs)| {
             let mut state = json!({ "title": self.title, "url": self.url.as_str(), field: entries });
             if field != "blocks" {
                 state["page_text"] = json!(self.excerpt);
@@ -283,6 +263,32 @@ impl<'a> Ctx<'a> {
         }
         Ok(merged)
     }
+}
+
+/// Splits items into the requests `judge` sends. A question opens a new request when it would take the open one past
+/// MAX_QUESTIONS (`extra` counts; it goes in the first) or past MAX_STATE_CHARS. Headings never open one.
+fn chunks(items: Vec<Item>, extra: Map<String, Value>) -> Vec<(Vec<Value>, Map<String, Value>)> {
+    let mut requests: Vec<(Vec<Value>, Map<String, Value>)> = vec![(Vec::new(), extra)];
+    let mut size = 0;
+    for item in items {
+        let len = item.state.to_string().len();
+        let full = {
+            let qs = &requests.last().unwrap().1;
+            !qs.is_empty() && (qs.len() >= MAX_QUESTIONS || size + len > MAX_STATE_CHARS)
+        };
+        if item.question.is_some() && full {
+            requests.push((Vec::new(), Map::new()));
+            size = 0;
+        }
+        let (state, qs) = requests.last_mut().unwrap();
+        size += len;
+        state.push(item.state);
+        if let Some(q) = item.question {
+            qs.insert(item.id, q);
+        }
+    }
+    requests.retain(|(_, qs)| !qs.is_empty());
+    requests
 }
 
 #[tokio::main]
@@ -626,18 +632,19 @@ fn render_blocks(
     ctx: &Ctx<'_>,
     ex: &Extracted,
     scores: &[Option<f64>],
-    keep: &HashMap<usize, f64>,
+    keep: &[(usize, f64)],
     kind: Option<(String, f64)>,
     path: Option<&[url::Url]>,
 ) -> Result<Rendered> {
     let args = ctx.args;
+    let kept: HashSet<usize> = keep.iter().map(|&(i, _)| i).collect();
     let mut pending_heading = None;
     let mut selected = Vec::new();
-    let items = extract::short_items_of_kept_lists(&ex.blocks, |i| keep.contains_key(&i));
+    let items = extract::short_items_of_kept_lists(&ex.blocks, |i| kept.contains(&i));
     for b in &ex.blocks {
         if b.kind == Kind::Heading {
             pending_heading = Some(b);
-        } else if keep.contains_key(&b.i) || items.contains(&b.i) {
+        } else if kept.contains(&b.i) || items.contains(&b.i) {
             if let Some(h) = pending_heading.take() {
                 selected.push(h);
             }
@@ -691,11 +698,9 @@ struct Pick {
 }
 
 /// --precise: Jev scores spans of the best blocks as the exact answer.
-async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &HashMap<usize, f64>, t: &mut Timer) -> Result<Pick> {
+async fn precise_pick(ctx: &Ctx<'_>, ex: &Extracted, keep: &[(usize, f64)], t: &mut Timer) -> Result<Pick> {
     let q = ctx.ask();
-    let mut ranked: Vec<(&usize, &f64)> = keep.iter().collect();
-    ranked.sort_by(|a, b| b.1.total_cmp(a.1));
-    let top: Vec<&Block> = ranked.iter().take(3).map(|(i, _)| &ex.blocks[**i]).collect();
+    let top: Vec<&Block> = keep.iter().take(3).map(|&(i, _)| &ex.blocks[i]).collect();
     let spans = precise::candidates(&top);
     if spans.is_empty() {
         return Err(not_found(format!("nothing in {} answers that exactly", ctx.url)));
@@ -883,11 +888,10 @@ async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered>
         t.lap(a.label());
         (ex.links.clone(), ex.links.iter().map(|l| a.noul(&format!("l{}", l.i))).collect())
     };
-    let mut kept: Vec<_> = top(&scores, ctx.args.threshold(), ctx.args.limit(20)).into_iter().collect();
+    let kept = top(&scores, ctx.args.threshold(), ctx.args.limit(20));
     if kept.is_empty() {
         return Err(not_found(format!("no links worth following in {} (try a lower --threshold)", ctx.url)));
     }
-    kept.sort_by(|a, b| b.1.total_cmp(&a.1));
 
     let v: Vec<_> = kept
         .iter()
@@ -1100,13 +1104,14 @@ where
     }
 }
 
-/// Indices of the `max` best scores at or above `threshold`.
-fn top(scores: &[Option<f64>], threshold: f64, max: usize) -> HashMap<usize, f64> {
+/// The `max` best scores at or above `threshold` as (index, score), best first. Ties go to the lower index, so the
+/// same page always gives the same order.
+fn top(scores: &[Option<f64>], threshold: f64, max: usize) -> Vec<(usize, f64)> {
     let mut ranked: Vec<(usize, f64)> =
         scores.iter().enumerate().filter_map(|(i, p)| p.filter(|&p| p >= threshold).map(|p| (i, p))).collect();
-    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     ranked.truncate(max);
-    ranked.into_iter().collect()
+    ranked
 }
 
 /// Download and shrink to a small JPEG: fewer vision tokens, faster Clef.
@@ -1200,5 +1205,100 @@ mod tests {
         args.json = false;
         let found = Rendered { text: "$8\n".into(), json: json!({ "answer": "$8" }) };
         assert_eq!(stdout_for(&args, &Ok(found), &usage).unwrap().as_deref(), Some("$8\n"));
+    }
+
+    #[test]
+    fn top_is_best_first_and_ties_go_to_the_lower_index() {
+        let scores = [Some(0.5), None, Some(0.9), Some(0.5), Some(0.2), Some(0.5), Some(0.4)];
+        // A score at the threshold counts; one below it, or a None, does not.
+        assert_eq!(top(&scores, 0.4, 10), vec![(2, 0.9), (0, 0.5), (3, 0.5), (5, 0.5), (6, 0.4)]);
+        assert_eq!(top(&scores, 0.4, 2), vec![(2, 0.9), (0, 0.5)]);
+        assert!(top(&scores, 0.95, 10).is_empty());
+    }
+
+    /// A block as `judge` gets it: its number, and a question unless it is a heading.
+    fn block(i: usize, question: bool) -> Item {
+        Item { id: format!("b{i}"), state: json!({ "i": i }), question: question.then(|| noul("?")) }
+    }
+
+    /// A state that is exactly `len` bytes of JSON, for the size budget.
+    fn sized(i: usize, len: usize) -> Value {
+        let mut state = json!({ "i": i, "pad": "" });
+        let pad = len - state.to_string().len();
+        state["pad"] = json!("x".repeat(pad));
+        state
+    }
+
+    /// The block numbers a request sends, in order, headings included.
+    fn numbers(request: &(Vec<Value>, Map<String, Value>)) -> Vec<u64> {
+        request.0.iter().map(|s| s["i"].as_u64().unwrap()).collect()
+    }
+
+    /// The question ids a request asks, sorted.
+    fn asked(request: &(Vec<Value>, Map<String, Value>)) -> Vec<&str> {
+        request.1.keys().map(String::as_str).collect()
+    }
+
+    /// An extra question, like the `pick` that --precise adds.
+    fn pick() -> Map<String, Value> {
+        Map::from_iter([("pick".to_string(), json!("p"))])
+    }
+
+    #[test]
+    fn a_few_blocks_are_one_request_with_the_extras() {
+        let got = chunks(vec![block(0, true), block(1, false), block(2, true)], pick());
+        assert_eq!(got.len(), 1);
+        assert_eq!(numbers(&got[0]), vec![0, 1, 2]);
+        assert_eq!(asked(&got[0]), vec!["b0", "b2", "pick"]);
+    }
+
+    #[test]
+    fn a_request_holds_max_questions_extras_included() {
+        let lens = |n: usize, extra: Map<String, Value>| -> Vec<usize> {
+            chunks((0..n).map(|i| block(i, true)).collect(), extra).iter().map(|r| numbers(r).len()).collect()
+        };
+        // The extra is one of the MAX_QUESTIONS, so with it the first request holds one block less.
+        assert_eq!(lens(300, pick()), vec![119, 120, 61]);
+        assert_eq!(lens(119, pick()), vec![119]);
+        assert_eq!(lens(120, pick()), vec![119, 1]);
+        assert_eq!(lens(300, Map::new()), vec![120, 120, 60]);
+        assert_eq!(lens(121, Map::new()), vec![120, 1]);
+
+        let got = chunks((0..300).map(|i| block(i, true)).collect(), pick());
+        assert_eq!(asked(&got[0]).len(), MAX_QUESTIONS);
+        assert!(got[0].1.contains_key("pick"));
+        assert!(got[1..].iter().all(|r| !r.1.contains_key("pick")));
+    }
+
+    #[test]
+    fn big_states_split_at_max_state_chars() {
+        // Three 20k states fill MAX_STATE_CHARS exactly; the fourth opens a request.
+        let items = (0..4).map(|i| Item { state: sized(i, 20_000), ..block(i, true) }).collect();
+        let got: Vec<Vec<u64>> = chunks(items, Map::new()).iter().map(numbers).collect();
+        assert_eq!(got, vec![vec![0, 1, 2], vec![3]]);
+    }
+
+    #[test]
+    fn headings_ride_along_and_never_open_a_request() {
+        // The request is full by the headings: they stay in it, and the next question opens a new one.
+        let mut items: Vec<Item> = (0..119).map(|i| block(i, true)).collect();
+        items.extend((119..122).map(|i| block(i, false)));
+        items.push(block(122, true));
+        let got = chunks(items, pick());
+        assert_eq!(got.len(), 2);
+        assert_eq!(numbers(&got[0]), (0..122).collect::<Vec<u64>>());
+        assert_eq!(asked(&got[1]), vec!["b122"]);
+
+        // Headings count toward MAX_STATE_CHARS all the same.
+        let items = vec![
+            Item { state: sized(0, 30_000), ..block(0, true) },
+            Item { state: sized(1, 40_000), ..block(1, false) },
+            block(2, true),
+        ];
+        let got: Vec<Vec<u64>> = chunks(items, Map::new()).iter().map(numbers).collect();
+        assert_eq!(got, vec![vec![0, 1], vec![2]]);
+
+        // Headings alone ask nothing, so they make no request.
+        assert!(chunks(vec![block(0, false)], Map::new()).is_empty());
     }
 }

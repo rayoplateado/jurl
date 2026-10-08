@@ -194,7 +194,7 @@ fn locs(xml: &str) -> Vec<String> {
 /// What a page said about the question.
 enum Found {
     Precise(Pick),
-    Blocks { scores: Vec<Option<f64>>, keep: std::collections::HashMap<usize, f64>, kind: Option<(String, f64)> },
+    Blocks { scores: Vec<Option<f64>>, keep: Vec<(usize, f64)>, kind: Option<(String, f64)> },
 }
 
 struct Visit {
@@ -264,7 +264,7 @@ async fn visit(
                 }
             } else {
                 let keep = top(&scores, args.threshold(), args.limit(5));
-                let best = keep.values().copied().fold(0.0, f64::max);
+                let best = keep.iter().map(|&(_, p)| p).fold(0.0, f64::max);
                 Ok(((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth))
             }
         };
