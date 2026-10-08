@@ -258,7 +258,7 @@ enum Found {
     Blocks { scores: Vec<Option<f64>>, keep: Vec<(usize, f64)>, kind: Option<(String, f64)> },
 }
 
-/// A link on a page, and how likely following it leads to the answer: `p` is the link's own score, before hops and heat.
+/// A link on a page, and how likely following it leads to the answer (`p`, before hops and heat).
 struct ScoredLink {
     url: Url,
     text: String,
@@ -434,139 +434,169 @@ async fn rank_next_step(ctx: &Ctx<'_>, leads: &[&Lead]) -> Result<Option<Vec<usi
     Ok(Some(order))
 }
 
-pub async fn run(
-    args: &Args,
-    cfg: &Config,
-    client: &Client,
-    api_key: &str,
-    start: Url,
-    t: &mut Timer,
-) -> Result<Rendered> {
-    let max = args.follow.unwrap_or(5).max(1);
-    let threshold = if args.precise { args.threshold.unwrap_or(PRECISE_THRESHOLD) } else { args.threshold() };
-    let site = Site::new(&start);
+/// How a search stops before its budget runs out: a page that answers is good enough (`Found`), or the trail has gone
+/// cold (`Cold`).
+#[derive(Debug, PartialEq)]
+enum Stop {
+    Found,
+    Cold,
+}
 
-    // The first page, the site's own map and robots.txt, all at once.
-    let hints = async {
-        let q = args.ask.as_deref().unwrap_or_default();
-        // The site's pages that share words with the question first, then the shallowest.
-        let mut links = links::most_relevant(q, site_map(client, &start, &site).await, MAX_HINTS);
-        // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
-        links.retain(|l| links::key(&l.url) != links::key(&start));
-        links
-            .insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false });
-        for (i, l) in links.iter_mut().enumerate() {
-            l.i = i;
+/// A search of one site, carried from page to page: the leads not opened yet, the pages read, the pages that answer.
+struct Search {
+    site: Site,
+    /// `--follow N`: the pages the search may open.
+    max: usize,
+    /// How sure a page must be of its answer to be found: `--threshold`, or the default of `--precise`.
+    threshold: f64,
+    /// `pages` is the pages read, which is what the search reports. `opened` is the pages opened, read or not: the
+    /// budget `--follow N` stops at, so a page that fails to load still takes its step.
+    pages: usize,
+    opened: usize,
+    leads: Vec<Lead>,
+    /// The pages opened or read, by [`links::key`]: a search doesn't open the same page twice.
+    visited: HashSet<String>,
+    /// The menu links of the pages read so far (see [`menus`]).
+    known: HashSet<String>,
+    field_scores: FieldScores,
+    robots: RobotsByHost,
+    /// A page that answers is ranked by how sure Jev is of the answer AND of the page: a blog post from two years ago
+    /// can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
+    found: Vec<Ranked>,
+    /// The best page that answers but not sure enough (see [`Visit::score`]): what a miss reports as closest.
+    closest: Option<Ranked>,
+    /// What `-t` prints for each page read: how warm, how sure of an answer.
+    log: Vec<Reading>,
+    /// The trail went cold before the budget ran out (see [`Stop::Cold`]).
+    cold: bool,
+}
+
+impl Search {
+    /// The start of a search: the first page, the site's own map and robots.txt, all at once. The first page is taken
+    /// like any other page, and the site's map becomes the first leads.
+    async fn start(
+        args: &Args,
+        cfg: &Config,
+        client: &Client,
+        api_key: &str,
+        start: &Url,
+        t: &mut Timer,
+    ) -> Result<Search> {
+        let max = args.follow.unwrap_or(5).max(1);
+        let threshold = if args.precise { args.threshold.unwrap_or(PRECISE_THRESHOLD) } else { args.threshold() };
+        let site = Site::new(start);
+
+        // The first page, the site's own map and robots.txt, all at once.
+        let mut known = HashSet::new();
+        let mut field_scores = FieldScores::new();
+        let mut robots = RobotsByHost::default();
+        let (first, hints, _) = tokio::join!(
+            visit(args, cfg, client, api_key, start, &site, &known, &field_scores),
+            site_hints(args, client, api_key, start, &site),
+            robots.load_for(client, std::slice::from_ref(start)),
+        );
+        let mut first = first?;
+        let mut hints = hints?;
+        known.extend(first.menus.iter().cloned());
+        field_scores.extend(std::mem::take(&mut first.new_field_scores));
+        t.lap(format!("page 1 + site map ({} pages listed)", hints.len()));
+
+        // How well the start page fits the question as a page, from the same scoring as the site map's pages. A
+        // home page answering in passing (a FAQ line) counts for less than a pricing page that the site lists. The
+        // start page is always the first hint (see [`site_hints`]), so it's taken out here.
+        let start_fit = hints.remove(0).p.max(COLD_PAGE);
+        let mut search = Search {
+            visited: HashSet::from([links::key(start), links::key(&first.url)]),
+            site,
+            max,
+            threshold,
+            pages: 1,
+            opened: 1,
+            leads: Vec::new(),
+            known,
+            field_scores,
+            robots,
+            found: Vec::new(),
+            closest: None,
+            log: Vec::new(),
+            cold: false,
+        };
+        let first_path = vec![first.url.clone()];
+        search.absorb(first, start_fit, 1.0, first_path);
+        for l in hints {
+            search.leads.push(Lead { url: l.url, text: l.text, score: l.p, p: l.p, path: vec![start.clone()] });
         }
-        let empty = Extracted {
-            title: String::new(),
-            blocks: Vec::new(),
-            images: Vec::new(),
-            links: Vec::new(),
-            site_links: Vec::new(),
-            app_shell: false,
-        };
-        let ctx = site.ctx(args, client, api_key, &start, &empty);
-        let scores = match links::score(&ctx, &links, "The page at the URL in `links`", None).await {
-            Ok((scores, _)) => scores,
-            Err(e) if is_api_error(&e) => return Err(e),
-            Err(_) => vec![0.0; links.len()],
-        };
-        Ok(links.into_iter().zip(scores).map(|(l, p)| ScoredLink { url: l.url, text: l.text, p }).collect::<Vec<_>>())
-    };
-    let mut known = HashSet::new();
-    let mut field_scores = FieldScores::new();
-    let mut robots = RobotsByHost::default();
-    let (first, hints, _) = tokio::join!(
-        visit(args, cfg, client, api_key, &start, &site, &known, &field_scores),
-        hints,
-        robots.load_for(client, std::slice::from_ref(&start)),
-    );
-    let mut first = first?;
-    let hints = hints?;
-    known.extend(first.menus.iter().cloned());
-    field_scores.extend(std::mem::take(&mut first.new_field_scores));
-    t.lap(format!("page 1 + site map ({} pages listed)", hints.len()));
-
-    let mut visited: HashSet<String> = [links::key(&start), links::key(&first.url)].into_iter().collect();
-    // `pages` is the pages read, which is what the search reports. `opened` is the pages opened, read or not: the
-    // budget `--follow N` stops at, so a page that fails to load still takes its step.
-    let mut pages = 1;
-    let mut opened = 1;
-    let mut closest: Option<Ranked> = None;
-    let mut leads: Vec<Lead> = Vec::new();
-    let mut found: Vec<Ranked> = Vec::new();
-    // How well the start page fits the question as a page, from the same scoring as the site map's pages. A home page
-    // answering in passing (a FAQ line) counts for less than a pricing page that the site lists. The start page is
-    // always the first hint (inserted above), so it's taken out here.
-    let mut hints = hints;
-    let start_fit = hints.remove(0).p.max(COLD_PAGE);
-
-    // A page that answers is ranked by how sure Jev is of the answer AND of the page: a blog post from two years ago
-    // can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
-    // What each page was like, for -t: how warm, how sure of an answer.
-    let mut log: Vec<Reading> = Vec::new();
-    let mut take =
-        |v: Visit, lead: f64, lead_p: f64, path: Vec<Url>, leads: &mut Vec<Lead>, found: &mut Vec<Ranked>| {
-            log.push(Reading { url: v.url.clone(), warmth: v.warmth, score: v.score });
-            // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
-            // the search goes back to the leads of a page that was getting warmer.
-            // The page you started from is never cold: its links are all there is to go on.
-            // A hub page (a docs index, a category) says nothing itself but links straight to the answer: it's as warm
-            // as its best link. And warmth is relative: far from the answer (Paris → … → Aspirin) every page is cold,
-            // but one whose best link looks better than the link that led here is getting warmer.
-            let best_link = v.links.iter().map(|l| l.p).fold(0.0, f64::max);
-            let warmer = (best_link / lead_p.max(0.05)).min(1.0);
-            let heat =
-                if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link).max(warmer) };
-            let decay = HOP_DECAY.powi(path.len() as i32 - 1);
-            for l in &v.links {
-                leads.push(Lead {
-                    url: l.url.clone(),
-                    text: l.text.clone(),
-                    score: l.p * decay * heat,
-                    p: l.p,
-                    path: path.clone(),
-                });
-            }
-            let rank = v.score * lead;
-            if v.found.is_some() && v.score >= threshold {
-                found.push(Ranked { rank, visit: v, path });
-            } else if v.found.is_some() && closest.as_ref().is_none_or(|c| rank > c.rank) {
-                closest = Some(Ranked { rank, visit: v, path });
-            }
-        };
-    let first_path = vec![first.url.clone()];
-    take(first, start_fit, 1.0, first_path, &mut leads, &mut found);
-    for l in hints {
-        leads.push(Lead { url: l.url, text: l.text, score: l.p, p: l.p, path: vec![start.clone()] });
+        Ok(search)
     }
 
-    let empty = Extracted {
-        title: String::new(),
-        blocks: Vec::new(),
-        images: Vec::new(),
-        links: Vec::new(),
-        site_links: Vec::new(),
-        app_shell: false,
-    };
-    let site_ctx = site.ctx(args, client, api_key, &start, &empty);
-    let mut cold = false;
-    while opened < max {
-        leads.sort_by(|a, b| b.score.total_cmp(&a.score));
+    /// Takes a page that was read: its links become leads, and it is found, or closest, if it answers. `lead_score` and
+    /// `lead_p` are the lead it was reached by (its score, and the link's own score). `path` is how jurl got there,
+    /// this page last.
+    fn absorb(&mut self, v: Visit, lead_score: f64, lead_p: f64, path: Vec<Url>) {
+        self.log.push(Reading { url: v.url.clone(), warmth: v.warmth, score: v.score });
+        // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
+        // the search goes back to the leads of a page that was getting warmer.
+        // The page you started from is never cold: its links are all there is to go on.
+        // A hub page (a docs index, a category) says nothing itself but links straight to the answer: it's as warm
+        // as its best link. And warmth is relative: far from the answer (Paris → … → Aspirin) every page is cold,
+        // but one whose best link looks better than the link that led here is getting warmer.
+        let best_link = v.links.iter().map(|l| l.p).fold(0.0, f64::max);
+        let warmer = (best_link / lead_p.max(0.05)).min(1.0);
+        let heat =
+            if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link).max(warmer) };
+        let decay = HOP_DECAY.powi(path.len() as i32 - 1);
+        for l in &v.links {
+            self.leads.push(Lead {
+                url: l.url.clone(),
+                text: l.text.clone(),
+                score: l.p * decay * heat,
+                p: l.p,
+                path: path.clone(),
+            });
+        }
+        let rank = v.score * lead_score;
+        if v.found.is_some() && v.score >= self.threshold {
+            self.found.push(Ranked { rank, visit: v, path });
+        } else if v.found.is_some() && self.closest.as_ref().is_none_or(|c| rank > c.rank) {
+            self.closest = Some(Ranked { rank, visit: v, path });
+        }
+    }
+
+    /// The stop rules, checked before each step (after the leads are sorted and the robots rules applied). `Found`: a
+    /// page answers and no lead left could beat it by [`BETTER_BY`]. `Cold`: the best lead left is weaker than
+    /// [`COLD_TRAIL`], or there is none.
+    fn done(&self) -> Option<Stop> {
+        // Done when no page left could beat what's been found: each lead's score is the most it could rank.
+        let best_found = self.found.iter().map(|f| f.rank).fold(0.0, f64::max);
+        if !self.found.is_empty() && self.leads.first().is_none_or(|l| l.score <= best_found + BETTER_BY) {
+            return Some(Stop::Found);
+        }
+        if self.leads.first().is_none_or(|l| l.score < COLD_TRAIL) {
+            return Some(Stop::Cold);
+        }
+        None
+    }
+
+    /// The next pages to open, or `None` when the search is over: the budget is spent, or [`Search::done`] says so.
+    /// Each step sorts the leads, drops the visited and disallowed ones, and Jev picks among the best few.
+    async fn next_batch(&mut self, ctx: &Ctx<'_>, t: &mut Timer) -> Result<Option<Vec<Lead>>> {
+        if self.opened >= self.max {
+            return Ok(None);
+        }
+        self.leads.sort_by(|a, b| b.score.total_cmp(&a.score));
         let mut seen = HashSet::new();
-        leads.retain(|l| {
+        self.leads.retain(|l| {
             let k = links::key(&l.url);
-            !visited.contains(&k) && seen.insert(k)
+            !self.visited.contains(&k) && seen.insert(k)
         });
         // The leads that can be picked this step are the best few, each checked against its own host's robots.txt
         // first. A lead the rules drop brings the next one up, which may be on a host not read yet: so this goes round
         // until the best few are all read and checked. Leads further down wait in the list.
         let mut read = 0;
         loop {
-            leads.retain(|l| robots.allows(&l.url));
-            let best: Vec<Url> = leads.iter().take(SHORTLIST).map(|l| l.url.clone()).collect();
-            let n = robots.load_for(client, &best).await;
+            self.leads.retain(|l| self.robots.allows(&l.url));
+            let best: Vec<Url> = self.leads.iter().take(SHORTLIST).map(|l| l.url.clone()).collect();
+            let n = self.robots.load_for(ctx.client, &best).await;
             if n == 0 {
                 break;
             }
@@ -575,118 +605,191 @@ pub async fn run(
         if read > 0 {
             t.lap(format!("robots {read}"));
         }
-        // Done when no page left could beat what's been found: each lead's score is the most it could rank.
-        let best_found = found.iter().map(|f| f.rank).fold(0.0, f64::max);
-        if !found.is_empty() && leads.first().is_none_or(|l| l.score <= best_found + BETTER_BY) {
-            break;
-        }
-        if leads.first().is_none_or(|l| l.score < COLD_TRAIL) {
-            cold = true;
-            break;
+        match self.done() {
+            None => {}
+            Some(Stop::Found) => return Ok(None),
+            Some(Stop::Cold) => {
+                self.cold = true;
+                return Ok(None);
+            }
         }
         // Jev picks the next pages out of the best few, side by side, or says none of them leads anywhere.
-        let n = (if max >= 10 { PARALLEL_LONG } else { PARALLEL }).min(max - opened);
-        let short: Vec<&Lead> = leads.iter().take(SHORTLIST).collect();
+        let n = (if self.max >= 10 { PARALLEL_LONG } else { PARALLEL }).min(self.max - self.opened);
+        let short: Vec<&Lead> = self.leads.iter().take(SHORTLIST).collect();
         // On a long trail (`--follow 10` and up) no page "is the next step" to something far away, so Jev's side-by-side
         // pick only adds noise there: the leads' own scores decide.
-        let order = if short.len() > n && max < 10 { rank_next_step(&site_ctx, &short).await? } else { None };
+        let order = if short.len() > n && self.max < 10 { rank_next_step(ctx, &short).await? } else { None };
         t.lap("next");
         // "None of these leads anywhere" isn't a reason to stop: on a long trail (Paris → … → Aspirin) no single step
         // looks like it leads to the answer. It only orders the shortlist.
         let picks: Vec<usize> = match order {
             Some(order) => order.into_iter().take(n).collect(),
-            None => (0..n.min(leads.len())).collect(),
+            None => (0..n.min(self.leads.len())).collect(),
         };
         let mut batch: Vec<Lead> = Vec::new();
         for i in picks.into_iter().rev().collect::<std::collections::BTreeSet<_>>().into_iter().rev() {
-            batch.push(leads.remove(i));
+            batch.push(self.leads.remove(i));
         }
         for l in &batch {
-            visited.insert(links::key(&l.url));
+            self.visited.insert(links::key(&l.url));
         }
-        // The pages of a batch are read side by side: each reads the field scores from before the batch, and what it
-        // asked is kept once the batch is in.
-        let results =
-            join_all(batch.iter().map(|l| visit(args, cfg, client, api_key, &l.url, &site, &known, &field_scores)))
-                .await;
-        opened += batch.len();
-        t.lap(format!("{} more", batch.len()));
+        self.opened += batch.len();
+        Ok(Some(batch))
+    }
+
+    /// Takes the results of a batch, in batch order. A page read is absorbed; one that failed to load is skipped (and
+    /// said so under -t); an API error ends the search.
+    fn absorb_batch(&mut self, batch: Vec<Lead>, results: Vec<Result<Visit>>, timing: bool) -> Result<()> {
         for (lead, r) in batch.into_iter().zip(results) {
             match r {
                 Ok(mut v) => {
-                    pages += 1;
-                    visited.insert(links::key(&v.url));
-                    known.extend(v.menus.iter().cloned());
-                    field_scores.extend(std::mem::take(&mut v.new_field_scores));
+                    self.pages += 1;
+                    self.visited.insert(links::key(&v.url));
+                    self.known.extend(v.menus.iter().cloned());
+                    self.field_scores.extend(std::mem::take(&mut v.new_field_scores));
                     let mut path = lead.path.clone();
                     path.push(v.url.clone());
-                    take(v, lead.score, lead.p, path, &mut leads, &mut found);
+                    self.absorb(v, lead.score, lead.p, path);
                 }
                 Err(e) if is_api_error(&e) => return Err(e),
-                Err(e) if args.timing => eprintln!("jurl: skipped {}: {e:#}", lead.url),
+                Err(e) if timing => eprintln!("jurl: skipped {}: {e:#}", lead.url),
                 Err(_) => {}
             }
         }
+        Ok(())
     }
 
-    if args.timing {
-        for Reading { url, warmth, score } in &log {
-            eprintln!("   warmth {warmth:.2} · answer {score:.2} · {url}");
+    /// The result of the search: the best page that answers or, when none does, the closest one (which a `--precise
+    /// --json` miss still prints), or else the miss.
+    fn conclude(mut self, args: &Args, client: &Client, api_key: &str) -> Result<Rendered> {
+        let pages = self.pages;
+        if args.timing {
+            for Reading { url, warmth, score } in &self.log {
+                eprintln!("   warmth {warmth:.2} · answer {score:.2} · {url}");
+            }
+            let tokens = crate::decide::USAGE.jev_tokens.load(std::sync::atomic::Ordering::Relaxed);
+            eprintln!("   {pages} pages · {tokens} tokens");
         }
-        let tokens = crate::decide::USAGE.jev_tokens.load(std::sync::atomic::Ordering::Relaxed);
-        eprintln!("   {pages} pages · {tokens} tokens");
-    }
-    found.sort_by(|a, b| b.rank.total_cmp(&a.rank));
-    let trail = |path: &[Url]| {
-        path.iter().map(|u| u.as_str().trim_start_matches("https://").to_string()).collect::<Vec<_>>().join(" → ")
-    };
-    let (v, path, missed_by) = match found.into_iter().next() {
-        Some(Ranked { visit: v, path, .. }) => (v, path, None),
-        None => match closest {
-            Some(Ranked { visit: v, path, .. }) => {
-                let what = match &v.found {
-                    Some(Found::Precise(pick)) if pick.p >= PRECISE_BLOCK_FLOOR => {
-                        format!(
-                            " (closest: \"{}\" on {}, p={:.2})",
-                            &v.ex.blocks[pick.block].text[pick.range.clone()],
-                            v.url,
-                            pick.p
-                        )
+        self.found.sort_by(|a, b| b.rank.total_cmp(&a.rank));
+        let (ranked, missed_by) = match self.found.into_iter().next() {
+            Some(best) => (best, None),
+            None => match self.closest {
+                Some(closest) => {
+                    let v = &closest.visit;
+                    let what = match &v.found {
+                        Some(Found::Precise(pick)) if pick.p >= PRECISE_BLOCK_FLOOR => {
+                            format!(
+                                " (closest: \"{}\" on {}, p={:.2})",
+                                &v.ex.blocks[pick.block].text[pick.range.clone()],
+                                v.url,
+                                pick.p
+                            )
+                        }
+                        _ => String::new(),
+                    };
+                    let message = format!("read {pages} pages of {} and none answers that{what}", self.site.root);
+                    // JSON says what came closest, as on a single page, and fails like it; text fails with it in the
+                    // message.
+                    if !(args.json && args.precise) {
+                        return Err(not_found(message));
                     }
-                    _ => String::new(),
-                };
-                let message = format!("read {pages} pages of {} and none answers that{what}", site.root);
-                // JSON says what came closest, as on a single page, and fails like it; text fails with it in the
-                // message.
-                if !(args.json && args.precise) {
-                    return Err(not_found(message));
+                    (closest, Some(message))
                 }
-                (v, path, Some(message))
+                None if self.cold => {
+                    return Err(not_found(format!(
+                        "read {pages} pages of {} and none answers that; no link left looks promising",
+                        self.site.root
+                    )));
+                }
+                None => {
+                    return Err(not_found(format!("read {pages} pages of {} and none answers that", self.site.root)));
+                }
+            },
+        };
+        let Ranked { visit: v, path, .. } = ranked;
+        let ctx = Ctx::new(args, client, api_key, &v.url, &v.ex);
+        let rendered = match &v.found {
+            Some(Found::Precise(pick)) => render_precise(&ctx, &v.ex, pick, Some(&path)),
+            Some(Found::Blocks { scores, keep, kind }) => {
+                render_blocks(&ctx, &v.ex, scores, keep, kind.clone(), Some(&path))?
             }
-            None if cold => {
-                return Err(not_found(format!(
-                    "read {pages} pages of {} and none answers that; no link left looks promising",
-                    site.root
-                )));
-            }
-            None => return Err(not_found(format!("read {pages} pages of {} and none answers that", site.root))),
-        },
-    };
-    let ctx = Ctx::new(args, client, api_key, &v.url, &v.ex);
-    let rendered = match &v.found {
-        Some(Found::Precise(pick)) => render_precise(&ctx, &v.ex, pick, Some(&path)),
-        Some(Found::Blocks { scores, keep, kind }) => {
-            render_blocks(&ctx, &v.ex, scores, keep, kind.clone(), Some(&path))?
+            None => unreachable!("found pages always have an answer"),
+        };
+        if let Some(message) = missed_by {
+            return Err(missed(message, rendered));
         }
-        None => unreachable!("found pages always have an answer"),
+        if !args.json {
+            eprintln!("jurl: found after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
+        }
+        Ok(rendered)
+    }
+}
+
+/// The start page's hints: the site's own map (see [`site_map`]), the pages that share words with the question first,
+/// each scored as a link. The start page is first, scored like a candidate too.
+async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, site: &Site) -> Result<Vec<ScoredLink>> {
+    let q = args.ask.as_deref().unwrap_or_default();
+    // The site's pages that share words with the question first, then the shallowest.
+    let mut links = links::most_relevant(q, site_map(client, start, site).await, MAX_HINTS);
+    // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
+    links.retain(|l| links::key(&l.url) != links::key(start));
+    links.insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false });
+    for (i, l) in links.iter_mut().enumerate() {
+        l.i = i;
+    }
+    let empty = Extracted {
+        title: String::new(),
+        blocks: Vec::new(),
+        images: Vec::new(),
+        links: Vec::new(),
+        site_links: Vec::new(),
+        app_shell: false,
     };
-    if let Some(message) = missed_by {
-        return Err(missed(message, rendered));
+    let ctx = site.ctx(args, client, api_key, start, &empty);
+    let scores = match links::score(&ctx, &links, "The page at the URL in `links`", None).await {
+        Ok((scores, _)) => scores,
+        Err(e) if is_api_error(&e) => return Err(e),
+        Err(_) => vec![0.0; links.len()],
+    };
+    Ok(links.into_iter().zip(scores).map(|(l, p)| ScoredLink { url: l.url, text: l.text, p }).collect())
+}
+
+/// The path as the "found after reading" line prints it: each URL without its https:// scheme, joined by arrows.
+fn trail(path: &[Url]) -> String {
+    path.iter().map(|u| u.as_str().trim_start_matches("https://").to_string()).collect::<Vec<_>>().join(" → ")
+}
+
+pub async fn run(
+    args: &Args,
+    cfg: &Config,
+    client: &Client,
+    api_key: &str,
+    start: Url,
+    t: &mut Timer,
+) -> Result<Rendered> {
+    let mut search = Search::start(args, cfg, client, api_key, &start, t).await?;
+    let empty = Extracted {
+        title: String::new(),
+        blocks: Vec::new(),
+        images: Vec::new(),
+        links: Vec::new(),
+        site_links: Vec::new(),
+        app_shell: false,
+    };
+    let site_ctx = search.site.ctx(args, client, api_key, &start, &empty);
+    while let Some(batch) = search.next_batch(&site_ctx, t).await? {
+        // The pages of a batch are read side by side: each reads the field scores from before the batch, and what it
+        // asked is kept once the batch is in.
+        let results = join_all(
+            batch
+                .iter()
+                .map(|l| visit(args, cfg, client, api_key, &l.url, &search.site, &search.known, &search.field_scores)),
+        )
+        .await;
+        t.lap(format!("{} more", batch.len()));
+        search.absorb_batch(batch, results, args.timing)?;
     }
-    if !args.json {
-        eprintln!("jurl: found after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
-    }
-    Ok(rendered)
+    search.conclude(args, client, api_key)
 }
 
 #[cfg(test)]
