@@ -113,6 +113,9 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     if kept.is_empty() {
         return Err(nothing_kept(ctx.url, &looks, ex.images.len(), query, best));
     }
+    if let Some(notice) = text_only_notice(&looks, ex.images.len()) {
+        eprintln!("{notice}");
+    }
     Ok(render(ctx, ex, &kept))
 }
 
@@ -242,6 +245,16 @@ fn why_no_look(url: &url::Url, e: &anyhow::Error, looked: usize, total: usize) -
 /// page has more images than that.
 fn tried(looked: usize, total: usize) -> String {
     if total > looked { format!("any of the {looked} images it looked at") } else { "any image".into() }
+}
+
+/// The stderr line for a result that is from the text score alone because Clef looked at no image. None when a look
+/// answered, or when none ran (--image).
+fn text_only_notice(looks: &Looks, total: usize) -> Option<String> {
+    looks.all_failed()?;
+    Some(format!(
+        "jurl: Clef couldn't look at {}, so this result is from text only (-t shows why)",
+        tried(looks.len(), total)
+    ))
 }
 
 /// The result: each kept image's URL on its own line, and the same images as JSON.
@@ -613,6 +626,25 @@ mod tests {
     fn when_every_look_fails_the_lowest_image_index_is_reported() {
         let looks = Looks(BTreeMap::from([(7, Err(anyhow!("seven"))), (3, Err(anyhow!("three")))]));
         assert_eq!(format!("{:#}", looks.all_failed().unwrap()), "three");
+    }
+
+    #[test]
+    fn a_result_from_text_alone_says_so_when_clef_looked_at_no_image() {
+        let failed = Looks(BTreeMap::from([(0, Err(anyhow!("down"))), (1, Err(anyhow!("down")))]));
+        assert_eq!(
+            text_only_notice(&failed, 2).as_deref(),
+            Some("jurl: Clef couldn't look at any image, so this result is from text only (-t shows why)")
+        );
+        assert_eq!(
+            text_only_notice(&failed, 80).as_deref(),
+            Some(
+                "jurl: Clef couldn't look at any of the 2 images it looked at, so this result is from text only (-t shows why)"
+            )
+        );
+        let one_answer = Looks(BTreeMap::from([(0, Err(anyhow!("down"))), (1, Ok(0.4))]));
+        assert_eq!(text_only_notice(&one_answer, 2), None);
+        // --image: no look ran, so nothing was asked of Clef and there is nothing to say.
+        assert_eq!(text_only_notice(&Looks::default(), 2), None);
     }
 
     #[test]

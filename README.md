@@ -281,7 +281,7 @@ The tools run the same code as the CLI, with the same keys (`jurl init` or the e
 
 Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`. A `.env` in the current directory is read too, for those API keys only.
 
-`--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
+`--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. If Clef looks at none of the images, jurl says so on stderr and the result is from text alone. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
 
 `JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none, and only over https or to localhost: plain http to another host is refused. [bench/models](bench/models) compares such a server's answers with Jev's.
 
