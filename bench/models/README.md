@@ -103,7 +103,7 @@ The same 160 requests ([table](results/2026-10-08-jev-h2o-mlx-d1.txt); H2O on ML
 | choice pick: same top | 20/20 | 12/20 | 10/20 |
 | latency p50 | 0.34s | 24.51s | 15.24s |
 
-H2O on an RTX 4090 (Runpod, vLLM) on the same requests ([table](results/2026-10-08-jev-h2o-gpu.txt)): blocks same top-1 43/57 (75%), links 19/49 (39%), `f` same side 65.0%, pick 12/20; latency p50 5.87s, p95 23.07s, against Jev's 0.31s and 0.45s.
+H2O on an RTX 4090 (Runpod, vLLM) on the same requests ([table](results/2026-10-08-jev-h2o-gpu.txt)): blocks same top-1 43/57 (75%), links 19/49 (39%), `f` same side 65.0%, pick 12/20; latency p50 5.87s, p95 23.07s, against Jev's 0.31s and 0.45s. (That file's last column, "floored", is a probability floor of 0.801 tried in the shim that day; compare.py has no such column.)
 
 End to end, one run of the 28 searches each ([Jev](../results/follow-models-jev.json), [H2O on the RTX 4090](../results/follow-models-h2o-gpu.json); Jev 6 searches at a time, H2O one):
 
