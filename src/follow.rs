@@ -26,7 +26,6 @@ use crate::{
     links::{self, FieldScores},
     load,
     output::{Rendered, missed, not_found},
-    rank,
     timing::Timer,
 };
 
@@ -35,9 +34,10 @@ use crate::{
 const PARALLEL: usize = 2;
 /// A long search (`--follow 10` and up) goes wider: a long trail needs more than one or two guesses per step.
 const PARALLEL_LONG: usize = 3;
-/// URLs from the site map scored, like a page's links: at most this many besides the start page, the ones most like the
-/// question (see [`rank::most_relevant`]).
-const MAX_HINTS: usize = 150;
+/// URLs from the site map scored, like a page's links: at most this many besides the start page. Not fewer, and picked
+/// by shared words then depth rather than ranked closer: an answer can sit behind a URL with none of the question's
+/// words (Grafana's default port, in `/tutorials/grafana-fundamentals`), and only Jev reading the list finds it.
+const MAX_HINTS: usize = 300;
 /// A link's score is discounted per hop, so a good lead near the start beats a slightly better one deep down.
 const HOP_DECAY: f64 = 0.85;
 /// Hot or cold: a link is worth as much as the page it's on is close to the answer. A page with nothing on the
@@ -875,12 +875,12 @@ impl Search {
     }
 }
 
-/// The start page's hints: the site's own map (see [`site_map`]), the pages whose URLs best match the question (see
-/// [`rank::most_relevant`]), each scored as a link. The start page is first, scored like a candidate too.
+/// The start page's hints: the site's own map (see [`site_map`]), the pages that share words with the question first,
+/// each scored as a link. The start page is first, scored like a candidate too.
 async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, site: &Site) -> Result<Vec<ScoredLink>> {
     let q = args.ask.as_deref().unwrap_or_default();
-    // The site's pages most like the question first; equal scores keep the site map's order.
-    let mut links = rank::most_relevant(q, site_map(client, start, site).await, MAX_HINTS);
+    // The site's pages that share words with the question first, then the shallowest.
+    let mut links = links::most_relevant(q, site_map(client, start, site).await, MAX_HINTS);
     // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
     links.retain(|l| links::key(&l.url) != links::key(start));
     links.insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false });

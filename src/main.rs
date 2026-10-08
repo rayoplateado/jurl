@@ -15,7 +15,6 @@ mod links;
 mod mcp;
 mod output;
 mod precise;
-mod rank;
 mod setup;
 mod timing;
 mod update;
