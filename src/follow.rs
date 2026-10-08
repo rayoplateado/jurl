@@ -268,6 +268,13 @@ struct Visit {
     new_field_scores: FieldScores,
 }
 
+/// What `-t` prints for each page read: how warm the page was, and how sure it is of an answer.
+struct Reading {
+    url: Url,
+    warmth: f64,
+    score: f64,
+}
+
 /// A page that answers: `rank` is how sure jurl is of the answer and of the page, times the score of the lead that led
 /// to it. `path` is how jurl got there.
 struct Ranked {
@@ -486,10 +493,10 @@ pub async fn run(
     // A page that answers is ranked by how sure Jev is of the answer AND of the page: a blog post from two years ago
     // can answer "how much is it?" with full confidence and the old price, while the pricing page was the lead.
     // What each page was like, for -t: how warm, how sure of an answer.
-    let mut log: Vec<(Url, f64, f64)> = Vec::new();
+    let mut log: Vec<Reading> = Vec::new();
     let mut take =
         |v: Visit, lead: f64, lead_p: f64, path: Vec<Url>, leads: &mut Vec<Lead>, found: &mut Vec<Ranked>| {
-            log.push((v.url.clone(), v.warmth, v.score));
+            log.push(Reading { url: v.url.clone(), warmth: v.warmth, score: v.score });
             // Hot or cold: the links of a page far from the question count for less, so a wrong turn is dropped and
             // the search goes back to the leads of a page that was getting warmer.
             // The page you started from is never cold: its links are all there is to go on.
@@ -611,7 +618,7 @@ pub async fn run(
     }
 
     if args.timing {
-        for (url, warmth, score) in &log {
+        for Reading { url, warmth, score } in &log {
             eprintln!("   warmth {warmth:.2} · answer {score:.2} · {url}");
         }
         let tokens = crate::decide::USAGE.jev_tokens.load(std::sync::atomic::Ordering::Relaxed);
