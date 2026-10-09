@@ -794,4 +794,68 @@ mod tests {
         let l = link(&url, text, &(start..start + 2));
         assert_eq!(l, "https://example.com/pricing#:~:text=Pro%3A-,%248,-per%20user%2Dmonth%2C%20billed");
     }
+
+    /// The link `--precise` makes for `answer`, one of the candidates of `b`, a block of the page at `page`.
+    fn link_for(page: &str, b: &Block, answer: &str) -> String {
+        let url = url::Url::parse(page).unwrap();
+        let span = candidates(&[b]).into_iter().find(|s| b.text[s.range.clone()] == *answer);
+        link(&url, &b.text, &span.expect("the answer is a candidate").range)
+    }
+
+    #[test]
+    fn a_bold_sentence_on_a_markdown_page_is_linked_by_its_plain_words() {
+        // vercel.com/docs served as markdown: the answer was "**Vercel has a SOC 2 …**" and the fragment held the stars.
+        let page = "https://vercel.com/docs/security/compliance";
+        let ex = crate::extract::markdown(
+            "**Vercel has a SOC 2 Type 2 attestation for Security, Confidentiality, and Availability**.\n",
+            &url::Url::parse(page).unwrap(),
+        );
+        let b = &ex.blocks[0];
+        let answer = "Vercel has a SOC 2 Type 2 attestation for Security, Confidentiality, and Availability";
+        assert_eq!(b.text, format!("{answer}."));
+        assert_eq!(
+            link_for(page, b, answer),
+            "https://vercel.com/docs/security/compliance#:~:text=Vercel%20has%20a%20SOC%202,for%20Security%2C%20Confidentiality%2C%20and%20Availability"
+        );
+    }
+
+    #[test]
+    fn a_link_inside_a_quote_is_plain_in_the_answer_and_in_its_fragment() {
+        // linear.app/docs served as markdown: the note's `[!NOTE]` marker and the link's markdown were both in the answer.
+        let page = "https://linear.app/docs/saml-and-access-control";
+        let ex = crate::extract::markdown(
+            "> [!NOTE]\n> Available to workspaces on our [Enterprise](https://linear.app/pricing) plan\n",
+            &url::Url::parse(page).unwrap(),
+        );
+        let b = &ex.blocks[0];
+        let answer = "Available to workspaces on our Enterprise plan";
+        assert_eq!(b.text, answer);
+        assert_eq!(
+            link_for(page, b, answer),
+            "https://linear.app/docs/saml-and-access-control#:~:text=Available%20to%20workspaces%20on%20our%20Enterprise%20plan"
+        );
+    }
+
+    #[test]
+    fn a_code_block_is_linked_verbatim_from_markdown_and_from_html() {
+        let page = "https://github.com/BurntSushi/ripgrep";
+        let url = url::Url::parse(page).unwrap();
+        let answer = "$ brew install ripgrep";
+        let want = "https://github.com/BurntSushi/ripgrep#:~:text=%24%20brew%20install%20ripgrep";
+        let md = crate::extract::markdown("```sh\n$ brew install ripgrep\n```\n", &url);
+        assert_eq!(md.blocks[0].text, answer);
+        assert_eq!(link_for(page, &md.blocks[0], answer), want);
+        let from_html = crate::extract::html("<pre><code>$ brew install ripgrep</code></pre>", &url);
+        assert_eq!(from_html.blocks[0].text, answer);
+        assert_eq!(link_for(page, &from_html.blocks[0], answer), want);
+    }
+
+    #[test]
+    fn an_html_page_already_gives_its_words() {
+        // The HTML path never kept the markup: `<strong>` and `<a>` are read as their text, so nothing changes here.
+        let url = url::Url::parse("https://example.com/pricing").unwrap();
+        let page = "<p><strong>Vercel has a SOC 2</strong> and <a href=\"/plans\">Enterprise</a> plan.</p>";
+        let ex = crate::extract::html(page, &url);
+        assert_eq!(ex.blocks[0].text, "Vercel has a SOC 2 and Enterprise plan.");
+    }
 }
