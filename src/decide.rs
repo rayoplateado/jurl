@@ -3,7 +3,7 @@
 
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
     time::Duration,
 };
 
@@ -24,8 +24,9 @@ const RETRY_CAP: Duration = Duration::from_secs(5);
 /// How much of a failed reply goes into the error message.
 const SNIPPET_CHARS: usize = 400;
 
-/// The Jev and Clef requests this run got replies to, and the pages it read: `usage` in `--json`. Counted per process,
-/// so `jurl mcp` (calls side by side) doesn't report it.
+/// The Jev and Clef requests this run got replies to, the pages it read, and whether one of them came from the retry
+/// with a browser's fingerprint: `usage` in `--json`. Counted per process, so `jurl mcp` (calls side by side) doesn't
+/// report it.
 pub(crate) static USAGE: Usage = Usage::new();
 
 /// Requests that got a reply. Not counted: failed attempts (a retried 429 or 529 included), and a hedged Clef call
@@ -33,6 +34,7 @@ pub(crate) static USAGE: Usage = Usage::new();
 #[derive(Debug, Default)]
 pub(crate) struct Usage {
     pub(crate) pages: AtomicU64,
+    pub(crate) browser_retry: AtomicBool,
     pub(crate) jev_requests: AtomicU64,
     pub(crate) jev_tokens: AtomicU64,
     pub(crate) clef_requests: AtomicU64,
@@ -44,6 +46,7 @@ impl Usage {
     pub(crate) const fn new() -> Self {
         Usage {
             pages: AtomicU64::new(0),
+            browser_retry: AtomicBool::new(false),
             jev_requests: AtomicU64::new(0),
             jev_tokens: AtomicU64::new(0),
             clef_requests: AtomicU64::new(0),
@@ -67,6 +70,7 @@ impl Usage {
         let n = |c: &AtomicU64| c.load(Relaxed);
         json!({
             "pages": n(&self.pages),
+            "browser_retry": self.browser_retry.load(Relaxed),
             "jev": { "requests": n(&self.jev_requests), "input_tokens": n(&self.jev_tokens) },
             "clef": { "requests": n(&self.clef_requests), "input_tokens": n(&self.clef_tokens), "images": n(&self.clef_images) },
         })
@@ -259,6 +263,7 @@ mod tests {
             u.json(),
             json!({
                 "pages": 2,
+                "browser_retry": false,
                 "jev": { "requests": 4, "input_tokens": 2000 },
                 "clef": { "requests": 2, "input_tokens": 160, "images": 2 },
             })
@@ -331,5 +336,15 @@ mod tests {
         let e = post(&Client::new(), &url, "", &json!({})).await.unwrap_err();
         assert!(is_api_error(&e), "{e:#}");
         assert!(format!("{e:#}").contains("reading the reply"), "{e:#}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_model_request_is_final_and_asked_once() {
+        // Jev and Clef are not pages: a 403 is an error at once, and nothing asks again with a browser's fingerprint.
+        let replies = vec![Some(crate::fetch::test_server::reply("403 Forbidden", "", b""))];
+        let (url, taken) = crate::fetch::test_server::serve_replies(replies);
+        let e = post(&crate::fetch::test_server::client(), &url, "", &json!({})).await.unwrap_err();
+        assert!(format!("{e:#}").contains("HTTP 403 Forbidden"), "{e:#}");
+        assert_eq!(taken.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

@@ -153,6 +153,7 @@ mod tests {
         usage.jev(&Answers { requests: 4, input_tokens: 5321, ..Answers::default() });
         let want = json!({
             "pages": 3,
+            "browser_retry": false,
             "jev": { "requests": 4, "input_tokens": 5321 },
             "clef": { "requests": 0, "input_tokens": 0, "images": 0 },
         });

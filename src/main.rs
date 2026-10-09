@@ -67,16 +67,21 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(mut args: Args) -> Result<()> {
-    let mut cfg = Config::load();
-    let client = Client::builder()
+/// The client every request goes through, pages and APIs alike: a browser's user agent, with jurl's version on the end.
+pub(crate) fn http_client() -> Result<Client> {
+    Ok(Client::builder()
         .user_agent(concat!(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/",
             env!("CARGO_PKG_VERSION")
         ))
         .timeout(HTTP_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .build()?;
+        .build()?)
+}
+
+async fn run(mut args: Args) -> Result<()> {
+    let mut cfg = Config::load();
+    let client = http_client()?;
     if args.url == "update" {
         return update::run().await;
     }
@@ -190,8 +195,20 @@ pub(crate) async fn load(
         t.lap("render");
         page
     } else {
-        let page = fetch::fetch(client, target.as_str()).await?;
+        let retry =
+            fetch::browser_retry_allowed(args.no_browser_retry, std::env::var_os("JURL_NO_BROWSER_RETRY").is_some());
+        let page = fetch::fetch(client, target.as_str(), retry).await?;
         t.lap("fetch");
+        if let Some(retry) = page.browser_retry {
+            decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
+            if args.timing {
+                eprintln!(
+                    "jurl: HTTP {} from the first request, read on a retry with a browser's TLS fingerprint in {}ms",
+                    retry.refused,
+                    retry.took.as_millis()
+                );
+            }
+        }
         page
     };
     // Only HTML can carry placeholders: a markdown page has no script to have left them.

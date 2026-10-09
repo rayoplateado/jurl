@@ -1118,9 +1118,10 @@ mod tests {
         let ours = small_text(&test_server::client(), &url(test_server::serve(head.into(), body.clone(), true)))
             .await
             .expect("a small file");
-        let page = crate::fetch::fetch(&test_server::client(), &test_server::serve(head.into(), body.clone(), true))
-            .await
-            .expect("a page");
+        let page =
+            crate::fetch::fetch(&test_server::client(), &test_server::serve(head.into(), body.clone(), true), false)
+                .await
+                .expect("a page");
         let res = test_server::client().get(test_server::serve(head.into(), body, true)).send().await.expect("a reply");
         assert_eq!(ours, "Café costs € 5");
         assert_eq!(ours, page.body);

@@ -54,7 +54,7 @@ brew install rayoplateado/tap/jurl                                              
 curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.sh | sh   # no Homebrew
 ```
 
-<sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source: `cargo install --git https://github.com/rayoplateado/jurl`</sub>
+<sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source (needs Rust 1.98, cmake and libclang: see [CONTRIBUTING](CONTRIBUTING.md#develop)): `cargo install --git https://github.com/rayoplateado/jurl`</sub>
 
 Then run it. The first time, jurl asks for a [TypeSafe API key](https://console.typesafe.ai), checks it and saves it. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
 
@@ -270,6 +270,7 @@ The tools run the same code as the CLI, with the same keys (`jurl init` or the e
 | `--vision` | Like `--image`, plus Clef looks at the pixels |
 | `-f, --find "…"` | The image that best matches the description |
 | `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps and unfilled template placeholders) |
+| `--no-browser-retry` | Don't ask a page that answers 403 or 503 again with a browser's TLS fingerprint (see below) |
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
@@ -284,6 +285,8 @@ Keys live in `~/.config/jurl/env`. Environment variables take precedence over th
 `--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. If Clef looks at none of the images, jurl says so on stderr and the result is from text alone. Images over 15 MB aren't read. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
 
 `JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none, and only over https or to localhost: plain http to another host is refused. [bench/models](bench/models) compares such a server's answers with Jev's.
+
+Some bot protection refuses a request by its TLS and HTTP/2 fingerprint, whatever the user agent says. So when a page answers 403 or 503, jurl asks for the same URL once more, with a client that has Chrome's fingerprint and headers, and reads that answer if it is a page. Nothing else is retried: a 429 is a rate limit, and it is respected. The retry covers pages only (a page, the pages `--follow` reads and `--links`), not robots.txt, sitemaps, images or the APIs. `--no-browser-retry`, or `JURL_NO_BROWSER_RETRY` set to anything, turns it off. `-t` says on stderr when a page was read on the retry, and `--json` has `"browser_retry": true` in its `usage`. [bench/browser-retry.md](bench/browser-retry.md) has the numbers.
 
 ### Exit codes
 
@@ -404,7 +407,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
 | `src/extract/mod.rs` · `src/extract/html.rs` · `src/extract/markdown.rs` · `src/extract/join.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
-| `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
+| `src/fetch.rs` · `src/lightpanda.rs` | Fetching (with the retry on a browser's fingerprint), rendering, the browser download |
 | `src/setup.rs` · `src/config.rs` | First-run key prompt, `jurl init`, key storage |
 | `src/update.rs` | `jurl update` |
 | `src/mcp.rs` | `jurl mcp`: the tools, their schemas, JSON-RPC over stdio |
