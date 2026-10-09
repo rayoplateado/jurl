@@ -154,6 +154,8 @@ mod tests {
         let want = json!({
             "pages": 3,
             "browser_retry": false,
+            "plain_refusals": 0,
+            "browser_requests": 0,
             "jev": { "requests": 4, "input_tokens": 5321 },
             "clef": { "requests": 0, "input_tokens": 0, "images": 0 },
         });

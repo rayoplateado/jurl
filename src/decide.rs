@@ -35,6 +35,9 @@ pub(crate) static USAGE: Usage = Usage::new();
 pub(crate) struct Usage {
     pub(crate) pages: AtomicU64,
     pub(crate) browser_retry: AtomicBool,
+    /// Plain requests (for a page or a site's small file) that got a refusal, and requests sent with the browser client.
+    pub(crate) plain_refusals: AtomicU64,
+    pub(crate) browser_requests: AtomicU64,
     pub(crate) jev_requests: AtomicU64,
     pub(crate) jev_tokens: AtomicU64,
     pub(crate) clef_requests: AtomicU64,
@@ -47,6 +50,8 @@ impl Usage {
         Usage {
             pages: AtomicU64::new(0),
             browser_retry: AtomicBool::new(false),
+            plain_refusals: AtomicU64::new(0),
+            browser_requests: AtomicU64::new(0),
             jev_requests: AtomicU64::new(0),
             jev_tokens: AtomicU64::new(0),
             clef_requests: AtomicU64::new(0),
@@ -71,6 +76,8 @@ impl Usage {
         json!({
             "pages": n(&self.pages),
             "browser_retry": self.browser_retry.load(Relaxed),
+            "plain_refusals": n(&self.plain_refusals),
+            "browser_requests": n(&self.browser_requests),
             "jev": { "requests": n(&self.jev_requests), "input_tokens": n(&self.jev_tokens) },
             "clef": { "requests": n(&self.clef_requests), "input_tokens": n(&self.clef_tokens), "images": n(&self.clef_images) },
         })
@@ -264,6 +271,8 @@ mod tests {
             json!({
                 "pages": 2,
                 "browser_retry": false,
+                "plain_refusals": 0,
+                "browser_requests": 0,
                 "jev": { "requests": 4, "input_tokens": 2000 },
                 "clef": { "requests": 2, "input_tokens": 160, "images": 2 },
             })

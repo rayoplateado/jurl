@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::Result;
 use futures::future::join_all;
-use reqwest::{Client, header};
+use reqwest::Client;
 use serde_json::Map;
 use url::Url;
 
@@ -280,18 +280,8 @@ async fn small_text(client: &Client, url: &Url, retry: Retry<'_>) -> Option<Stri
 
 /// [`small_text`] with its cap given. The body is read and decoded as fetch.rs reads and decodes a page.
 async fn small_text_within(client: &Client, url: &Url, max: usize, retry: Retry<'_>) -> Option<String> {
-    let body = if retry.sticky(url, Instant::now()) {
-        crate::fetch::small_text_browser(url, max, SMALL_TEXT_TIMEOUT).await?
-    } else {
-        let mut res = client.get(url.as_str()).timeout(SMALL_TEXT_TIMEOUT).send().await.ok()?;
-        if !res.status().is_success() {
-            return None;
-        }
-        let content_type =
-            res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
-        let bytes = crate::fetch::read_capped(&mut res, max).await.ok().flatten()?;
-        crate::fetch::decode(&content_type, &bytes)
-    };
+    // The same retry rule as a page's, with the same memo: the file is read through it (see `fetch::fetch_small`).
+    let body = crate::fetch::fetch_small(client, url, max, SMALL_TEXT_TIMEOUT, retry, Instant::now()).await?;
     (!body.trim_start().starts_with('<') || body.contains("<urlset") || body.contains("<sitemapindex")).then_some(body)
 }
 
@@ -650,7 +640,7 @@ impl Search {
         let (first, hints, _) = tokio::join!(
             visit(args, cfg, client, api_key, start, &site, &known, &field_scores),
             site_hints(args, client, api_key, start, &site),
-            robots.load_for(client, std::slice::from_ref(start), Retry::for_run(args.no_browser_retry)),
+            robots.load_for(client, std::slice::from_ref(start), Retry::for_run(args.no_browser_retry, args.timing)),
         );
         let mut first = first?;
         let mut hints = hints?;
@@ -753,7 +743,10 @@ impl Search {
         loop {
             self.leads.retain(|l| self.robots.allows(&l.url));
             let best: Vec<Url> = self.leads.iter().take(SHORTLIST).map(|l| l.url.clone()).collect();
-            let n = self.robots.load_for(ctx.client, &best, Retry::for_run(ctx.args.no_browser_retry)).await;
+            let n = self
+                .robots
+                .load_for(ctx.client, &best, Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing))
+                .await;
             if n == 0 {
                 break;
             }
@@ -887,7 +880,7 @@ impl Search {
 async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, site: &Site) -> Result<Vec<ScoredLink>> {
     let q = args.ask.as_deref().unwrap_or_default();
     // The site's pages that share words with the question first, then the shallowest.
-    let retry = Retry::for_run(args.no_browser_retry);
+    let retry = Retry::for_run(args.no_browser_retry, args.timing);
     let mut links = links::most_relevant(q, site_map(client, start, site, retry).await, MAX_HINTS);
     // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
     links.retain(|l| links::key(&l.url) != links::key(start));
@@ -951,7 +944,7 @@ mod tests {
         fetch::{Memo, test_server},
         judge::BlockPage,
     };
-    use test_server::{Kind, reply, retry_off, retry_on, serve_replies};
+    use test_server::{Kind, reply, retry_off, retry_on, serve_replies, serve_routed};
 
     #[test]
     fn menus_are_the_links_outside_the_text() {
@@ -1186,9 +1179,94 @@ mod tests {
             serve_replies(vec![Some(reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\n"))]);
         let memo = Memo::default();
         assert!(memo.learn_url(&Url::parse(&base).unwrap(), std::time::Instant::now()));
-        let off = crate::fetch::Retry { on: false, memo: &memo };
+        let off = crate::fetch::Retry { on: false, memo: &memo, timing: false };
         assert!(small_text(&test_server::client(), &robots_of(&base), off).await.is_some());
         assert_eq!(served.kinds(), [Kind::Plain]);
+    }
+
+    /// The request's path, from its request line.
+    fn path_of(head: &str) -> &str {
+        head.split(' ').nth(1).unwrap_or("/")
+    }
+
+    /// A sitemap of one page on the server the request came to, named by the request's Host. Header names are matched
+    /// without regard to case: the client may write `host:`.
+    fn sitemap_for(head: &str) -> String {
+        let host = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim().eq_ignore_ascii_case("host").then(|| value.trim())
+            })
+            .unwrap_or_default();
+        format!("<urlset><url><loc>http://{host}/news/a.html</loc></url></urlset>")
+    }
+
+    #[tokio::test]
+    async fn a_sitemap_refused_on_the_plain_client_is_read_from_the_browser_client_and_its_pages_are_hints() {
+        // The plain client is refused the sitemap; the browser client has it. Nothing else is there.
+        let (base, served) = serve_routed(|head| match (path_of(head), head.contains("Chrome/")) {
+            ("/sitemap.xml", true) => Some(reply("200 OK", "Content-Type: text/xml\r\n", sitemap_for(head).as_bytes())),
+            ("/sitemap.xml", false) => Some(reply("403 Forbidden", "", b"")),
+            _ => Some(reply("404 Not Found", "", b"")),
+        });
+        let start = Url::parse(&base).unwrap();
+        let memo = Memo::default();
+        let links = site_map(&test_server::client(), &start, &Site::new(&start), retry_on(&memo)).await;
+        assert!(links.iter().any(|l| l.url.path() == "/news/a.html"), "the sitemap's page is a hint");
+        let kinds = served.kinds();
+        assert_eq!(kinds.iter().filter(|k| **k == Kind::Browser).count(), 1, "one browser retry, for the sitemap");
+        assert!(memo.on_browser(&format!("127.0.0.1:{}", start.port().unwrap()), std::time::Instant::now()));
+    }
+
+    #[tokio::test]
+    async fn a_robots_file_refused_on_the_plain_client_is_read_from_the_browser_client_and_its_rules_apply() {
+        let (base, served) = serve_routed(|head| match (path_of(head), head.contains("Chrome/")) {
+            ("/robots.txt", true) => {
+                Some(reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\nDisallow: /private\n"))
+            }
+            ("/robots.txt", false) => Some(reply("403 Forbidden", "", b"")),
+            _ => Some(reply("404 Not Found", "", b"")),
+        });
+        let start = Url::parse(&base).unwrap();
+        let memo = Memo::default();
+        let mut rules = RobotsByHost::default();
+        assert_eq!(rules.load_for(&test_server::client(), std::slice::from_ref(&start), retry_on(&memo)).await, 1);
+        assert!(!rules.allows(&start.join("/private/page").unwrap()), "the browser client's rules apply");
+        assert!(rules.allows(&start.join("/news").unwrap()));
+        assert_eq!(served.kinds().iter().filter(|k| **k == Kind::Browser).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_sitemap_answering_503_with_a_retry_after_is_not_retried() {
+        let (base, served) = serve_routed(|head| match (path_of(head), head.contains("Chrome/")) {
+            ("/sitemap.xml", false) => Some(reply("503 Service Unavailable", "Retry-After: 120\r\n", b"")),
+            ("/sitemap.xml", true) => Some(reply("200 OK", "Content-Type: text/xml\r\n", sitemap_for(head).as_bytes())),
+            _ => Some(reply("404 Not Found", "", b"")),
+        });
+        let start = Url::parse(&base).unwrap();
+        let memo = Memo::default();
+        let links = site_map(&test_server::client(), &start, &Site::new(&start), retry_on(&memo)).await;
+        assert!(links.is_empty(), "the sitemap is not read");
+        assert!(served.kinds().iter().all(|k| *k == Kind::Plain), "a 503 that says when to come back is not retried");
+    }
+
+    #[tokio::test]
+    async fn with_the_retry_off_a_refused_sitemap_and_robots_file_are_not_retried() {
+        let (base, served) = serve_routed(|head| match (path_of(head), head.contains("Chrome/")) {
+            ("/sitemap.xml", true) => Some(reply("200 OK", "Content-Type: text/xml\r\n", sitemap_for(head).as_bytes())),
+            ("/robots.txt", true) => {
+                Some(reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\nDisallow: /\n"))
+            }
+            _ => Some(reply("403 Forbidden", "", b"")),
+        });
+        let start = Url::parse(&base).unwrap();
+        let links = site_map(&test_server::client(), &start, &Site::new(&start), retry_off()).await;
+        assert!(links.is_empty());
+        let mut rules = RobotsByHost::default();
+        assert_eq!(rules.load_for(&test_server::client(), std::slice::from_ref(&start), retry_off()).await, 1);
+        assert!(rules.allows(&start.join("/private/page").unwrap()), "no rules were read");
+        assert!(served.kinds().iter().all(|k| *k == Kind::Plain), "the browser client was never asked");
     }
 
     #[test]

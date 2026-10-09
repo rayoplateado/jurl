@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     path::Path,
     process::Stdio,
-    sync::{LazyLock, Mutex, MutexGuard, PoisonError},
+    sync::{LazyLock, Mutex, MutexGuard, PoisonError, atomic::Ordering::Relaxed},
     time::{Duration, Instant},
 };
 
@@ -20,8 +20,6 @@ pub struct Page {
     pub is_markdown: bool,
     /// Read with the browser client: after a retry, or because the host was already on it.
     pub via_browser: bool,
-    /// The host this read put on the browser client, when it did: `load` says so once per host, under `-t`.
-    pub switched: Option<String>,
 }
 
 /// The largest page read: a body past this is an error, not read on.
@@ -45,14 +43,15 @@ impl Memo {
     }
 
     /// Whether `host` is on the browser client at `now`. Entries older than STICKY_TTL are dropped first.
-    fn on_browser(&self, host: &str, now: Instant) -> bool {
+    pub(crate) fn on_browser(&self, host: &str, now: Instant) -> bool {
         let mut entries = self.entries();
         entries.retain(|_, learned| now.saturating_duration_since(*learned) < STICKY_TTL);
         entries.contains_key(host)
     }
 
     /// Puts `host` on the browser client as of `now`. Returns whether that is news: the host was not on it. A host that
-    /// is already on it keeps the moment it was learned, so its window is not extended.
+    /// is already on it keeps the moment it was learned, so its window is not extended. Concurrent requests to one host
+    /// race on this lock, and exactly one of them is told it was news.
     fn learn(&self, host: &str, now: Instant) -> bool {
         let mut entries = self.entries();
         entries.retain(|_, learned| now.saturating_duration_since(*learned) < STICKY_TTL);
@@ -71,21 +70,22 @@ impl Memo {
     }
 }
 
-/// What a fetch may do about bot protection: whether the browser-fingerprint retry is on for the run, and the memo of hosts
-/// that need the browser client.
+/// What a fetch may do about bot protection: whether the browser-fingerprint retry is on for the run, the memo of hosts that
+/// need the browser client, and whether a host switching to the browser client is said on stderr (`-t`).
 #[derive(Clone, Copy)]
 pub(crate) struct Retry<'a> {
     pub(crate) on: bool,
     pub(crate) memo: &'a Memo,
+    pub(crate) timing: bool,
 }
 
 static MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
 
 impl Retry<'static> {
     /// The retry for a run: on unless the run opts out with `--no-browser-retry` or `JURL_NO_BROWSER_RETRY`.
-    pub(crate) fn for_run(flag: bool) -> Self {
+    pub(crate) fn for_run(flag: bool, timing: bool) -> Self {
         let env_set = std::env::var_os("JURL_NO_BROWSER_RETRY").is_some();
-        Retry { on: browser_retry_allowed(flag, env_set), memo: &MEMO }
+        Retry { on: browser_retry_allowed(flag, env_set), memo: &MEMO, timing }
     }
 }
 
@@ -94,6 +94,17 @@ impl Retry<'_> {
     /// within STICKY_TTL of `now`.
     pub(crate) fn sticky(&self, url: &Url, now: Instant) -> bool {
         self.on && host_key(url).is_some_and(|host| self.memo.on_browser(&host, now))
+    }
+
+    /// Puts `url`'s host on the browser client, as a browser reply that was a success just showed. The first host to be put
+    /// there is said on stderr under `-t`, once.
+    fn learn(&self, url: &Url, now: Instant) {
+        if let Some(host) = host_key(url)
+            && self.memo.learn(&host, now)
+            && self.timing
+        {
+            eprintln!("jurl: {host}: using the browser client");
+        }
     }
 }
 
@@ -135,8 +146,8 @@ const VIA_BROWSER_TOO: &str = "also with a browser's TLS fingerprint";
 
 /// `fetch`, refusing a page larger than `max` bytes, and judging the host's memo as of `now`.
 async fn fetch_capped(client: &Client, url: &str, max: usize, retry: Retry<'_>, now: Instant) -> Result<Page> {
-    let host = Url::parse(url).ok().and_then(|u| host_key(&u));
-    if retry.on && host.as_deref().is_some_and(|h| retry.memo.on_browser(h, now)) {
+    let parsed = Url::parse(url).ok();
+    if parsed.as_ref().is_some_and(|u| retry.sticky(u, now)) {
         // This host needed the browser client within STICKY_TTL: ask only that. A refusal from it is the answer.
         return match get_browser(url, max).await? {
             Reply::Page { page, .. } => Ok(Page { via_browser: true, ..page }),
@@ -155,15 +166,66 @@ async fn fetch_capped(client: &Client, url: &str, max: usize, retry: Retry<'_>, 
         return Err(refused.error(url, None));
     };
     // A success from the browser client means it got past the bot check: the host is on the client from now on.
-    let switched = match &host {
-        Some(h) if res.status().is_success() && retry.memo.learn(h, now) => Some(h.clone()),
-        _ => None,
-    };
+    if let Some(parsed) = &parsed
+        && res.status().is_success()
+    {
+        retry.learn(parsed, now);
+    }
     // Once the browser client has a reply, that reply is the answer: a page too large to read is an error, not a fallback.
     match browser_reply(res, url, max).await? {
-        Reply::Page { page, .. } => Ok(Page { via_browser: true, switched, ..page }),
+        Reply::Page { page, .. } => Ok(Page { via_browser: true, ..page }),
         Reply::Refused(again) => Err(again.error(url, Some(VIA_BROWSER_TOO))),
     }
+}
+
+/// A small text file (robots.txt, llms.txt, a sitemap) at `url`, or None. It follows the retry rule for pages, with the same
+/// memo: a host on the browser client is read from there alone; otherwise the plain client is asked first, and a refusal the
+/// rule retries (a 403, or a 503 without a Retry-After) is asked once more of the browser client, whose success teaches the
+/// host. Its body is decoded as a page is; which bodies count as the site's file is for the caller to say.
+pub(crate) async fn fetch_small(
+    client: &Client,
+    url: &Url,
+    max: usize,
+    timeout: Duration,
+    retry: Retry<'_>,
+    now: Instant,
+) -> Option<String> {
+    if retry.sticky(url, now) {
+        crate::decide::USAGE.browser_requests.fetch_add(1, Relaxed);
+        let res = browser_client().ok()?.get(url.as_str()).timeout(timeout).send().await.ok()?;
+        return small_from_browser(res, max).await;
+    }
+    let mut res = client.get(url.as_str()).timeout(timeout).send().await.ok()?;
+    let status = res.status();
+    if status.is_success() {
+        let content_type =
+            res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+        let bytes = read_capped(&mut res, max).await.ok().flatten()?;
+        return Some(decode(&content_type, &bytes));
+    }
+    crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
+    let retry_after = res.headers().get(header::RETRY_AFTER).is_some();
+    if !retry.on || !retried(status, retry_after) {
+        return None;
+    }
+    crate::decide::USAGE.browser_requests.fetch_add(1, Relaxed);
+    let res = browser_client().ok()?.get(url.as_str()).timeout(timeout).send().await.ok()?;
+    if res.status().is_success() {
+        retry.learn(url, now);
+    }
+    small_from_browser(res, max).await
+}
+
+/// The body of a small file from a browser client's reply: decoded as a page is, or None on a refusal or a body larger than
+/// `max`.
+async fn small_from_browser(res: wreq::Response, max: usize) -> Option<String> {
+    if !res.status().is_success() {
+        return None;
+    }
+    let content_type =
+        res.headers().get(wreq::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    let bytes = read_stream_capped(res.content_length(), res.bytes_stream(), max).await.ok().flatten()?;
+    Some(decode(&content_type, &bytes))
 }
 
 /// What a request for a page came back with: the page, or the refusal to give one.
@@ -213,6 +275,7 @@ async fn get(client: &Client, url: &str, max: usize) -> Result<Reply> {
         .with_context(|| format!("fetching {url}"))?;
     let status = res.status();
     if !status.is_success() {
+        crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
         let retry_after = res.headers().get(header::RETRY_AFTER).map(retry_after_text);
         return Ok(Reply::Refused(Refusal { status, retry_after }));
     }
@@ -232,6 +295,7 @@ async fn get_browser(url: &str, max: usize) -> Result<Reply> {
 
 /// The browser client's request for `url`, sent. An error here means no reply came.
 async fn browser_send(url: &str) -> Result<wreq::Response> {
+    crate::decide::USAGE.browser_requests.fetch_add(1, Relaxed);
     browser_client()?.get(url).send().await.with_context(|| format!("fetching {url} with a browser's fingerprint"))
 }
 
@@ -251,9 +315,9 @@ async fn browser_reply(res: wreq::Response, url: &str, max: usize) -> Result<Rep
     Ok(Reply::Page { status, page: to_page(final_url, &ct, &bytes) })
 }
 
-/// The browser client, built on first use and then shared, so its connections are pooled across hops. It asks like Chrome
-/// 149: its TLS and HTTP/2 fingerprint, headers and user agent. Proxies from the environment apply, as they do to the normal
-/// client, and the redirects, timeout and idle timeout are the normal client's.
+/// The browser client, built on first use and then shared, so its connections are pooled across hops and files. It asks like
+/// Chrome 149: its TLS and HTTP/2 fingerprint, headers and user agent. Proxies from the environment apply, as they do to the
+/// normal client, and the redirects, timeout and idle timeout are the normal client's.
 static BROWSER: LazyLock<std::result::Result<wreq::Client, String>> = LazyLock::new(|| {
     let builder = wreq::Client::builder()
         .emulation(wreq_util::Emulation::Chrome149)
@@ -271,24 +335,11 @@ fn browser_client() -> Result<wreq::Client> {
     BROWSER.as_ref().cloned().map_err(|e| anyhow!("{e}"))
 }
 
-/// A small text file from `url` (robots.txt, a sitemap) read with the browser client and decoded as a page is: None on a
-/// refusal, no reply, or a body past `max`. For a host that is on the browser client.
-pub(crate) async fn small_text_browser(url: &Url, max: usize, timeout: Duration) -> Option<String> {
-    let res = browser_client().ok()?.get(url.as_str()).timeout(timeout).send().await.ok()?;
-    if !res.status().is_success() {
-        return None;
-    }
-    let content_type =
-        res.headers().get(wreq::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
-    let bytes = read_stream_capped(res.content_length(), res.bytes_stream(), max).await.ok().flatten()?;
-    Some(decode(&content_type, &bytes))
-}
-
 /// The page a body makes: its text as its Content-Type's charset says, and whether it is markdown.
 fn to_page(url: Url, content_type: &str, bytes: &[u8]) -> Page {
     let body = decode(content_type, bytes);
     let is_markdown = served_markdown(content_type, &body);
-    Page { url, body, is_markdown, via_browser: false, switched: None }
+    Page { url, body, is_markdown, via_browser: false }
 }
 
 /// The body of `res`, or None once it is larger than `max` bytes. The Content-Length is checked first, but the bytes
@@ -400,7 +451,7 @@ pub async fn render(bin: &Path, url: &Url) -> Result<Page> {
         let error = v["error"].as_str().unwrap_or("no output");
         bail!("lightpanda rendered nothing for {url} ({error})");
     }
-    Ok(Page { url: url.clone(), body: body.to_string(), is_markdown: false, via_browser: false, switched: None })
+    Ok(Page { url: url.clone(), body: body.to_string(), is_markdown: false, via_browser: false })
 }
 
 #[cfg(test)]
@@ -408,7 +459,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use test_server::{Kind, chunked_reply, client, reply, retry_off, retry_on, serve, serve_replies};
+    use test_server::{Kind, chunked_reply, client, reply, retry_off, retry_on, serve, serve_replies, serve_routed};
 
     /// `<p>Hello, page.</p>` as gzip, as a server sends it under Content-Encoding: gzip.
     const GZIPPED: &[u8] = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xb3\x29\xb0\xf3\x48\xcd\xc9\xc9\xd7\x51\x28\x48\x4c\x4f\xd5\xb3\xd1\x2f\xb0\x03\x00\x04\x6d\x98\xda\x13\x00\x00\x00";
@@ -417,6 +468,19 @@ mod tests {
     fn host_of(url: &str) -> String {
         host_key(&Url::parse(url).expect("a URL")).expect("a host")
     }
+
+    /// A server that answers the plain client with `plain` and the browser client with `browser`, whatever the path.
+    fn serve_by_client(plain: Vec<u8>, browser: Vec<u8>) -> (String, test_server::Served) {
+        serve_routed(move |head| Some(if head.contains("Chrome/") { browser.clone() } else { plain.clone() }))
+    }
+
+    /// The URL of a path on the server at `base`.
+    fn file_at(base: &str, path: &str) -> Url {
+        Url::parse(base).expect("a URL").join(path).expect("a path")
+    }
+
+    /// How long a small file may take in these tests.
+    const WAIT: Duration = Duration::from_secs(4);
 
     #[test]
     fn markdown_served_as_plain_text_is_markdown() {
@@ -539,12 +603,12 @@ mod tests {
             Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Hello, page.</p>")),
         ]);
         let memo = Memo::default();
-        let page = fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), Instant::now())
-            .await
-            .unwrap_or_else(|e| panic!("{e:#}"));
+        let now = Instant::now();
+        let page =
+            fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(page.body, "<p>Hello, page.</p>");
         assert!(page.via_browser);
-        assert_eq!(page.switched, Some(host_of(&url)));
+        assert!(memo.on_browser(&host_of(&url), now), "the host is learned");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
     }
 
@@ -688,7 +752,7 @@ mod tests {
         assert_eq!(page.body, "<p>Hello, page.</p>");
     }
 
-    /// A page the browser client has (or the plain client, for the first one), the reply's body, and its kind.
+    /// A page the browser client answers, as a whole reply.
     fn ok_page(body: &str) -> Vec<u8> {
         reply("200 OK", "Content-Type: text/html\r\n", body.as_bytes())
     }
@@ -702,14 +766,12 @@ mod tests {
         ]);
         let memo = Memo::default();
         let now = Instant::now();
-        let first =
-            fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
-        assert_eq!(first.switched, Some(host_of(&url)));
+        fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(memo.on_browser(&host_of(&url), now));
         let second =
             fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(second.body, "<p>Two.</p>");
         assert!(second.via_browser);
-        assert_eq!(second.switched, None, "the host was already on the browser client");
         // The second request never went to the plain client.
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser, Kind::Browser]);
     }
@@ -756,26 +818,21 @@ mod tests {
             Some(ok_page("<p>Three.</p>")),
         ]);
         let memo = Memo::default();
+        let host = host_of(&url);
         let learned_at = Instant::now();
         let just_before = learned_at + STICKY_TTL - Duration::from_secs(1);
         let after = learned_at + STICKY_TTL + Duration::from_secs(1);
 
-        let first = fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), learned_at)
-            .await
-            .unwrap_or_else(|e| panic!("{e:#}"));
-        assert_eq!(first.switched, Some(host_of(&url)));
+        fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), learned_at).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(memo.on_browser(&host, learned_at), "learned by the first retry");
         let within = fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), just_before)
             .await
             .unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(within.via_browser && within.switched.is_none(), "still on the browser client just before the TTL");
+        assert!(within.via_browser, "still on the browser client just before the TTL");
         let expired =
             fetch_capped(&client(), &url, PAGE_MAX, retry_on(&memo), after).await.unwrap_or_else(|e| panic!("{e:#}"));
         assert!(expired.via_browser);
-        assert_eq!(
-            expired.switched,
-            Some(host_of(&url)),
-            "after the TTL the host is tried plain again, and learned again"
-        );
+        assert!(memo.on_browser(&host, after), "after the TTL the host is tried plain again, and learned again");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser, Kind::Browser, Kind::Plain, Kind::Browser]);
     }
 
@@ -786,10 +843,124 @@ mod tests {
         let now = Instant::now();
         // The host is on the browser client, as a retry would have left it; the run has opted out.
         assert!(memo.learn_url(&Url::parse(&url).unwrap(), now));
-        let retry = Retry { on: false, memo: &memo };
+        let retry = Retry { on: false, memo: &memo, timing: false };
         let err = fetch_capped(&client(), &url, PAGE_MAX, retry, now).await.err().expect("refused");
         assert!(format!("{err:#}").ends_with("returned HTTP 403 Forbidden"), "{err:#}");
         assert_eq!(served.kinds(), [Kind::Plain]);
+    }
+
+    #[tokio::test]
+    async fn a_small_file_refused_on_the_plain_client_is_read_from_the_browser_client_and_teaches_the_host() {
+        let file = "User-agent: *\nDisallow: /private\n";
+        let (base, served) = serve_by_client(
+            reply("403 Forbidden", "", b""),
+            reply("200 OK", "Content-Type: text/plain\r\n", file.as_bytes()),
+        );
+        let memo = Memo::default();
+        let now = Instant::now();
+        let body = fetch_small(&client(), &file_at(&base, "/robots.txt"), PAGE_MAX, WAIT, retry_on(&memo), now).await;
+        assert_eq!(body.as_deref(), Some(file));
+        assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
+        assert!(memo.on_browser(&host_of(&base), now), "the host is learned");
+    }
+
+    #[tokio::test]
+    async fn a_503_without_a_retry_after_is_retried_for_a_small_file() {
+        let (base, served) = serve_by_client(
+            reply("503 Service Unavailable", "", b""),
+            reply("200 OK", "Content-Type: text/xml\r\n", b"<urlset/>"),
+        );
+        let memo = Memo::default();
+        let body =
+            fetch_small(&client(), &file_at(&base, "/sitemap.xml"), PAGE_MAX, WAIT, retry_on(&memo), Instant::now())
+                .await;
+        assert_eq!(body.as_deref(), Some("<urlset/>"));
+        assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
+    }
+
+    #[tokio::test]
+    async fn a_503_with_a_retry_after_is_not_retried_for_a_small_file_in_either_form() {
+        for header in ["Retry-After: 120\r\n", "Retry-After: Wed, 21 Oct 2015 07:28:00 GMT\r\n"] {
+            let (base, served) = serve_by_client(
+                reply("503 Service Unavailable", header, b""),
+                reply("200 OK", "Content-Type: text/xml\r\n", b"<urlset/>"),
+            );
+            let memo = Memo::default();
+            let now = Instant::now();
+            let body =
+                fetch_small(&client(), &file_at(&base, "/sitemap.xml"), PAGE_MAX, WAIT, retry_on(&memo), now).await;
+            assert_eq!(body, None, "{header:?}");
+            assert_eq!(served.kinds(), [Kind::Plain], "{header:?} was retried");
+            assert!(!memo.on_browser(&host_of(&base), now), "{header:?} taught the host");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_429_or_401_or_404_is_not_retried_for_a_small_file() {
+        for status in ["429 Too Many Requests", "401 Unauthorized", "404 Not Found"] {
+            let (base, served) = serve_by_client(reply(status, "", b""), reply("200 OK", "", b"never"));
+            let memo = Memo::default();
+            let body =
+                fetch_small(&client(), &file_at(&base, "/robots.txt"), PAGE_MAX, WAIT, retry_on(&memo), Instant::now())
+                    .await;
+            assert_eq!(body, None, "{status}");
+            assert_eq!(served.kinds(), [Kind::Plain], "{status} was retried");
+        }
+    }
+
+    #[tokio::test]
+    async fn with_the_retry_off_a_small_file_refused_on_the_plain_client_is_not_retried() {
+        let (base, served) = serve_by_client(reply("403 Forbidden", "", b""), reply("200 OK", "", b"never"));
+        let memo = Memo::default();
+        let now = Instant::now();
+        // The host is on the memo, but the run has opted out: the memo is not read, and the file is not retried.
+        assert!(memo.learn_url(&Url::parse(&base).unwrap(), now));
+        let off = Retry { on: false, memo: &memo, timing: false };
+        assert_eq!(fetch_small(&client(), &file_at(&base, "/robots.txt"), PAGE_MAX, WAIT, off, now).await, None);
+        assert_eq!(served.kinds(), [Kind::Plain]);
+    }
+
+    #[tokio::test]
+    async fn a_small_file_on_a_learned_host_comes_from_the_browser_client_alone() {
+        let (base, served) = serve_by_client(
+            reply("403 Forbidden", "", b""),
+            reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\n"),
+        );
+        let memo = Memo::default();
+        let now = Instant::now();
+        assert!(memo.learn_url(&Url::parse(&base).unwrap(), now));
+        let body = fetch_small(&client(), &file_at(&base, "/robots.txt"), PAGE_MAX, WAIT, retry_on(&memo), now).await;
+        assert_eq!(body.as_deref(), Some("User-agent: *\n"));
+        assert_eq!(served.kinds(), [Kind::Browser]);
+    }
+
+    #[tokio::test]
+    async fn three_parallel_refused_files_of_one_host_each_retry_once_and_the_host_is_learned() {
+        // The start host's robots.txt, llms.txt and sitemap.xml, fetched at once, each refused on the plain client.
+        let (base, served) = serve_routed(|head| {
+            let path = head.split(' ').nth(1).unwrap_or("/");
+            if head.contains("Chrome/") {
+                Some(reply("200 OK", "Content-Type: text/plain\r\n", format!("file {path}").as_bytes()))
+            } else {
+                Some(reply("403 Forbidden", "", b""))
+            }
+        });
+        let memo = Memo::default();
+        let now = Instant::now();
+        let (plain, robots_url, llms_url, sitemap_url) =
+            (client(), file_at(&base, "/robots.txt"), file_at(&base, "/llms.txt"), file_at(&base, "/sitemap.xml"));
+        let (robots, llms, sitemap) = tokio::join!(
+            fetch_small(&plain, &robots_url, PAGE_MAX, WAIT, retry_on(&memo), now),
+            fetch_small(&plain, &llms_url, PAGE_MAX, WAIT, retry_on(&memo), now),
+            fetch_small(&plain, &sitemap_url, PAGE_MAX, WAIT, retry_on(&memo), now),
+        );
+        assert_eq!(robots.as_deref(), Some("file /robots.txt"));
+        assert_eq!(llms.as_deref(), Some("file /llms.txt"));
+        assert_eq!(sitemap.as_deref(), Some("file /sitemap.xml"));
+        let kinds = served.kinds();
+        assert_eq!(kinds.iter().filter(|k| **k == Kind::Plain).count(), 3, "one plain request per file");
+        assert_eq!(kinds.iter().filter(|k| **k == Kind::Browser).count(), 3, "one browser retry per file");
+        assert!(memo.on_browser(&host_of(&base), now), "the host is learned, once");
     }
 
     #[test]
@@ -942,6 +1113,27 @@ pub(crate) mod test_server {
         (format!("http://{addr}/page"), served)
     }
 
+    /// A loopback server that answers each request by its head (the request line and headers): `route` gives the whole
+    /// reply, or None to hang up with no reply. Returns the server's base URL and what it was sent.
+    pub(crate) fn serve_routed(route: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static) -> (String, Served) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        let served = Served::default();
+        let log = served.heads.clone();
+        thread::spawn(move || {
+            loop {
+                let Ok((mut conn, _)) = listener.accept() else { return };
+                let head = read_head(&mut conn);
+                let answer = route(&head);
+                log.lock().expect("the request log").push(head);
+                if let Some(bytes) = answer {
+                    let _ = conn.write_all(&bytes);
+                }
+            }
+        });
+        (format!("http://{addr}"), served)
+    }
+
     /// A whole HTTP/1.1 reply: the status line, the headers (each ending in CRLF), and the body, with the Content-Length
     /// and the Connection: close that a client needs to read it to its end.
     pub(crate) fn reply(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
@@ -966,13 +1158,13 @@ pub(crate) mod test_server {
 
     /// The retry on, with `memo` as the run's memo.
     pub(crate) fn retry_on(memo: &Memo) -> Retry<'_> {
-        Retry { on: true, memo }
+        Retry { on: true, memo, timing: false }
     }
 
     /// The retry off: no memo is ever read or written.
     pub(crate) fn retry_off() -> Retry<'static> {
         static NO_MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
-        Retry { on: false, memo: &NO_MEMO }
+        Retry { on: false, memo: &NO_MEMO, timing: false }
     }
 
     /// Reads a request up to its blank line, so the client has sent all of it before the reply comes. Returns the head.
