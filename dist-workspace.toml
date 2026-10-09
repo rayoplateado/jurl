@@ -28,11 +28,7 @@ allow-dirty = ["ci"]
 # Runs before `dist build` on every runner: wreq (the browser-fingerprint retry) needs Rust 1.98, and the macOS 14 image has 1.96
 github-build-setup = "../build-setup.yml"
 
-# The browser-fingerprint retry links BoringSSL (btls-sys), which is built with cmake and bindgen (libclang) on every
-# target, and with NASM on Windows x86_64, where the runner image has none
-[dist.dependencies.apt]
-cmake = "*"
-libclang-dev = "*"
-
+# The browser-fingerprint retry links BoringSSL (btls-sys), which is built with cmake and bindgen (libclang). The Linux and
+# macOS runner images have both; the Windows image has no NASM, which BoringSSL's build needs on x86_64
 [dist.dependencies.chocolatey]
 nasm = "*"
