@@ -6,3 +6,4 @@
 worker/.wrangler/
 worker/node_modules/
 .dev.vars
+bench/front-doors/results/

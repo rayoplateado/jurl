@@ -1,0 +1,166 @@
+{
+ "baseline|R1-0-0": {
+  "class": "missed_on_read",
+  "why": "/servicios-precios/puestos-flexibles lists 'Flex Completa € 220' (read; --precise picked 120€ instead)"
+ },
+ "baseline|R1-2-0": {
+  "class": "not_reached",
+  "why": "5 pages read (listings, location pages) had no price; the prices page was not reached (unverified)"
+ },
+ "baseline|R1-2-1": {
+  "class": "not_reached",
+  "why": "5 pages read had no day-pass text (closest: hourly packages); not reached (unverified)"
+ },
+ "baseline|R1-3-0": {
+  "class": "not_reached",
+  "why": "tarifas pages read (warmth 0.13) without the price in their text (unverified)"
+ },
+ "baseline|R2-0-1": {
+  "class": "js_only",
+  "why": "the front door needs rendering (Lightpanda); no first-ticket text in the rendered pages"
+ },
+ "baseline|R2-1-0": {
+  "class": "not_on_site",
+  "why": "the site says 'pre-Series A or Series A rounds', not pre-seed, on the pages read"
+ },
+ "baseline|R2-1-2": {
+  "class": "not_reached",
+  "why": "no pitch or contact text on the 5 pages read; the contact page was not reached (unverified)"
+ },
+ "baseline|R2-3-0": {
+  "class": "not_on_site",
+  "why": "no pre-seed text in the 3 pages read; the investment-thesis link returns 404"
+ },
+ "baseline|R2-3-1": {
+  "class": "not_on_site",
+  "why": "no first-ticket text in the 3 pages read; the investment-thesis link returns 404"
+ },
+ "baseline|R2-4-0": {
+  "class": "not_on_site",
+  "why": "the site says 'seed stage investors' on the pages read; no pre-seed text"
+ },
+ "baseline|R2-5-0": {
+  "class": "js_only",
+  "why": "front door rendered with Lightpanda; one page read and no link scored (warmth 0.06)"
+ },
+ "baseline|R2-5-1": {
+  "class": "js_only",
+  "why": "front door rendered with Lightpanda; one page read and no link scored (warmth 0.05)"
+ },
+ "baseline|R3-1-0": {
+  "class": "not_reached",
+  "why": "front door links to Ayuda and Actualidad but none scored (warmth 0.00); grant pages not reached"
+ },
+ "baseline|R3-1-1": {
+  "class": "not_reached",
+  "why": "front door links not scored (warmth 0.00); grant pages not reached"
+ },
+ "baseline|R4-1-1": {
+  "class": "not_reached",
+  "why": "no ticket text in the pages read; the tickets page was not reached (unverified)"
+ },
+ "baseline|R4-3-0": {
+  "class": "blocked",
+  "why": "subpages return HTTP 403 (information, practical information, get-your-pass)"
+ },
+ "baseline|R4-3-1": {
+  "class": "blocked",
+  "why": "subpages return HTTP 403 (get-your-pass)"
+ },
+ "baseline|R5-0-0": {
+  "class": "not_reached",
+  "why": "pages read are the school overview and programs; the MBA price page not reached"
+ },
+ "baseline|R5-1-0": {
+  "class": "missed_on_read",
+  "why": "the Full-Time MBA page was read (warmth 0.60) and its FAQ asks the cost; no price picked (unverified)"
+ },
+ "baseline|R5-3-0": {
+  "class": "js_only",
+  "why": "pages read needed rendering (Lightpanda); no price text in them"
+ },
+ "baseline|R6es-3-1": {
+  "class": "not_reached",
+  "why": "the Spanish run read the refund-policy page (closest '15 días laborables') and not the page with '30 días naturales' that the English run found"
+ },
+ "baseline|S1-1-0": {
+  "class": "not_reached",
+  "why": "the search went to about.gitlab.com and repository pages; docs.gitlab.com (same registrable domain) not reached"
+ },
+ "baseline|S1-2-0": {
+  "class": "not_reached",
+  "why": "the answer is on support.atlassian.com, another registrable domain: not followed (no cross-domain links)"
+ },
+ "baseline|S1-3-0": {
+  "class": "not_reached",
+  "why": "docs.stripe.com/api was read (closest: 'Rate limits: Understand throttling'); docs.stripe.com/rate-limits not reached"
+ },
+ "baseline|S1-4-0": {
+  "class": "not_reached",
+  "why": "www.shopify.com/legal/api-terms was read and links shopify.dev (another registrable domain): not followed"
+ },
+ "baseline|S2-5-0": {
+  "class": "not_on_site",
+  "why": "PostHog's paid plans are usage-based on the pricing page read: no monthly price for a paid plan"
+ },
+ "baseline|S2-7-0": {
+  "class": "missed_on_read",
+  "why": "the pricing page is read as markdown (no prices in it); the HTML has them ('Asana: $10.99 ... billed monthly')"
+ },
+ "step1|R2-0-0": {
+  "class": "not_reached",
+  "why": "Regression: the 2023 fund article that answered in baseline sits in a sitemap that newest-first no longer reads."
+ },
+ "step1|R4-1-0": {
+  "class": "not_reached",
+  "why": "Regression: the 4YFN 2027 dates article sits in a sitemap that newest-first no longer reads."
+ },
+ "step1|R4-2-1": {
+  "class": "not_reached",
+  "why": "The ticket price is not in the pages read (the baseline's R$ 499 was the Brazil event: wrong)."
+ },
+ "step2|R2-0-0": {
+  "class": "not_reached",
+  "why": "Regression: the 2023 fund article that answered in baseline sits in a sitemap that newest-first no longer reads."
+ },
+ "step2|R4-1-0": {
+  "class": "not_reached",
+  "why": "Regression: the 4YFN 2027 dates article sits in a sitemap that newest-first no longer reads."
+ },
+ "step2|R4-2-1": {
+  "class": "not_reached",
+  "why": "The ticket price is not in the pages read (the baseline's R$ 499 was the Brazil event: wrong)."
+ },
+ "step3|R1-1-2": {
+  "class": "missed_on_read",
+  "why": "The Working Pass hours (9h to 18h, Monday to Friday) are on a page jurl read; the search did not give them as the answer."
+ },
+ "step3|R2-1-1": {
+  "class": "not_reached",
+  "why": "Regression: a cross-domain typeform (a whistleblowing form) was followed and the search lost the first-ticket page."
+ },
+ "step3|R2-3-1": {
+  "class": "not_on_site",
+  "why": "The pages read have no first-ticket figure (the thesis page 404s)."
+ },
+ "step3|R2-4-2": {
+  "class": "not_on_site",
+  "why": "The pages read give the investment range (0.5-2m) but no pitch address or method."
+ },
+ "step4|R1-1-2": {
+  "class": "missed_on_read",
+  "why": "The same hours page as in step 3: read, not picked."
+ },
+ "step4|R3-3-0": {
+  "class": "not_reached",
+  "why": "Regression with en: the EIC front door's language selector sends the English path to pages without the Brussels deadline."
+ },
+ "step4|S1-4-0": {
+  "class": "not_reached",
+  "why": "The search reached shopify.dev/docs/api/usage/limits (the rate-limits URL 301-redirects there): a hub that says the figures are documented per API. The number is on the REST Admin API rate-limit page, which was not reached."
+ },
+ "step5|S3-5-0": {
+  "class": "not_on_site",
+  "why": "The pages read say 'meet SOC 2 requirements' but no SOC 2 Type II report (the answer that was wrong before)."
+ }
+}

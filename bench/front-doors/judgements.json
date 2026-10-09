@@ -1,0 +1,434 @@
+{
+ "bitbucket.org|What is the primary rate limit for authenticated requests?|1,000 requests per hour": {
+  "verdict": "correct",
+  "why": "Atlassian's API limits page: \"The default rate limit is 1,000 requests per hour\" (the page the owner's own check answered from)."
+ },
+ "clickup.com|What is the monthly price of the cheapest paid plan?|$8user / mo": {
+  "verdict": "correct",
+  "why": "\"Core $8 user/mo\": the cheapest paid plan (Free is $0)."
+ },
+ "cloudflare.com|Can customers choose where their data is stored?|The Data Localization Suite (DLS) is a collection of tools that enable customers to choose the location where Cloudflare inspects and stores data": {
+  "verdict": "correct",
+  "why": "The Data Localization Suite lets customers \"choose the location where Cloudflare inspects and stores data\"."
+ },
+ "cloudflare.com|Can customers choose where their data is stored?|You decide where your data is stored": {
+  "verdict": "correct",
+  "why": "\"You decide where your data is stored\"."
+ },
+ "cloudflare.com|Do they have a SOC 2 Type II report?|Meet SOC 2, PCI DSS, HIPAA, and GDPR requirements with audit logs, data residency controls, and privacy features": {
+  "verdict": "wrong",
+  "why": "\"Meet SOC 2, PCI DSS, HIPAA, and GDPR requirements\": says it helps meet SOC 2, not that a Type II report exists."
+ },
+ "figma.com|What is the monthly price of the cheapest paid plan?|$3/mo": {
+  "verdict": "wrong",
+  "why": "$3 is the Collab seat price inside Professional, not the cheapest plan (Professional is $12-16 per seat)."
+ },
+ "figma.com|What is the monthly price of the cheapest paid plan?|US$3/bulan": {
+  "verdict": "wrong",
+  "why": "\"Lisensi Kolaborasi US$3/bulan\": the collaborator seat, not the cheapest plan (as before)."
+ },
+ "github.com|What is the primary rate limit for authenticated requests?|5,000 requests per hour": {
+  "verdict": "correct",
+  "why": "\"All of these requests count towards your personal rate limit of 5,000 requests per hour\"."
+ },
+ "gitlab.com|What is the primary rate limit for authenticated requests?|A sustained limit, measured each hour. Use this number to plan your usage": {
+  "verdict": "wrong",
+  "why": "\"A sustained limit, measured each hour. Use this number to plan your usage.\" states no number."
+ },
+ "https://ecoalf.com/|From what order amount is shipping free?|150€": {
+  "verdict": "correct",
+  "why": "\"Envios gratis a partir de 150 EUR\"."
+ },
+ "https://ecoalf.com/|How many days do you have to return an item?|30 días": {
+  "verdict": "correct",
+  "why": "\"El plazo de devolucion y cambios es de 30 dias\"."
+ },
+ "https://ecoalf.com/|¿A partir de qué importe de pedido el envío es gratis?|150€": {
+  "verdict": "correct",
+  "why": "\"Envios gratis a partir de 150 EUR\"."
+ },
+ "https://ecoalf.com/|¿Cuántos días tengo para devolver un artículo?|30 días": {
+  "verdict": "correct",
+  "why": "\"El plazo de devolucion y cambios es de 30 dias\"."
+ },
+ "https://eic.ec.europa.eu/|What is the maximum amount?|€6,5 billion": {
+  "verdict": "wrong",
+  "why": "EUR 6.5 billion is the total support offered, not the maximum amount per project."
+ },
+ "https://eic.ec.europa.eu/|When is the application deadline?|13 September 2024 - 10:00 CEST": {
+  "verdict": "wrong",
+  "why": "\"New deadline for receipt of tenders: 13 September 2024\": a tender deadline from 2024, not a grant application deadline."
+ },
+ "https://eic.ec.europa.eu/|When is the application deadline?|17 December 2026 17:00:00 Brussels time": {
+  "verdict": "correct",
+  "why": "The EIC Accelerator call HORIZON-EIC-2026-ACCELERATOR-01 closes 17 December 2026 17:00 Brussels time, on the EU funding portal."
+ },
+ "https://esade.edu/|How long does it last?|Weeks of April 13th and April 20th - Pedralbes and Sant Cugat campuses": {
+  "verdict": "wrong",
+  "why": "\"Weeks of April 13th and April 20th - Pedralbes and Sant Cugat campuses\": dates, not a duration."
+ },
+ "https://esade.edu/|Is there an online version?|Formato: Online": {
+  "verdict": "wrong",
+  "why": "\"Formato: Online, Precio 2.900 EUR\" is an online executive program, not the flagship MBA or a bootcamp."
+ },
+ "https://esade.edu/|Is there an online version?|Online": {
+  "verdict": "wrong",
+  "why": "\"Format: Online, Fees 2.900 EUR\" is an online executive program, not the flagship MBA."
+ },
+ "https://esade.edu/|Is there an online version?|The Library offers you a remote access service which, once you have logged in, lets you access databases and electronic resources from off campus": {
+  "verdict": "wrong",
+  "why": "The library's off-campus access to databases; not an online version of a program."
+ },
+ "https://esade.edu/|What is the price of the flagship MBA or bootcamp?|€39,650": {
+  "verdict": "correct",
+  "why": "\"1st year at Esade: EUR 39,650\" from the Full-Time MBA fees page (the first-year fee; the total is not stated)."
+ },
+ "https://madrid.impacthub.net/|Can you buy a day pass?|Buy a day pass or a 10-day pass to combine working from home and working in the office with complete flexibility": {
+  "verdict": "correct",
+  "why": "The page says \"Buy a day pass or a 10-day pass\", so day passes can be bought."
+ },
+ "https://madrid.impacthub.net/|Can you buy a day pass?|Ven cuando lo necesites. Adquiere tu pase de un día o un bono de 10 días para combinar teletrabajo y oficina con total flexibilidad": {
+  "verdict": "correct",
+  "why": "\"Adquiere tu pase de un dia o un bono de 10 dias\": a day pass can be bought."
+ },
+ "https://madrid.impacthub.net/|Is it open 24/7?|24/7": {
+  "verdict": "correct",
+  "why": "The plans list \"Acceso 24/7\" (24/7 access for members), so the space is open round the clock for that plan."
+ },
+ "https://mrwonderful.com/|From what order amount is shipping free?|30 €": {
+  "verdict": "correct",
+  "why": "\"Los pedidos superiores a 30 EUR disfrutan de envio gratuito\" (peninsular Spain)."
+ },
+ "https://mrwonderful.com/|How many days do you have to return an item?|14": {
+  "verdict": "correct",
+  "why": "The legal withdrawal period is 14 natural days (art. 71 Ley 3/2014); the site's returns text says 15 (see the Spanish run)."
+ },
+ "https://mrwonderful.com/|¿A partir de qué importe de pedido el envío es gratis?|30 €": {
+  "verdict": "correct",
+  "why": "\"Los pedidos superiores a 30 EUR disfrutan de envio gratuito\"."
+ },
+ "https://mrwonderful.com/|¿Cuántos días tengo para devolver un artículo?|15 días naturales": {
+  "verdict": "correct",
+  "why": "\"El USUARIO dispone de 15 dias naturales para la devolucion\"."
+ },
+ "https://pompeiibrand.com/|From what order amount is shipping free?|100€": {
+  "verdict": "correct",
+  "why": "\"gratuitos a partir de 100 EUR\"."
+ },
+ "https://pompeiibrand.com/|How many days do you have to return an item?|365 días": {
+  "verdict": "correct",
+  "why": "\"Dispones de 365 dias para realizar cambios o devoluciones\"."
+ },
+ "https://pompeiibrand.com/|¿A partir de qué importe de pedido el envío es gratis?|100€": {
+  "verdict": "correct",
+  "why": "\"gratuitos a partir de 100 EUR\"."
+ },
+ "https://pompeiibrand.com/|¿Cuántos días tengo para devolver un artículo?|365 días": {
+  "verdict": "correct",
+  "why": "\"Dispones de 365 dias para realizar cambios o devoluciones\"."
+ },
+ "https://scalperscompany.com/|From what order amount is shipping free?|40€": {
+  "verdict": "correct",
+  "why": "\"Para pedidos superiores a 40 EUR, el envio a domicilio es gratuito\"."
+ },
+ "https://scalperscompany.com/|How many days do you have to return an item?|30 calendar days": {
+  "verdict": "correct",
+  "why": "The English returns text: \"30 calendar days\" from receipt of the order (the same policy as the Spanish page)."
+ },
+ "https://scalperscompany.com/|How many days do you have to return an item?|30 días naturales": {
+  "verdict": "correct",
+  "why": "\"Tienes 30 dias naturales ... para realizar una devolucion o un cambio\"."
+ },
+ "https://scalperscompany.com/|¿A partir de qué importe de pedido el envío es gratis?|40€": {
+  "verdict": "correct",
+  "why": "\"Si tu pedido no supera los 40 EUR, los gastos de envio ascienden a 3,95 EUR\": above 40 EUR shipping is free."
+ },
+ "https://scalperscompany.com/|¿Cuántos días tengo para devolver un artículo?|Tienes 30 días naturales desde la recepción de tu pedido para realizar una devolución o un cambio": {
+  "verdict": "correct",
+  "why": "\"Tienes 30 dias naturales desde la recepcion de tu pedido para realizar una devolucion\"."
+ },
+ "https://seaya.vc/|Do they invest at pre-seed?|Series A and B": {
+  "verdict": "correct",
+  "why": "Implicit no: the fund \"will continue to focus on leading Series A and B rounds\", not pre-seed."
+ },
+ "https://seaya.vc/|How do you send them a pitch?|dealflow.website@seaya.vc": {
+  "verdict": "correct",
+  "why": "The Contact page has a \"Pitch\" heading with dealflow.website@seaya.vc under it."
+ },
+ "https://slush.org/|How much is a general ticket?|395€*": {
+  "verdict": "wrong",
+  "why": "EUR 395 is the startup ticket (\"Tickets to Slush 2026 startup 395 EUR\"), not the general ticket."
+ },
+ "https://slush.org/|In which city is it held?|Helsinki": {
+  "verdict": "correct",
+  "why": "\"Helsinki is the home of Slush since 2008\"."
+ },
+ "https://slush.org/|What are the dates of the next edition?|Nov 18–19, Helsinki": {
+  "verdict": "correct",
+  "why": "\"Slush 2026 Nov 18-19, Helsinki\": the next edition."
+ },
+ "https://talentgarden.com/en/|Is it open 24/7?|24/7 access in all TAGs": {
+  "verdict": "correct",
+  "why": "\"24/7 access in all TAGs\" (TAG = Talent Garden campus) on the front page."
+ },
+ "https://utopicus.es/|Can you buy a day pass?|10 pases de día": {
+  "verdict": "correct",
+  "why": "\"Bono 10 pases de dia Working Pass\": a pack of 10 day passes is sold."
+ },
+ "https://utopicus.es/|Can you buy a day pass?|Bono 10 pases de día Working Pass a utilizar en 3 meses": {
+  "verdict": "correct",
+  "why": "\"Bono 10 pases de dia Working Pass\": a pack of 10 day passes is sold."
+ },
+ "https://utopicus.es/|Is it open 24/7?|Con tu Utopicus Passport puedes moverte y trabajar desde las ubicaciones que tienen disponible la modalidad de Working Pass, en Madrid y Barcelona, de lunes a viernes, de 9h a 18h": {
+  "verdict": "wrong",
+  "why": "The quote gives the Working Pass hours as 9h to 18h, Monday to Friday, which contradicts 24/7."
+ },
+ "https://utopicus.es/|What is the monthly price of a flexible (hot) desk?|259€/mes": {
+  "verdict": "correct",
+  "why": "The Utopicus Passport, its flexible workstation, is listed at 259 EUR/mes (\"Comfortable workstation 24/7 access\")."
+ },
+ "https://vivatech.com/|In which city is it held?|Paris": {
+  "verdict": "correct",
+  "why": "\"VivaTech, the Paris tech conference\"."
+ },
+ "https://vivatech.com/|What are the dates of the next edition?|Du 17 au 20 juin": {
+  "verdict": "wrong",
+  "why": "\"Du 17 au 20 juin\" is the 2026 edition (its 10th year), already past: not the next edition."
+ },
+ "https://websummit.com/|How much is a general ticket?|€809 Excl. sales tax": {
+  "verdict": "correct",
+  "why": "The General attendee ticket is shown at EUR 1,595 / 995 / 809 excl. sales tax; 809 is one of its prices (the lowest shown, the current one is not dated)."
+ },
+ "https://websummit.com/|In which city is it held?|Lisbon": {
+  "verdict": "correct",
+  "why": "\"Lisbon - November 9-12, 2026\"."
+ },
+ "https://websummit.com/|What are the dates of the next edition?|9-12, 2026": {
+  "verdict": "correct",
+  "why": "\"Lisbon - November 9-12, 2026\": the next edition."
+ },
+ "https://www.4yfn.com/|In which city is it held?|Barcelona": {
+  "verdict": "correct",
+  "why": "The page says 4YFN is held in Barcelona (\"4YFN26 Barcelona ... Fira de Barcelona\")."
+ },
+ "https://www.4yfn.com/|What are the dates of the next edition?|1- 4 March 2027": {
+  "verdict": "correct",
+  "why": "\"Taking place in Barcelona from 1- 4 March 2027\"."
+ },
+ "https://www.acelerapyme.gob.es/|What is the maximum amount?|40 millones de euros": {
+  "verdict": "wrong",
+  "why": "EUR 40 million is the budget of an AI initiative, not a maximum amount per applicant."
+ },
+ "https://www.acelerapyme.gob.es/|When is the application deadline?|11 de septiembre de 2026 a las 11:00 horas": {
+  "verdict": "correct",
+  "why": "\"El plazo de inscripcion finaliza el 11 de septiembre de 2026 a las 11:00 horas\"."
+ },
+ "https://www.enisa.es/|What is the maximum amount?|9.964": {
+  "verdict": "wrong",
+  "why": "\"9.964 prestamos desembolsados\" is a count of loans disbursed, not a maximum amount."
+ },
+ "https://www.enisa.es/|When is the application deadline?|22 de enero": {
+  "verdict": "correct",
+  "why": "A call for companies founded from 2023 closes \"el 22 de enero de 2027\": a deadline (for that call)."
+ },
+ "https://www.enisa.es/|When is the application deadline?|Las empresas de base tecnológica e innovadora constituidas a partir de 2023 podrán presentar sus candidaturas hasta el 22 de enero de 2027": {
+  "verdict": "correct",
+  "why": "The call for companies founded from 2023 closes 22 January 2027 (the same call as before)."
+ },
+ "https://www.hawkersco.com/|From what order amount is shipping free?|49 €": {
+  "verdict": "correct",
+  "why": "\"El envio estandar es gratuito para compras superiores a 49 EUR\"."
+ },
+ "https://www.hawkersco.com/|How many days do you have to return an item?|15 días naturales": {
+  "verdict": "correct",
+  "why": "\"Dispones de 15 dias naturales ... para devolver\"."
+ },
+ "https://www.hawkersco.com/|¿A partir de qué importe de pedido el envío es gratis?|49 €": {
+  "verdict": "correct",
+  "why": "\"El envio estandar es gratuito para compras superiores a 49 EUR\"."
+ },
+ "https://www.hawkersco.com/|¿Cuántos días tengo para devolver un artículo?|15 días naturales": {
+  "verdict": "correct",
+  "why": "\"Dispones de 15 dias naturales ... para devolver\"."
+ },
+ "https://www.ie.edu/|How long does it last?|TWO-WEEK MODULE OPTIONS": {
+  "verdict": "wrong",
+  "why": "\"TWO-WEEK MODULE OPTIONS\" is a menu label; the duration of the MBA is not given."
+ },
+ "https://www.ie.edu/|Is there an online version?|EVENT FORMAT Online events": {
+  "verdict": "wrong",
+  "why": "\"EVENT FORMAT Online events\" is an event-format label, not an online MBA."
+ },
+ "https://www.ie.edu/|Is there an online version?|Liquid Learning is the culmination of our educational vision, transcending any single platform or approach to produce a holistic, streamlined academic experience. Developed over 20 years, it blurs the lines between online and in-person learning, resulting in a flexible, highly interactive education—regardless of location or personal circumstances": {
+  "verdict": "wrong",
+  "why": "\"Liquid Learning ... blurs the lines between online and in-person\" is a blended-learning slogan, not an online version of the MBA."
+ },
+ "https://www.ie.edu/|Is there an online version?|WORLDWIDE - oNLINE mba": {
+  "verdict": "correct",
+  "why": "The ranking badge \"WORLDWIDE - ONLINE MBA\" (Financial Times): the school has an online MBA."
+ },
+ "https://www.ie.edu/|Is there an online version?|You can apply to our undergraduate and postgraduate programs online via the program page you are interested in": {
+  "verdict": "wrong",
+  "why": "An FAQ on how to apply online; not a statement that an online version exists."
+ },
+ "https://www.iese.edu/|How long does it last?|18 months": {
+  "verdict": "correct",
+  "why": "\"The content of the EMBA program takes place over 18 months\": the EMBA's length (not the full-time MBA's)."
+ },
+ "https://www.iese.edu/|How long does it last?|2026-28": {
+  "verdict": "wrong",
+  "why": "\"The Roadmap 2026-28\" is the institution's strategy period, not the MBA's length."
+ },
+ "https://www.iese.edu/|Is there an online version?|Online": {
+  "verdict": "wrong",
+  "why": "\"Online\" is a category label among Focused Programs, not a statement about an online MBA or bootcamp."
+ },
+ "https://www.iese.edu/|What is the price of the flagship MBA or bootcamp?|€117,000": {
+  "verdict": "correct",
+  "why": "Table: \"September 2027 intake ... Total EUR 117,000\" for the MBA (fees over the two years)."
+ },
+ "https://www.ironhack.com/|How long does it last?|9:00 a 17:00": {
+  "verdict": "wrong",
+  "why": "\"9:00 a 17:00\" is the daily schedule of live bootcamps, not their length."
+ },
+ "https://www.ironhack.com/|How long does it last?|bis zu 1 Jahr nach Abschluss (oder bis du einen Job hast)": {
+  "verdict": "wrong",
+  "why": "\"Dauer: bis zu 1 Jahr nach Abschluss\" is career support in the German FAQ, not the bootcamp's length."
+ },
+ "https://www.ironhack.com/|Is there an online version?|Ironhack Remoto": {
+  "verdict": "correct",
+  "why": "\"Ironhack Remoto\" is its remote (online) bootcamp format."
+ },
+ "https://www.jme.vc/|How do you send them a pitch?|jose@jme.vc o en la dirección": {
+  "verdict": "wrong",
+  "why": "A GDPR paragraph: jose@jme.vc is the contact for data-protection rights, not the pitch address."
+ },
+ "https://www.jme.vc/|What is their typical first ticket?|€100k to €3m": {
+  "verdict": "correct",
+  "why": "\"We invest from EUR 100k to EUR 3m\"."
+ },
+ "https://www.kfund.vc/|Do they invest at pre-seed?|This enables us to invest in companies from 100k€ to 10M€ and in seed, pre-seed and Series A+": {
+  "verdict": "correct",
+  "why": "\"invest in companies from 100k EUR to 10M EUR and in seed, pre-seed and Series A+\"."
+ },
+ "https://www.kfund.vc/|How do you send them a pitch?|We have already launched the first call and you can join filling out this form. It will be open until September 15th 2020. If you have any questions, do not hesitate to send us an email at kfounders@kfund.vc and if you know someone who might be interested in this, please share the link and help us spread the word": {
+  "verdict": "wrong",
+  "why": "A 2020 K Founders call (\"open until September 15th 2020\"): outdated, and not how to pitch the fund."
+ },
+ "https://www.kfund.vc/|What is their typical first ticket?|€100k": {
+  "verdict": "correct",
+  "why": "The K Founders first check is EUR 100k, the same as the fund's smallest ticket (100k to 10M); the quote is the program's, close to the fund's."
+ },
+ "https://www.kiboventures.com/|What is their typical first ticket?|€2m - €6m": {
+  "verdict": "correct",
+  "why": "\"Initial investment of EUR 2m - EUR 6m\" is the first ticket."
+ },
+ "https://www.lexington.es/|Can you buy a day pass?|espacios compartidos (escritorios en oficinas compartidas o pases diarios a zonas de trabajo común) y salas que se pueden alquilar para reuniones": {
+  "verdict": "correct",
+  "why": "Lexington sells \"pases diarios a zonas de trabajo comun\" (daily passes to shared areas)."
+ },
+ "https://www.lexington.es/|Is it open 24/7?|24/7": {
+  "verdict": "correct",
+  "why": "\"podreis acceder a la oficina alquilada de manera ilimitada, 24/7\" (members' access, 24/7)."
+ },
+ "https://www.lexington.es/|Is it open 24/7?|Acceso y seguridad 24/7, trabaja sin horarios": {
+  "verdict": "correct",
+  "why": "\"Acceso y seguridad 24/7, trabaja sin horarios\" (24/7 access and security)."
+ },
+ "https://www.nauta.vc/|How do you send them a pitch?|Fale conosco": {
+  "verdict": "wrong",
+  "why": "\"Fale conosco\" is a menu label (contact us); no pitch instructions."
+ },
+ "https://www.samaipata.vc/|How do you send them a pitch?|By answering the questions and sending us your deck": {
+  "verdict": "correct",
+  "why": "The founders' typeform: \"By answering the questions and sending us your deck\" is the way to pitch."
+ },
+ "https://www.samaipata.vc/|How do you send them a pitch?|Submit Deck": {
+  "verdict": "correct",
+  "why": "Under \"Are you a founder?\" the page offers \"Submit Deck\", the way to send a pitch."
+ },
+ "https://www.southsummit.io/|How much is a general ticket?|299€": {
+  "verdict": "wrong",
+  "why": "299 EUR is the Startup Pass in the FAQ, not the general ticket."
+ },
+ "https://www.southsummit.io/|How much is a general ticket?|R$ 499": {
+  "verdict": "wrong",
+  "why": "\"R$ 499\" is the ticket of the Brazil event, in reais, not the general ticket of the Madrid event."
+ },
+ "https://www.southsummit.io/|In which city is it held?|MADRID": {
+  "verdict": "wrong",
+  "why": "The only text is the menu label \"EVENTS MADRID 2026\"; the location is not stated (the later answer quotes \"La Nave, Madrid\")."
+ },
+ "https://www.southsummit.io/|In which city is it held?|Madrid": {
+  "verdict": "correct",
+  "why": "\"WHERE: La Nave (C/ Cifuentes, 5), Madrid\": the event is held in Madrid."
+ },
+ "https://www.southsummit.io/|What are the dates of the next edition?|2027": {
+  "verdict": "wrong",
+  "why": "\"2027\" comes from the menu label \"BRAZIL 2027\"; the page gives no dates for the next edition."
+ },
+ "https://www.southsummit.io/|What are the dates of the next edition?|De 3 a 5 de junho de 2026": {
+  "verdict": "wrong",
+  "why": "The 3-5 June 2026 dates are the Madrid 2026 edition, already past: not the next edition."
+ },
+ "linear.app|What is the monthly price of the cheapest paid plan?|$10 per user/month": {
+  "verdict": "correct",
+  "why": "\"$10 per user/month, billed yearly\": the cheapest paid plan."
+ },
+ "notion.com|What is the monthly price of the cheapest paid plan?|€9.50": {
+  "verdict": "correct",
+  "why": "\"Plus: EUR 9.50 per seat/month\": Plus is the cheapest paid plan."
+ },
+ "posthog.com|Can customers choose where their data is stored?|Control where your data is physically stored for GDPR compliance": {
+  "verdict": "correct",
+  "why": "The feature table: \"Data storage location: Control where your data is physically stored for GDPR compliance\"."
+ },
+ "posthog.com|Do they have a SOC 2 Type II report?|PostHog is certified as SOC 2 Type 2 compliant, following an external audit": {
+  "verdict": "correct",
+  "why": "\"PostHog is certified as SOC 2 Type 2 compliant\"."
+ },
+ "resend.com|Can customers choose where their data is stored?|All of our customers' data is still stored in the United States": {
+  "verdict": "correct",
+  "why": "\"All of our customers' data is still stored in the United States\": the answer is no, no region choice."
+ },
+ "resend.com|Do they have a SOC 2 Type II report?|Resend is SOC 2 Type II compliant": {
+  "verdict": "correct",
+  "why": "\"Resend is SOC 2 Type II compliant.\""
+ },
+ "sentry.io|Can customers choose where their data is stored?|customers have the option to store and process event data exclusively in the European Union": {
+  "verdict": "correct",
+  "why": "\"customers have the option to store and process event data exclusively in the European Union\" (EU Data Residency)."
+ },
+ "sentry.io|Do they have a SOC 2 Type II report?|SOC2 Type II": {
+  "verdict": "correct",
+  "why": "The attestations list includes \"SOC2 Type II\"."
+ },
+ "stripe.com|What is the primary rate limit for authenticated requests?|100 requests per second": {
+  "verdict": "correct",
+  "why": "The API rate-limit table: \"Global API rate limit, Live mode: 100 requests per second\"."
+ },
+ "supabase.com|Can customers choose where their data is stored?|Your database is hosted in the AWS region you select when you create your project. You choose the region—we don't select it for you": {
+  "verdict": "correct",
+  "why": "\"Your database is hosted in the AWS region you select when you create your project.\""
+ },
+ "supabase.com|Do they have a SOC 2 Type II report?|Update (2023-05-22): Supabase is now SOC2 Type 2 compliant": {
+  "verdict": "correct",
+  "why": "\"Supabase is now SOC2 Type 2 compliant\"."
+ },
+ "supabase.com|What is the monthly price of the cheapest paid plan?|$25/month": {
+  "verdict": "correct",
+  "why": "\"Pro: from $25/month\": the cheapest paid plan."
+ },
+ "vercel.com|Can customers choose where their data is stored?|Previously, Hobby customers could only choose US East (iad1) regardless of where their data was hosted. Starting today, all plans can co-locate their Functions with their data for lower latency when server-rendering with hybrid frameworks like Next.js, SvelteKit, and more, or when using API Routes": {
+  "verdict": "wrong",
+  "why": "Function co-location with data for region choice of Functions; not a statement that customers choose where their data is stored."
+ },
+ "vercel.com|Do they have a SOC 2 Type II report?|Yes": {
+  "verdict": "correct",
+  "why": "\"Yes. Vercel holds a SOC 2 Type 2 attestation\"."
+ },
+ "vercel.com|What is the monthly price of the cheapest paid plan?|$20/mo": {
+  "verdict": "correct",
+  "why": "Table: \"Hobby $0/mo ... Pro $20/mo\": Pro is the cheapest paid plan."
+ }
+}
