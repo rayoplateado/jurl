@@ -24,10 +24,14 @@ mod timing;
 mod update;
 mod vision;
 
-use std::{io::stdout, process::ExitCode, time::Duration};
+use std::{
+    io::{stderr, stdout},
+    process::ExitCode,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use futures::future::join_all;
 use reqwest::Client;
 
@@ -37,7 +41,7 @@ use crate::{
     extract::{Extracted, Kind},
     judge::Ctx,
     output::{Rendered, exit_code, stdout_for, write_out},
-    setup::Access,
+    setup::{Access, NoArgs},
     timing::Timer,
 };
 
@@ -50,6 +54,13 @@ const APP_SHELL_TEXT: usize = 300;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // `jurl` with no arguments at all is the setup, or the help. Anything else goes to clap, as it always has.
+    if std::env::args_os().nth(1).is_none() {
+        return match no_args().await {
+            Ok(code) => code,
+            Err(e) => failed(&e),
+        };
+    }
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(e) => {
@@ -65,23 +76,52 @@ async fn main() -> ExitCode {
     };
     match run(args).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("jurl: {e:#}");
-            ExitCode::from(exit_code(&e))
+        Err(e) => failed(&e),
+    }
+}
+
+/// Says what went wrong, and returns the exit code for it.
+fn failed(e: &anyhow::Error) -> ExitCode {
+    eprintln!("jurl: {e:#}");
+    ExitCode::from(exit_code(e))
+}
+
+/// `jurl` with no arguments. With nothing set up and a terminal to ask in: a welcome, the setup `jurl init` does, and
+/// what to try next. Otherwise the short help as a usage error (exit 2), and a line about `jurl status` if anything is
+/// set up.
+async fn no_args() -> Result<ExitCode> {
+    let mut cfg = Config::load();
+    let client = http_client()?;
+    match setup::no_args_action(setup::is_set_up(&cfg)?, setup::interactive()) {
+        NoArgs::Setup => {
+            setup::first_run(&mut cfg, &client).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        NoArgs::Help { status_hint } => {
+            Args::command().write_help(&mut stderr())?;
+            if status_hint {
+                eprintln!("\nRun `jurl status` to see which account reads go to.");
+            }
+            Ok(ExitCode::from(2))
         }
     }
 }
 
-async fn run(mut args: Args) -> Result<()> {
-    let mut cfg = Config::load();
-    let client = Client::builder()
+/// The HTTP client every request goes through: jurl's user agent, and the time limits.
+fn http_client() -> Result<Client> {
+    Ok(Client::builder()
         .user_agent(concat!(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/",
             env!("CARGO_PKG_VERSION")
         ))
         .timeout(HTTP_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .build()?;
+        .build()?)
+}
+
+async fn run(mut args: Args) -> Result<()> {
+    let mut cfg = Config::load();
+    let client = http_client()?;
     if args.url == "update" {
         return update::run().await;
     }

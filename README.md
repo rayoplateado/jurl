@@ -56,7 +56,7 @@ curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-in
 
 <sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source: `cargo install --git https://github.com/rayoplateado/jurl`</sub>
 
-Then run it. The first time, jurl asks how you want to read pages: with your own [TypeSafe API key](https://console.typesafe.ai), which it checks and saves, or with a [jurl cloud](#jurl-cloud) account. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
+Then run `jurl`. With nothing set up, it asks how you want to read pages: with your own [TypeSafe API key](https://console.typesafe.ai), which it checks and saves, or with a [jurl cloud](#jurl-cloud) account. Reading a page first asks the same question. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
 
 To use `--vision` and `--find`, run `jurl init` and add a Cloudflare Workers AI token. To get a newer jurl, run `jurl update`: it updates the same way you installed it (Homebrew, the installer or cargo).
 
@@ -341,7 +341,8 @@ To sign in to jurl cloud, open https://cloud.jurl.dev/device and enter this code
     ABCD-EFGH
 
 Waiting for it to be entered (it expires in 15 minutes). Ctrl-C cancels.
-Signed in to jurl cloud as Acme, with the key "laptop". Saved to ~/.config/jurl/env
+Saved the key "laptop" to ~/.config/jurl/env
+Signed in as ray@acme.com to Acme. Console: https://cloud.jurl.dev
 ```
 
 It opens that page in your browser when it can, and the sign-in finishes once the code is entered there.

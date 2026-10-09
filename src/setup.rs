@@ -26,8 +26,20 @@ pub(crate) enum Access {
     Own(String),
 }
 
-fn interactive() -> bool {
+/// Whether a terminal is there to ask in: stdin to answer on, stderr to ask on.
+pub(crate) fn interactive() -> bool {
     stdin().is_terminal() && stderr().is_terminal()
+}
+
+/// Whether own keys are set up: the TypeSafe key (in the environment, the saved file or `./.env`), or a server named by
+/// `JURL_JEV_URL`, which takes none.
+fn own_keys_set(cfg: &Config) -> bool {
+    cfg.get("TYPESAFE_API_KEY").is_some() || decide::custom_jev_url().is_some()
+}
+
+/// Whether anything is set up to read pages with: jurl cloud in use, or own keys.
+pub(crate) fn is_set_up(cfg: &Config) -> Result<bool> {
+    Ok(cloud::in_use(cfg)?.is_some() || own_keys_set(cfg))
 }
 
 /// How this run reads pages: through jurl cloud when it's in use (see `cloud::in_use`), else with the own keys. With
@@ -36,16 +48,36 @@ pub(crate) async fn access(cfg: &mut Config, client: &Client) -> Result<Access> 
     if let Some(cloud) = cloud::in_use(cfg)? {
         return Ok(Access::Cloud(cloud));
     }
-    if !interactive() || cfg.get("TYPESAFE_API_KEY").is_some() || decide::custom_jev_url().is_some() {
+    if !interactive() || own_keys_set(cfg) {
         return saved_key(cfg).map(Access::Own);
     }
     eprintln!(
-        "jurl reads pages with Jev, TypeSafe's decision model. It needs an API key, once, or a jurl cloud account."
+        "jurl isn't set up yet. It reads pages with an API key (Jev, TypeSafe's decision model), or with jurl cloud."
     );
     if ask_cloud()? {
         return Ok(Access::Cloud(account::sign_in(cfg, client).await?));
     }
     ask_typesafe(cfg, client).await.map(Access::Own)
+}
+
+/// What `jurl` with no arguments does: the first-run setup when nothing is set up and there's a terminal to ask in,
+/// otherwise the help (with a line about `jurl status` when something is set up).
+#[derive(Debug, PartialEq)]
+pub(crate) enum NoArgs {
+    Setup,
+    Help { status_hint: bool },
+}
+
+pub(crate) fn no_args_action(set_up: bool, interactive: bool) -> NoArgs {
+    if !set_up && interactive { NoArgs::Setup } else { NoArgs::Help { status_hint: set_up } }
+}
+
+/// `jurl` with no arguments and nothing set up: a welcome, the setup `jurl init` does, and what to try next.
+pub(crate) async fn first_run(cfg: &mut Config, client: &Client) -> Result<()> {
+    eprintln!("Welcome to jurl. It isn't set up yet, so let's do that once.");
+    init(cfg, client).await?;
+    eprintln!("\nTry: jurl -q \"what does it cost?\" <a page's URL>");
+    Ok(())
 }
 
 /// The access for a run that never asks, such as `jurl mcp`: jurl cloud when it's in use, else the saved own keys.
@@ -82,8 +114,8 @@ pub(crate) async fn init(cfg: &mut Config, client: &Client) -> Result<()> {
     }
     eprintln!("How should jurl read pages?");
     if ask_cloud()? {
+        // The sign-in's last line says where the account is, so nothing follows it.
         account::sign_in(cfg, client).await?;
-        eprintln!("Reads go to jurl cloud now. `jurl logout` switches back to your own keys.");
         return Ok(());
     }
     if cfg.saved("JURL_CLOUD_KEY").is_some() {
@@ -217,5 +249,14 @@ mod tests {
         assert_eq!(cloud_choice("1"), Some(false));
         assert_eq!(cloud_choice("2"), Some(true));
         assert_eq!(cloud_choice("3"), None);
+    }
+
+    #[test]
+    fn no_arguments_sets_up_only_when_nothing_is_set_up_and_a_terminal_can_ask() {
+        assert_eq!(no_args_action(false, true), NoArgs::Setup);
+        // Not set up and no terminal (a script): the help, and no question.
+        assert_eq!(no_args_action(false, false), NoArgs::Help { status_hint: false });
+        assert_eq!(no_args_action(true, true), NoArgs::Help { status_hint: true });
+        assert_eq!(no_args_action(true, false), NoArgs::Help { status_hint: true });
     }
 }

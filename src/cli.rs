@@ -91,6 +91,16 @@ mod tests {
     }
 
     #[test]
+    fn a_flag_without_a_url_is_still_clap_s_usage_error() {
+        // Only `jurl` alone starts the setup or the help (main.rs). A flag without a URL is still an error.
+        for argv in [vec!["jurl"], vec!["jurl", "-q", "why?"], vec!["jurl", "--json"]] {
+            let err = Args::try_parse_from(argv.clone()).err();
+            assert_eq!(err.map(|e| e.kind()), Some(clap::error::ErrorKind::MissingRequiredArgument), "{argv:?}");
+        }
+        assert!(Args::try_parse_from(["jurl", "-q", "why?", "x.com"]).is_ok());
+    }
+
+    #[test]
     fn each_mode_has_its_default_bar_and_threshold_overrides_both() {
         let plain = Args::parse_from(["jurl", "x.com"]);
         assert_eq!(plain.threshold_for(false), 0.5);

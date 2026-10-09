@@ -41,13 +41,16 @@ struct DeviceCode {
     interval: Option<u64>,
 }
 
-/// The key jurl cloud approved for this computer, and what it is called there.
+/// The key jurl cloud approved for this computer, and what it is called there. The account's email and the console's
+/// address come along when the reply has them.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Grant {
     access_token: String,
     organization_name: Option<String>,
     key_name: Option<String>,
+    email: Option<String>,
+    console_url: Option<String>,
 }
 
 /// `jurl login`: signs this computer in to jurl cloud. It works without a terminal too, since the code is printed either way.
@@ -73,12 +76,29 @@ pub(crate) async fn sign_in(cfg: &mut Config, client: &Client) -> Result<Cloud> 
         cfg.save("JURL_CLOUD_URL", &base)?;
     }
     let path = cfg.save("JURL_CLOUD_KEY", &grant.access_token)?;
-    let who = match (&grant.organization_name, &grant.key_name) {
-        (Some(org), Some(name)) => format!(" as {org}, with the key \"{name}\""),
-        _ => String::new(),
-    };
-    eprintln!("Signed in to jurl cloud{who}. Saved to {}", path.display());
+    match &grant.key_name {
+        Some(name) => eprintln!("Saved the key \"{name}\" to {}", path.display()),
+        None => eprintln!("Saved to {}", path.display()),
+    }
+    eprintln!("{}", signed_in(&grant, &console(&grant, &base)));
     Ok(Cloud { base, key: grant.access_token })
+}
+
+/// The address a sign-in names as the console: the one the reply gives, when it's an address this jurl may send a key
+/// to, else the one this jurl reads with.
+fn console(grant: &Grant, base: &str) -> String {
+    grant.console_url.as_deref().and_then(|url| cloud::checked_base(url).ok()).unwrap_or_else(|| base.to_string())
+}
+
+/// The line a sign-in ends with: whose account it is, and where to see it.
+fn signed_in(grant: &Grant, console: &str) -> String {
+    let whose = match (&grant.email, &grant.organization_name) {
+        (Some(email), Some(org)) => format!("as {email} to {org}"),
+        (Some(email), None) => format!("as {email}"),
+        (None, Some(org)) => format!("to {org}"),
+        (None, None) => "to jurl cloud".to_string(),
+    };
+    format!("Signed in {whose}. Console: {console}")
 }
 
 /// Asks jurl cloud for a code to enter in the browser.
@@ -293,8 +313,53 @@ mod tests {
         assert!(
             matches!(granted, Answer::Granted(g) if g.access_token == "jurl_abc" && g.key_name.as_deref() == Some("laptop"))
         );
+        let with_account = answer(
+            StatusCode::OK,
+            r#"{"accessToken":"jurl_abc","email":"ray@acme.com","consoleUrl":"https://console.acme.test"}"#,
+            wait,
+        );
+        assert!(matches!(with_account, Answer::Granted(g) if g.email.as_deref() == Some("ray@acme.com")
+                && g.console_url.as_deref() == Some("https://console.acme.test")));
         let other = answer(StatusCode::INTERNAL_SERVER_ERROR, "oops", wait);
         assert!(matches!(&other, Answer::Ended(m) if m.contains("HTTP 500 Internal Server Error")), "{other:?}");
+    }
+
+    fn sample_grant(email: Option<&str>, org: Option<&str>, console: Option<&str>) -> Grant {
+        Grant {
+            access_token: "jurl_abc".into(),
+            organization_name: org.map(Into::into),
+            key_name: Some("laptop".into()),
+            email: email.map(Into::into),
+            console_url: console.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn a_sign_in_ends_with_whose_account_it_is_and_where_to_see_it() {
+        let base = "https://cloud.jurl.dev";
+        let line = |email, org| signed_in(&sample_grant(email, org, None), base);
+        assert_eq!(
+            line(Some("ray@acme.com"), Some("Acme")),
+            "Signed in as ray@acme.com to Acme. Console: https://cloud.jurl.dev"
+        );
+        assert_eq!(line(None, Some("Acme")), "Signed in to Acme. Console: https://cloud.jurl.dev");
+        assert_eq!(line(Some("ray@acme.com"), None), "Signed in as ray@acme.com. Console: https://cloud.jurl.dev");
+        assert_eq!(
+            signed_in(&sample_grant(None, None, None), "http://127.0.0.1:3211"),
+            "Signed in to jurl cloud. Console: http://127.0.0.1:3211"
+        );
+    }
+
+    #[test]
+    fn the_console_is_the_replys_address_when_it_is_safe_else_where_jurl_reads() {
+        let base = "http://127.0.0.1:3211";
+        assert_eq!(console(&sample_grant(None, None, None), base), base);
+        assert_eq!(
+            console(&sample_grant(None, None, Some("https://console.acme.test/")), base),
+            "https://console.acme.test"
+        );
+        // A plain http address off this computer is never a console to send a key to.
+        assert_eq!(console(&sample_grant(None, None, Some("http://cloud.example.com")), base), base);
     }
 
     #[tokio::test]

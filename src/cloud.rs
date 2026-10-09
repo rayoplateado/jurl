@@ -66,7 +66,7 @@ pub(crate) fn base(cfg: &Config) -> Result<String> {
 }
 
 /// The address without a trailing slash, if a key may be sent to it: https, or plain http to this computer.
-fn checked_base(url: &str) -> Result<String> {
+pub(crate) fn checked_base(url: &str) -> Result<String> {
     let base = url.trim().trim_end_matches('/').to_string();
     if Url::parse(&base).is_err() {
         bail!("JURL_CLOUD_URL is not a URL: {base}");
