@@ -332,7 +332,7 @@ Best in each row in bold. WebFetch hands the agent the fewest tokens because it 
 
 ## jurl cloud
 
-Don't want to manage API keys? `jurl login` signs this computer in to jurl cloud, and jurl's servers do the reading. The flags and the exit codes stay the same, and the text matches a local run's with two differences. The page's kind line (`· docs (0.84)`) isn't sent by the server, so it isn't printed. And a `--precise` answer's block prints as plain text, since the server doesn't send that block's kind yet.
+Don't want to manage API keys? `jurl login` signs this computer in to jurl cloud, and jurl's servers do the reading. The flags and the exit codes stay the same, and the text matches a local run's except for the page's kind line (`· docs (0.84)`), which the server doesn't send, so it isn't printed. A `--precise` answer's block prints with the kind, heading level and code language the server sends, as a local run prints it, and `--json` carries them too. A block whose kind the server doesn't send prints as plain text.
 
 ```console
 $ jurl login

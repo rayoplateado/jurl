@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::{Client, RequestBuilder, StatusCode};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -245,9 +245,11 @@ struct ReadReply {
     answer: Option<String>,
     closest: Option<String>,
     quote: Option<String>,
-    // The quoted block's index on the page. Its kind, level and language are read from a precise answer when the server
-    // sends them. It doesn't yet, so the quote prints as text (see the README).
+    // The quoted block's index on the page, and its kind, level and language when the server sends them: a precise
+    // answer prints its block with them, as a local run does. A page's kind is an object, `{choice, confidence}`, in
+    // jurl's own blocks JSON; a reply that carries one reads as no kind.
     block: Option<usize>,
+    #[serde(default, deserialize_with = "string_kind")]
     kind: Option<String>,
     level: Option<u8>,
     lang: Option<String>,
@@ -278,6 +280,11 @@ fn kind_of(name: &str) -> Option<Kind> {
         "table" => Some(Kind::Table),
         _ => None,
     }
+}
+
+/// A kind as the server sends it: a string. Any other shape reads as no kind, so it can't fail the whole reply.
+fn string_kind<'de, D: Deserializer<'de>>(de: D) -> Result<Option<String>, D::Error> {
+    Ok(Value::deserialize(de)?.as_str().map(String::from))
 }
 
 #[derive(Deserialize)]
@@ -315,6 +322,17 @@ fn precise_answer(args: &Args, r: &ReadReply, path: Option<&Value>) -> Result<Re
             "block": r.block,
             "link": r.link,
         });
+        // The quoted block's kind, level and language, as a local run's JSON has them: each only when the block has it.
+        // A kind this jurl doesn't know is no kind, so it has no key.
+        if let Some(kind) = r.kind.as_deref().and_then(kind_of) {
+            doc["kind"] = json!(kind);
+        }
+        if let Some(level) = r.level {
+            doc["level"] = json!(level);
+        }
+        if let Some(lang) = &r.lang {
+            doc["lang"] = json!(lang);
+        }
         if let Some(path) = path {
             doc["path"] = path.clone();
         }
@@ -605,11 +623,62 @@ mod tests {
         let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
         assert_eq!(r.text, "cargo install jurl\n\n```sh\ncargo install jurl\n```\n");
 
-        // Without a kind, as the server sends a precise answer today, the quote is text, and no link is no line.
+        // Without a kind (the server doesn't know this block's), the quote is text, and no link is no line.
         let plain = r#"{"url":"https://x.com/","answer":"5,000 requests per hour","quote":"Authenticated requests get 5,000 requests per hour.","block":0,"link":null,"pages":1,"path":["https://x.com/"]}"#;
         let (base, _) = mock::serve(vec![(200, "", plain)]);
         let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
         assert_eq!(r.text, "5,000 requests per hour\n\nAuthenticated requests get 5,000 requests per hour.\n");
+    }
+
+    #[tokio::test]
+    async fn a_precise_answers_json_has_its_block_kind_level_and_lang_as_a_local_run_does() {
+        // The kind when the server sends one this jurl knows; the level and the language only when the block has them.
+        let a = args(&["jurl", "-p", "-q", "plan?", "x.com"]);
+        let heading = r#"{"url":"https://x.com/","title":"Pricing","answer":"Pro","quote":"Pro","block":4,"kind":"heading","level":3,"lang":null,"link":null,"pages":1,"path":["https://x.com/"]}"#;
+        let (base, _) = mock::serve(vec![(200, "", heading)]);
+        let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
+        assert_eq!((r.json["kind"].as_str(), r.json["level"].as_u64()), (Some("heading"), Some(3)));
+        assert!(r.json.get("lang").is_none(), "no language, no key");
+
+        let code = r#"{"url":"https://x.com/","answer":"cargo install jurl","quote":"cargo install jurl","block":2,"kind":"code","level":null,"lang":"sh","link":null,"pages":1,"path":["https://x.com/"]}"#;
+        let (base, _) = mock::serve(vec![(200, "", code)]);
+        let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
+        assert_eq!((r.json["kind"].as_str(), r.json["lang"].as_str()), (Some("code"), Some("sh")));
+        assert!(r.json.get("level").is_none(), "no level, no key");
+
+        // A kind this jurl doesn't know has no key either, and the quote prints as text.
+        let unknown = r#"{"url":"https://x.com/","answer":"5,000 requests per hour","quote":"Authenticated requests get 5,000 requests per hour.","block":0,"kind":"video","link":null,"pages":1,"path":["https://x.com/"]}"#;
+        let (base, _) = mock::serve(vec![(200, "", unknown)]);
+        let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
+        assert!(r.json.get("kind").is_none(), "an unknown kind is no kind");
+        assert_eq!(r.text, "5,000 requests per hour\n\nAuthenticated requests get 5,000 requests per hour.\n");
+
+        // A miss carries the closest candidate's block the same way.
+        let miss = r#"{"url":"https://x.com/","answer":null,"closest":"$8 a month","quote":"$8 a month","block":3,"kind":"para","p":0.31,"link":null,"pages":1,"path":["https://x.com/"]}"#;
+        let (base, _) = mock::serve(vec![(200, "", miss)]);
+        let a = args(&["jurl", "--json", "-p", "-q", "price?", "x.com"]);
+        let err = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap_err();
+        let out = stdout_for(&a, &Err(err), &decide::Usage::new()).unwrap().expect("JSON on a miss");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!((v["kind"].as_str(), v["block"].as_u64()), (Some("para"), Some(3)));
+        assert!(v.get("level").is_none() && v.get("lang").is_none());
+    }
+
+    #[test]
+    fn a_reply_reads_its_kind_only_when_the_kind_is_a_string() {
+        // A precise reply's kind is a block's kind, a string.
+        let precise = r#"{"url":"https://x.com/","answer":"Pro","kind":"heading","level":3,"pages":1}"#;
+        assert_eq!(serde_json::from_str::<ReadReply>(precise).unwrap().kind.as_deref(), Some("heading"));
+
+        // jurl's own blocks JSON has the page's kind as an object. That is no block kind, and the reply still reads.
+        let page = r#"{"url":"https://x.com/","blocks":[{"text":"Run it.","p":0.8}],"kind":{"choice":"docs","confidence":0.84}}"#;
+        let r: ReadReply = serde_json::from_str(page).unwrap();
+        assert_eq!((r.kind, r.blocks.map(|b| b.len())), (None, Some(1)));
+
+        // null, and no kind at all, are no kind either.
+        let null: ReadReply = serde_json::from_str(r#"{"url":"https://x.com/","kind":null}"#).unwrap();
+        let absent: ReadReply = serde_json::from_str(r#"{"url":"https://x.com/"}"#).unwrap();
+        assert_eq!((null.kind, absent.kind), (None, None));
     }
 
     #[tokio::test]
