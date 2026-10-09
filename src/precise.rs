@@ -522,15 +522,18 @@ fn trim(text: &str, r: Range<usize>) -> Option<Range<usize>> {
 /// browser finds the right occurrence.
 pub(crate) fn link(url: &url::Url, text: &str, range: &Range<usize>) -> String {
     let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
-    // Context is up to three words next to the answer, as the browser shows them: markdown emphasis is
-    // dropped, and a word that is markup (a table's `|`, an HTML tag, a link) ends the context there.
+    // Context is up to three words next to the answer, as the browser shows them: markdown emphasis is dropped, and a
+    // word that is markup (a table's `|`, an HTML tag, a link) ends the context there. Punctuation is text too: a suffix
+    // has to begin right after the answer, so the "." in "Yes. Vercel" is where the suffix starts. Punctuation alone is
+    // no context, so a sentence ending its block gets none.
     let context = |words: &mut dyn Iterator<Item = &str>| {
-        words
+        let taken: Vec<String> = words
             .map(|w| w.trim_matches(['*', '_', '`']))
-            .take_while(|w| w.chars().any(char::is_alphanumeric) && !w.contains(['<', '[', ']', '|']))
+            .take_while(|w| !w.is_empty() && !w.contains(['<', '[', ']', '|']))
             .take(CONTEXT_WORDS)
             .map(String::from)
-            .collect::<Vec<_>>()
+            .collect();
+        if taken.iter().any(|w| w.chars().any(char::is_alphanumeric)) { taken } else { Vec::new() }
     };
     let mut before = context(&mut text[..range.start].split_whitespace().rev());
     before.reverse();
@@ -857,5 +860,19 @@ mod tests {
         let page = "<p><strong>Vercel has a SOC 2</strong> and <a href=\"/plans\">Enterprise</a> plan.</p>";
         let ex = crate::extract::html(page, &url);
         assert_eq!(ex.blocks[0].text, "Vercel has a SOC 2 and Enterprise plan.");
+    }
+
+    #[test]
+    fn a_short_answer_is_disambiguated_by_the_punctuation_that_follows_it() {
+        // "yes" recurs later in the block, and a directive matches the first place that fits: the suffix has to start
+        // at the "." right after "Yes", which is what makes this one "Yes".
+        let url = url::Url::parse("https://vercel.com/kb/guide/is-vercel-soc-2-compliant").unwrap();
+        let text = "Yes. Vercel holds a SOC 2 Type 2 attestation, and a yes tells you little.";
+        assert_eq!(
+            link(&url, text, &(0..3)),
+            "https://vercel.com/kb/guide/is-vercel-soc-2-compliant#:~:text=Yes,-.%20Vercel%20holds"
+        );
+        // A sentence that ends its block has nothing after it but punctuation, which is no context.
+        assert_eq!(link(&url, "Free.", &(0..4)), "https://vercel.com/kb/guide/is-vercel-soc-2-compliant#:~:text=Free");
     }
 }
