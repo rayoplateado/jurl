@@ -21,7 +21,7 @@ use crate::{
     cli::Args,
     config::Config,
     decide::is_api_error,
-    extract::{self, Extracted, Link},
+    extract::{self, Extracted, Kind, Link},
     fetch::Retry,
     judge::{Ctx, Item, is_block_page},
     links::{self, FieldScores},
@@ -90,10 +90,16 @@ impl Site {
         Ctx { owner: self.owner(), ..Ctx::new(args, client, api_key, url, ex) }
     }
 
-    fn contains(&self, u: &Url) -> bool {
+    /// Whether `u` is a web page a search may open, on any host: http or https, and not a file (an image, a PDF, an
+    /// archive). A page's links are candidates whatever their host, because the page gives them (see [`bare_links`]).
+    fn reachable(u: &Url) -> bool {
         let lower = u.path().to_lowercase();
-        matches!(u.scheme(), "http" | "https")
-            && !ASSETS.iter().any(|ext| lower.ends_with(ext))
+        matches!(u.scheme(), "http" | "https") && !ASSETS.iter().any(|ext| lower.ends_with(ext))
+    }
+
+    /// Whether `u` is on the site: [`Site::reachable`], and on the site's host or a subdomain of it.
+    fn contains(&self, u: &Url) -> bool {
+        Site::reachable(u)
             && u.host_str().is_some_and(|h| {
                 let h = h.trim_start_matches("www.");
                 h == self.root || h.ends_with(&format!(".{}", self.root))
@@ -290,28 +296,67 @@ async fn child_map(client: &Client, sitemap: Url, retry: Retry<'_>) -> Vec<Strin
     small_text(client, &sitemap, retry).await.map(|b| locs(&b)).unwrap_or_default()
 }
 
-/// The pages the site lists itself: `llms.txt` (written for exactly this) and `sitemap.xml`, shallowest first. A page
-/// listed in several languages keeps one copy (see [`without_language_copies`]).
-async fn site_map(client: &Client, start: &Url, site: &Site, retry: Retry<'_>) -> Vec<Link> {
+/// The pages one sitemap lists: its `<loc>`s, or for a sitemap index, the pages of its newest few sitemaps (see
+/// [`crate::sitemaps::index_children`]).
+async fn sitemap_pages(client: &Client, sitemap: &Url, retry: Retry<'_>) -> Vec<String> {
+    let Some(body) = small_text(client, sitemap, retry).await else { return Vec::new() };
+    if !body.contains("<sitemapindex") {
+        return locs(&body);
+    }
+    let children: Vec<Url> = crate::sitemaps::index_children(&body).iter().filter_map(|c| Url::parse(c).ok()).collect();
+    join_all(children.into_iter().map(|c| child_map(client, c, retry))).await.into_iter().flatten().collect()
+}
+
+/// The sitemaps robots.txt names that are read: [`crate::sitemaps::ROBOTS_SITEMAPS`] of them, in file order, each once,
+/// on the start page's own site (a sitemap of another host is read too: its URLs are kept only if they are the site's).
+/// `skip` is /sitemap.xml, which is read already.
+fn robots_sitemap_urls(body: &str, start: &Url, skip: Option<&Url>) -> Vec<Url> {
+    let mut urls: Vec<Url> = Vec::new();
+    for line in crate::sitemaps::robots_sitemaps(body) {
+        let Ok(u) = start.join(&line) else { continue };
+        if !matches!(u.scheme(), "http" | "https") || Some(&u) == skip || urls.contains(&u) {
+            continue;
+        }
+        urls.push(u);
+        if urls.len() == crate::sitemaps::ROBOTS_SITEMAPS {
+            break;
+        }
+    }
+    urls
+}
+
+/// What the site lists about itself, read beside the first page (see [`site_files`]).
+struct SiteFiles {
+    /// The start host's robots.txt, if it has a usable one. Its rules are the search's (see [`Search::start`]).
+    robots: Option<String>,
+    /// The pages the site lists: llms.txt, then its sitemaps, shallowest first. A page listed in several languages keeps
+    /// one copy (see [`without_language_copies`]).
+    links: Vec<Link>,
+}
+
+/// The site's own files, read at once: `robots.txt`, `llms.txt` (written for exactly this) and `/sitemap.xml`, and the
+/// sitemaps `robots.txt` names (its `Sitemap:` lines, see [`robots_sitemap_urls`]), which wait for the robots file. A
+/// sitemap index is read through its newest sitemaps (see [`sitemap_pages`]).
+async fn site_files(client: &Client, start: &Url, site: &Site, retry: Retry<'_>) -> SiteFiles {
+    let robots = async {
+        let url = start.join("/robots.txt").ok()?;
+        small_text(client, &url, retry).await
+    };
     let llms = async {
         let url = start.join("/llms.txt").ok()?;
         let body = small_text(client, &url, retry).await?;
         Some(extract::markdown(&body, &url).links)
     };
-    let sitemap = async {
-        let url = start.join("/sitemap.xml").ok()?;
-        let body = small_text(client, &url, retry).await?;
-        let mut urls = locs(&body);
-        // A sitemap index points at sitemaps: read the first few.
-        if body.contains("<sitemapindex") {
-            let children =
-                join_all(urls.iter().take(3).filter_map(|u| Url::parse(u).ok()).map(|u| child_map(client, u, retry)))
-                    .await;
-            urls = children.into_iter().flatten().collect();
+    let own_url = start.join("/sitemap.xml").ok();
+    let own = async {
+        match &own_url {
+            Some(url) => sitemap_pages(client, url, retry).await,
+            None => Vec::new(),
         }
-        Some(urls)
     };
-    let (llms, sitemap) = tokio::join!(llms, sitemap);
+    let (robots, llms, own) = tokio::join!(robots, llms, own);
+    let listed = robots_sitemap_urls(robots.as_deref().unwrap_or_default(), start, own_url.as_ref());
+    let listed_pages = join_all(listed.iter().map(|u| sitemap_pages(client, u, retry))).await;
 
     let mut out: Vec<Link> = Vec::new();
     let mut seen = HashSet::new();
@@ -323,13 +368,25 @@ async fn site_map(client: &Client, start: &Url, site: &Site, retry: Retry<'_>) -
     for l in llms.unwrap_or_default() {
         add(l.url, l.text);
     }
-    let mut pages: Vec<Url> = sitemap.unwrap_or_default().iter().filter_map(|u| Url::parse(u).ok()).collect();
+    let mut pages: Vec<Url> =
+        own.into_iter().chain(listed_pages.into_iter().flatten()).filter_map(|u| Url::parse(&u).ok()).collect();
     pages.sort_by_key(|u| (u.path_segments().map_or(0, |s| s.filter(|p| !p.is_empty()).count()), u.as_str().len()));
     for u in pages {
         let text = u.path().to_string();
         add(u, text);
     }
-    without_language_copies(start, out)
+    SiteFiles { robots, links: without_language_copies(start, out) }
+}
+
+/// The llms.txt of each of `hosts` (see [`crate::hosts::linked_hosts`]): the pages it lists, kept when they share the start
+/// page's registrable domain. Read as the start site's own llms.txt is (see [`site_files`]).
+async fn linked_llms(client: &Client, start: &Url, hosts: &[Url], retry: Retry<'_>) -> Vec<Link> {
+    let files = join_all(hosts.iter().filter_map(|h| h.join("/llms.txt").ok()).map(|url| async move {
+        let body = small_text(client, &url, retry).await?;
+        Some(extract::markdown(&body, &url).links)
+    }))
+    .await;
+    files.into_iter().flatten().flatten().filter(|l| crate::hosts::same_registrable(start, &l.url)).collect()
 }
 
 /// Languages a site puts in its paths (`/de/pricing`, `/pt-br/pricing`): ISO 639-1 codes, without the ones that name
@@ -447,8 +504,29 @@ fn menus(ex: &Extracted) -> HashSet<String> {
     ex.site_links.iter().map(|l| links::key(&l.url)).filter(|k| !text.contains(k)).collect()
 }
 
-/// Read one page: is the answer here, and which of its links lead on? Both questions go to Jev at once. `known` holds
-/// the menu links of the pages read before, and `field_scores` the field scores the search has so far.
+/// The URLs a page writes out in full in its text (see [`crate::hosts::bare_urls`]): links the page gives as much as its
+/// `<a>`s do, so `--follow` may open them too, on any host. A code block's URLs are not what the page says to a reader,
+/// so they are left out. The link's context is the text around its URL.
+fn bare_links(ex: &Extracted) -> Vec<Link> {
+    let mut out: Vec<Link> = Vec::new();
+    for block in ex.blocks.iter().filter(|b| b.kind != Kind::Code) {
+        for url in crate::hosts::bare_urls(&block.text) {
+            let context = around(&block.text, url.as_str());
+            out.push(Link { i: out.len(), url, text: String::new(), context, marginal: false });
+        }
+    }
+    out
+}
+
+/// Up to 100 characters on each side of `needle` in `text` (the whole text if it is shorter, or `needle` is not in it).
+fn around(text: &str, needle: &str) -> String {
+    let at = text.find(needle).unwrap_or(0);
+    let start = text[..at].char_indices().rev().nth(99).map_or(0, |(i, _)| i);
+    let end = text[at..].char_indices().nth(100).map_or(text.len(), |(i, _)| at + i);
+    text[start..end].to_string()
+}
+
+/// Read one page: load it, then judge it (see [`judge`]).
 #[allow(clippy::too_many_arguments)]
 async fn visit(
     args: &Args,
@@ -463,19 +541,38 @@ async fn visit(
 ) -> Result<Visit> {
     let mut t = Timer::new();
     let (url, ex) = load(args, cfg, client, url, &mut t).await?;
+    judge(args, client, api_key, url, ex, site, known, field_scores, read).await
+}
+
+/// Is the answer on a page that is loaded, and which of its links lead on? Both questions go to Jev at once. `known` holds
+/// the menu links of the pages read before, and `field_scores` the field scores the search has so far.
+#[allow(clippy::too_many_arguments)]
+async fn judge(
+    args: &Args,
+    client: &Client,
+    api_key: &str,
+    url: Url,
+    ex: Extracted,
+    site: &Site,
+    known: &HashSet<String>,
+    field_scores: &FieldScores,
+    read: &HashSet<String>,
+) -> Result<Visit> {
     // A lead can read as a page read already (a markdown lead whose HTML page the search read): it is not judged again.
     if read.contains(&links::key(&url)) {
         bail!("already read: {url}");
     }
     let menus = menus(&ex);
+    let bare = bare_links(&ex);
     let (found, score, warmth, links, new_field_scores) = {
         let ctx = site.ctx(args, client, api_key, &url, &ex);
-        // The links `--links -q` would score, menus and footers included, as long as they stay on the site. A menu
+        // The links `--links -q` would score, menus and footers included, and the URLs the text writes out. Any host:
+        // the page gives them, so a link to another domain is a candidate like any other, and is scored like one. A menu
         // link is scored on the first page it's on, not again on every page: on a page far from the question, the
         // site's "Main page" and "Search" would outscore everything in its text.
-        let candidates = links::candidates(&ctx, &ex, |u| {
+        let candidates = links::candidates(&ctx, &ex, &bare, |u| {
             let k = links::key(u);
-            site.contains(u) && !(menus.contains(&k) && known.contains(&k))
+            Site::reachable(u) && !(menus.contains(&k) && known.contains(&k))
         });
         // The answer the way `-q` finds it (score_blocks), and with --precise, the way --precise picks it.
         let answer = async {
@@ -627,8 +724,9 @@ struct Search {
 }
 
 impl Search {
-    /// The start of a search: the first page, the site's own map and robots.txt, all at once. The first page is taken
-    /// like any other page, and the site's map becomes the first leads.
+    /// The start of a search: the first page and the site's own files (robots.txt, llms.txt, sitemaps) are read at once,
+    /// then the first page is judged and the site's pages become the first leads. The start host's robots.txt is the
+    /// one the file read gave, so it is not read twice.
     async fn start(
         args: &Args,
         cfg: &Config,
@@ -640,27 +738,39 @@ impl Search {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let site = Site::new(start);
+        let retry = Retry::for_run(args.no_browser_retry, args.timing);
 
-        // The first page, the site's own map and robots.txt, all at once.
-        let mut known = HashSet::new();
-        let mut field_scores = FieldScores::new();
-        let mut robots = RobotsByHost::default();
-        let read_before = HashSet::new();
-        let (first, hints, _) = tokio::join!(
-            visit(args, cfg, client, api_key, start, &site, &known, &field_scores, &read_before),
-            site_hints(args, client, api_key, start, &site),
-            robots.load_for(client, std::slice::from_ref(start), Retry::for_run(args.no_browser_retry, args.timing)),
+        let (loaded, files) = tokio::join!(load(args, cfg, client, start, t), site_files(client, start, &site, retry));
+        let (url, ex) = loaded?;
+        let SiteFiles { robots, links: mut map } = files;
+        // The hosts the page links to on its own registrable domain (docs.stripe.com from stripe.com): their llms.txt is
+        // read too, and their pages are leads like the site's own.
+        let linked = crate::hosts::linked_hosts(
+            start,
+            ex.links.iter().chain(&ex.site_links).map(|l| &l.url),
+            crate::hosts::LINKED_HOSTS,
         );
+        let read_before = HashSet::new();
+        let (known0, field0) = (HashSet::new(), FieldScores::new());
+        let (first, hints) =
+            tokio::join!(judge(args, client, api_key, url, ex, &site, &known0, &field0, &read_before), async {
+                map.extend(linked_llms(client, start, &linked, retry).await);
+                site_hints(args, client, api_key, start, &site, map).await
+            },);
         let mut first = first?;
         let mut hints = hints?;
+        let mut known = HashSet::new();
+        let mut field_scores = FieldScores::new();
         known.extend(first.menus.iter().cloned());
         field_scores.extend(std::mem::take(&mut first.new_field_scores));
-        t.lap(format!("page 1 + site map ({} pages listed)", hints.len()));
+        t.lap(format!("page 1 + site files ({} pages listed)", hints.len()));
 
-        // How well the start page fits the question as a page, from the same scoring as the site map's pages. A
-        // home page answering in passing (a FAQ line) counts for less than a pricing page that the site lists. The
-        // start page is always the first hint (see [`site_hints`]), so it's taken out here.
+        // How well the start page fits the question as a page, from the same scoring as the site's pages. A home page
+        // answering in passing (a FAQ line) counts for less than a pricing page that the site lists. The start page is
+        // always the first hint (see [`site_hints`]), so it's taken out here.
         let start_fit = hints.remove(0).p.max(COLD_PAGE);
+        let mut robots_by_host = RobotsByHost::default();
+        robots_by_host.insert(start, Robots::parse(robots.as_deref().unwrap_or_default()));
         let mut search = Search {
             visited: HashSet::from([links::key(start), links::key(&first.url)]),
             read: HashSet::from([links::key(&first.url)]),
@@ -672,7 +782,7 @@ impl Search {
             leads: Vec::new(),
             known,
             field_scores,
-            robots,
+            robots: robots_by_host,
             found: Vec::new(),
             closest: None,
             log: Vec::new(),
@@ -886,13 +996,21 @@ impl Search {
     }
 }
 
-/// The start page's hints: the site's own map (see [`site_map`]), the pages that share words with the question first,
-/// each scored as a link. The start page is first, scored like a candidate too.
-async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, site: &Site) -> Result<Vec<ScoredLink>> {
+/// The start page's hints: the pages the site lists (see [`site_files`] and [`linked_llms`]), the pages that share words with
+/// the question first, each scored as a link. The start page is first, scored like a candidate too.
+async fn site_hints(
+    args: &Args,
+    client: &Client,
+    api_key: &str,
+    start: &Url,
+    site: &Site,
+    map: Vec<Link>,
+) -> Result<Vec<ScoredLink>> {
     let q = args.ask.as_deref().unwrap_or_default();
-    // The site's pages that share words with the question first, then the shallowest.
-    let retry = Retry::for_run(args.no_browser_retry, args.timing);
-    let mut links = links::most_relevant(q, site_map(client, start, site, retry).await, MAX_HINTS);
+    // A page listed twice (by the site's files and by a linked host's) is kept once.
+    let mut seen = HashSet::new();
+    let map: Vec<Link> = map.into_iter().filter(|l| seen.insert(links::key(&l.url))).collect();
+    let mut links = links::most_relevant(q, map, MAX_HINTS);
     // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
     links.retain(|l| links::key(&l.url) != links::key(start));
     links.insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false });
@@ -953,7 +1071,7 @@ mod tests {
         fetch::{Memo, test_server},
         judge::BlockPage,
     };
-    use test_server::{Kind, reply, retry_off, retry_on, serve_replies, serve_routed};
+    use test_server::{Kind, Served, reply, retry_off, retry_on, serve_replies, serve_routed};
 
     #[test]
     fn menus_are_the_links_outside_the_text() {
@@ -1221,7 +1339,7 @@ mod tests {
         });
         let start = Url::parse(&base).unwrap();
         let memo = Memo::default();
-        let links = site_map(&test_server::client(), &start, &Site::new(&start), retry_on(&memo)).await;
+        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_on(&memo)).await.links;
         assert!(links.iter().any(|l| l.url.path() == "/news/a.html"), "the sitemap's page is a hint");
         let kinds = served.kinds();
         assert_eq!(kinds.iter().filter(|k| **k == Kind::Browser).count(), 1, "one browser retry, for the sitemap");
@@ -1255,7 +1373,7 @@ mod tests {
         });
         let start = Url::parse(&base).unwrap();
         let memo = Memo::default();
-        let links = site_map(&test_server::client(), &start, &Site::new(&start), retry_on(&memo)).await;
+        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_on(&memo)).await.links;
         assert!(links.is_empty(), "the sitemap is not read");
         assert!(served.kinds().iter().all(|k| *k == Kind::Plain), "a 503 that says when to come back is not retried");
     }
@@ -1270,7 +1388,7 @@ mod tests {
             _ => Some(reply("403 Forbidden", "", b"")),
         });
         let start = Url::parse(&base).unwrap();
-        let links = site_map(&test_server::client(), &start, &Site::new(&start), retry_off()).await;
+        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_off()).await.links;
         assert!(links.is_empty());
         let mut rules = RobotsByHost::default();
         assert_eq!(rules.load_for(&test_server::client(), std::slice::from_ref(&start), retry_off()).await, 1);
@@ -1548,5 +1666,118 @@ mod tests {
             kept("https://x.com/", &["https://x.com/", "https://x.com/de/", "https://x.com/de"]),
             ["https://x.com/"]
         );
+    }
+
+    /// A site at a loopback server: each path is given its file, with `{host}` in it replaced by the request's own host
+    /// (the server's address), and any other path is a 404. Returns the site's URL and what the server was sent.
+    fn site_at(files: Vec<(&'static str, &'static str)>) -> (Url, Served) {
+        let (base, served) = serve_routed(move |head| {
+            let host = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.trim().eq_ignore_ascii_case("host").then(|| value.trim().to_string())
+                })
+                .unwrap_or_default();
+            Some(match files.iter().find(|(p, _)| *p == path_of(head)) {
+                Some((_, body)) => {
+                    reply("200 OK", "Content-Type: text/xml\r\n", body.replace("{host}", &host).as_bytes())
+                }
+                None => reply("404 Not Found", "", b""),
+            })
+        });
+        (Url::parse(&base).unwrap(), served)
+    }
+
+    #[tokio::test]
+    async fn a_sitemap_robots_txt_names_is_read_beside_the_sites_own() {
+        let (start, _) = site_at(vec![
+            ("/robots.txt", "User-agent: *\nDisallow: /private\nSitemap: http://{host}/feeds/pages.xml\n"),
+            ("/feeds/pages.xml", "<urlset><url><loc>http://{host}/news/a.html</loc></url></urlset>"),
+            ("/sitemap.xml", "<urlset><url><loc>http://{host}/news/b.html</loc></url></urlset>"),
+        ]);
+        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_off()).await.links;
+        let mut paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
+        paths.sort();
+        assert_eq!(paths, ["/news/a.html", "/news/b.html"]);
+    }
+
+    #[tokio::test]
+    async fn a_sitemap_index_is_read_through_its_three_newest_sitemaps() {
+        let (start, served) = site_at(vec![
+            (
+                "/sitemap.xml",
+                "<sitemapindex>\
+                 <sitemap><loc>http://{host}/s/2019.xml</loc><lastmod>2019-05-01</lastmod></sitemap>\
+                 <sitemap><loc>http://{host}/s/2024.xml</loc><lastmod>2024-05-01</lastmod></sitemap>\
+                 <sitemap><loc>http://{host}/s/2021.xml</loc><lastmod>2021-05-01</lastmod></sitemap>\
+                 <sitemap><loc>http://{host}/s/2023.xml</loc><lastmod>2023-05-01</lastmod></sitemap>\
+                 </sitemapindex>",
+            ),
+            ("/s/2019.xml", "<urlset><url><loc>http://{host}/news/2019.html</loc></url></urlset>"),
+            ("/s/2024.xml", "<urlset><url><loc>http://{host}/news/2024.html</loc></url></urlset>"),
+            ("/s/2021.xml", "<urlset><url><loc>http://{host}/news/2021.html</loc></url></urlset>"),
+            ("/s/2023.xml", "<urlset><url><loc>http://{host}/news/2023.html</loc></url></urlset>"),
+        ]);
+        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_off()).await.links;
+        let mut paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
+        paths.sort();
+        assert_eq!(paths, ["/news/2021.html", "/news/2023.html", "/news/2024.html"]);
+        // robots.txt, llms.txt, /sitemap.xml and the three children: the 2019 sitemap is never asked for.
+        assert_eq!(served.count(), 6);
+    }
+
+    #[tokio::test]
+    async fn the_llms_txt_of_a_linked_host_is_read_and_its_pages_are_kept_on_the_registrable_domain() {
+        let (linked, _) = site_at(vec![(
+            "/llms.txt",
+            "# Docs\n\n- [Rate limits](http://{host}/rate-limits): the limits\n- [Off site](https://elsewhere.test/x)\n",
+        )]);
+        // The front door is on the same host (and so the same registrable domain) as the linked one.
+        let start = Url::parse(&format!("http://127.0.0.1:{}/", linked.port().unwrap())).unwrap();
+        let links = linked_llms(&test_server::client(), &start, std::slice::from_ref(&linked), retry_off()).await;
+        let urls: Vec<String> = links.iter().map(|l| l.url.path().to_string()).collect();
+        assert_eq!(urls, ["/rate-limits"]);
+    }
+
+    #[test]
+    fn a_page_gives_the_urls_its_text_writes_out_but_not_those_of_its_code() {
+        let ex = Extracted {
+            blocks: vec![
+                crate::extract::Block::new(
+                    0,
+                    crate::extract::Kind::Para,
+                    "The limits are documented at https://shopify.dev/api/usage/rate-limits.".into(),
+                ),
+                crate::extract::Block::new(1, crate::extract::Kind::Code, "curl https://api.example.com/v1".into()),
+            ],
+            ..Default::default()
+        };
+        let bare = bare_links(&ex);
+        let urls: Vec<String> = bare.iter().map(|l| l.url.to_string()).collect();
+        assert_eq!(urls, ["https://shopify.dev/api/usage/rate-limits"]);
+        assert!(bare[0].context.contains("documented at"), "the context is the text around the URL");
+        assert!(!bare[0].marginal && bare[0].text.is_empty());
+    }
+
+    #[test]
+    fn a_page_may_link_to_any_host_as_a_web_page_while_the_site_is_its_own_hosts() {
+        let site = Site::new(&u("https://www.shopify.com/"));
+        assert!(site.contains(&u("https://help.shopify.com/x")));
+        assert!(!site.contains(&u("https://shopify.dev/docs")));
+        assert!(Site::reachable(&u("https://shopify.dev/docs")));
+        assert!(!Site::reachable(&u("https://shopify.dev/report.pdf")));
+        assert!(!Site::reachable(&u("mailto:a@shopify.com")));
+    }
+
+    #[test]
+    fn robots_names_three_sitemaps_once_each_and_not_the_sites_own() {
+        let start = u("https://x.com/");
+        let own = u("https://x.com/sitemap.xml");
+        let body = "Sitemap: https://x.com/sitemap.xml\nSitemap: https://x.com/a.xml\nSitemap: /b.xml\n\
+                    Sitemap: https://x.com/a.xml\nSitemap: https://x.com/c.xml\nSitemap: https://x.com/d.xml\n\
+                    Sitemap: ftp://x.com/e.xml\n";
+        let urls: Vec<String> = robots_sitemap_urls(body, &start, Some(&own)).iter().map(Url::to_string).collect();
+        assert_eq!(urls, ["https://x.com/a.xml", "https://x.com/b.xml", "https://x.com/c.xml"]);
     }
 }

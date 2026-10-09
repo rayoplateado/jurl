@@ -36,17 +36,24 @@ pub fn key(u: &Url) -> String {
 /// "Medicine"), then menus and footers ("Pricing"), each page once and not the page itself. Footnote marks and
 /// image-only links are left out ([`Link::marginal`]): they open "[clarification needed]" or a
 /// photo's own page, never the topic. `keep` narrows them (`--follow` stays on the site).
-pub fn candidates(ctx: &Ctx<'_>, ex: &Extracted, keep: impl Fn(&Url) -> bool) -> Vec<Link> {
-    let mut seen = HashSet::from([key(ctx.url)]);
-    let all: Vec<Link> = ex
-        .links
+pub fn candidates(ctx: &Ctx<'_>, ex: &Extracted, extra: &[Link], keep: impl Fn(&Url) -> bool) -> Vec<Link> {
+    let all = page_links(ctx.url, ex, extra, keep);
+    most_relevant(ctx.args.ask.as_deref().unwrap_or_default(), all, MAX_LINKS)
+}
+
+/// The links a page gives that may be candidates, in page order: its own links, then its menus and footers, then the URLs
+/// its text writes out (`extra`). Each page once; the page itself, a footnote mark and what `keep` drops are left out. A
+/// link the page doesn't give is never here: nothing is made up.
+fn page_links(page: &Url, ex: &Extracted, extra: &[Link], keep: impl Fn(&Url) -> bool) -> Vec<Link> {
+    let mut seen = HashSet::from([key(page)]);
+    ex.links
         .iter()
         .chain(&ex.site_links)
+        .chain(extra)
         .filter(|l| !l.marginal && keep(&l.url) && seen.insert(key(&l.url)))
         .enumerate()
         .map(|(i, l)| Link { i, ..l.clone() })
-        .collect();
-    most_relevant(ctx.args.ask.as_deref().unwrap_or_default(), all, MAX_LINKS)
+        .collect()
 }
 
 /// How many of the question's words a link shares (by their first five letters: "limit" finds `/limits/`). Only used to
@@ -159,7 +166,7 @@ fn read(links: &[Link], a: &Answers, field: Option<&FieldScores>) -> (Vec<f64>, 
 /// --follow opens, menus and footers included (a nav bar's "Pricing" is often the way to a price).
 pub(crate) async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {
     let (candidates, scores): (Vec<Link>, Vec<Option<f64>>) = if ctx.args.ask.is_some() {
-        let candidates = candidates(ctx, ex, |_| true);
+        let candidates = candidates(ctx, ex, &[], |_| true);
         if candidates.is_empty() {
             return Err(not_found(format!("no links found in {}", ctx.url)));
         }
@@ -334,5 +341,39 @@ mod tests {
         let (scores, asked) = read(&links, &Answers::default(), Some(&FieldScores::new()));
         assert_eq!(scores, vec![0.0, 0.0]);
         assert!(asked.is_empty());
+    }
+
+    fn link(url: &str) -> Link {
+        Link {
+            i: 0,
+            url: Url::parse(url).expect("a URL"),
+            text: String::new(),
+            context: String::new(),
+            marginal: false,
+        }
+    }
+
+    #[test]
+    fn a_page_offers_its_own_links_on_any_host_and_nothing_it_does_not_give() {
+        let page = Url::parse("https://www.shopify.com/legal/api-terms").expect("a URL");
+        let ex = Extracted { links: vec![link("https://shopify.dev/docs")], ..Default::default() };
+        let bare = [link("https://shopify.dev/api/usage/rate-limits")];
+        let urls: Vec<String> = page_links(&page, &ex, &bare, |_| true).iter().map(|l| l.url.to_string()).collect();
+        assert_eq!(urls, ["https://shopify.dev/docs", "https://shopify.dev/api/usage/rate-limits"]);
+        // The keep rule narrows what is offered, and the page itself is never its own candidate.
+        let only_shopify = page_links(&page, &ex, &bare, |u| u.host_str() == Some("shopify.dev")).len();
+        assert_eq!(only_shopify, 2);
+        let own = Extracted { links: vec![link("https://www.shopify.com/legal/api-terms#top")], ..Default::default() };
+        assert!(page_links(&page, &own, &[], |_| true).is_empty());
+    }
+
+    #[test]
+    fn a_footnote_mark_is_never_a_candidate() {
+        let page = Url::parse("https://x.test/").expect("a URL");
+        let mark = Link { marginal: true, ..link("https://x.test/cite") };
+        let ex = Extracted { links: vec![mark, link("https://x.test/pricing")], ..Default::default() };
+        let urls: Vec<String> =
+            page_links(&page, &ex, &[], |_| true).iter().map(|l| l.url.path().to_string()).collect();
+        assert_eq!(urls, ["/pricing"]);
     }
 }
