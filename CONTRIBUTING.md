@@ -15,7 +15,7 @@ Any change has to keep these true:
 - **Models choose, they don't write.** Every block, link and image jurl prints comes verbatim from the page. No summaries, no rewording, no generated text in the output.
 - **Output is pipe-friendly.** Results go to stdout as plain text or plain URLs. Progress, warnings and timings go to stderr.
 - **Numbers are measured, not guessed.** If a change affects speed or cost, include before and after `-t` lines on real pages.
-- **Small and dependency-light.** Prefer a few lines in the code that's already here over a new crate.
+- **Small and dependency-light.** Prefer a few lines in the code that's already here over a new crate. Where a crate changes what jurl can do, its cost goes in the PR: the browser-fingerprint retry links BoringSSL, about 3.6 MB on the release binary, and that was accepted.
 
 ## Develop
 

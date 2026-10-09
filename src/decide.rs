@@ -342,9 +342,9 @@ mod tests {
     async fn a_refused_model_request_is_final_and_asked_once() {
         // Jev and Clef are not pages: a 403 is an error at once, and nothing asks again with a browser's fingerprint.
         let replies = vec![Some(crate::fetch::test_server::reply("403 Forbidden", "", b""))];
-        let (url, taken) = crate::fetch::test_server::serve_replies(replies);
+        let (url, served) = crate::fetch::test_server::serve_replies(replies);
         let e = post(&crate::fetch::test_server::client(), &url, "", &json!({})).await.unwrap_err();
         assert!(format!("{e:#}").contains("HTTP 403 Forbidden"), "{e:#}");
-        assert_eq!(taken.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(served.count(), 1);
     }
 }

@@ -6,7 +6,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -22,6 +22,7 @@ use crate::{
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Link},
+    fetch::Retry,
     judge::{Ctx, Item, is_block_page},
     links::{self, FieldScores},
     load,
@@ -109,9 +110,9 @@ struct Robots {
 
 impl Robots {
     /// The rules in the `robots.txt` of `u`'s host. No file, or none within 4 s: no rules.
-    async fn load(client: &Client, u: &Url) -> Self {
+    async fn load(client: &Client, u: &Url, retry: Retry<'_>) -> Self {
         let Ok(url) = u.join("/robots.txt") else { return Self::default() };
-        let Some(body) = small_text(client, &url).await else { return Self::default() };
+        let Some(body) = small_text(client, &url, retry).await else { return Self::default() };
         Self::parse(&body)
     }
 
@@ -249,7 +250,7 @@ impl RobotsByHost {
     }
 
     /// Reads the `robots.txt` of each host of `urls` that has none yet, all at once. Returns how many it read.
-    async fn load_for(&mut self, client: &Client, urls: &[Url]) -> usize {
+    async fn load_for(&mut self, client: &Client, urls: &[Url], retry: Retry<'_>) -> usize {
         let mut new: Vec<&Url> = Vec::new();
         for u in urls {
             let Some(host) = host_key(u) else { continue };
@@ -257,7 +258,7 @@ impl RobotsByHost {
                 new.push(u);
             }
         }
-        let read = join_all(new.iter().map(|u| Robots::load(client, u))).await;
+        let read = join_all(new.iter().map(|u| Robots::load(client, u, retry))).await;
         for (u, robots) in new.iter().zip(read) {
             self.insert(u, robots);
         }
@@ -271,45 +272,51 @@ const SMALL_TEXT_MAX: usize = 5_000_000;
 /// How long a small text file may take, the body included.
 const SMALL_TEXT_TIMEOUT: Duration = Duration::from_secs(4);
 
-/// A small text file from the site (robots.txt, llms.txt, a sitemap), or nothing.
-async fn small_text(client: &Client, url: &Url) -> Option<String> {
-    small_text_within(client, url, SMALL_TEXT_MAX).await
+/// A small text file from the site (robots.txt, llms.txt, a sitemap), or nothing. A host that a retry showed needs the
+/// browser client gets its files from there, as its pages do (see [`Retry::sticky`]).
+async fn small_text(client: &Client, url: &Url, retry: Retry<'_>) -> Option<String> {
+    small_text_within(client, url, SMALL_TEXT_MAX, retry).await
 }
 
 /// [`small_text`] with its cap given. The body is read and decoded as fetch.rs reads and decodes a page.
-async fn small_text_within(client: &Client, url: &Url, max: usize) -> Option<String> {
-    let mut res = client.get(url.as_str()).timeout(SMALL_TEXT_TIMEOUT).send().await.ok()?;
-    if !res.status().is_success() {
-        return None;
-    }
-    let content_type =
-        res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
-    let bytes = crate::fetch::read_capped(&mut res, max).await.ok().flatten()?;
-    let body = crate::fetch::decode(&content_type, &bytes);
+async fn small_text_within(client: &Client, url: &Url, max: usize, retry: Retry<'_>) -> Option<String> {
+    let body = if retry.sticky(url, Instant::now()) {
+        crate::fetch::small_text_browser(url, max, SMALL_TEXT_TIMEOUT).await?
+    } else {
+        let mut res = client.get(url.as_str()).timeout(SMALL_TEXT_TIMEOUT).send().await.ok()?;
+        if !res.status().is_success() {
+            return None;
+        }
+        let content_type =
+            res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+        let bytes = crate::fetch::read_capped(&mut res, max).await.ok().flatten()?;
+        crate::fetch::decode(&content_type, &bytes)
+    };
     (!body.trim_start().starts_with('<') || body.contains("<urlset") || body.contains("<sitemapindex")).then_some(body)
+}
+
+/// The pages a child sitemap of a sitemap index lists, or none if it can't be read.
+async fn child_map(client: &Client, sitemap: Url, retry: Retry<'_>) -> Vec<String> {
+    small_text(client, &sitemap, retry).await.map(|b| locs(&b)).unwrap_or_default()
 }
 
 /// The pages the site lists itself: `llms.txt` (written for exactly this) and `sitemap.xml`, shallowest first. A page
 /// listed in several languages keeps one copy (see [`without_language_copies`]).
-async fn site_map(client: &Client, start: &Url, site: &Site) -> Vec<Link> {
+async fn site_map(client: &Client, start: &Url, site: &Site, retry: Retry<'_>) -> Vec<Link> {
     let llms = async {
         let url = start.join("/llms.txt").ok()?;
-        let body = small_text(client, &url).await?;
+        let body = small_text(client, &url, retry).await?;
         Some(extract::markdown(&body, &url).links)
     };
     let sitemap = async {
         let url = start.join("/sitemap.xml").ok()?;
-        let body = small_text(client, &url).await?;
+        let body = small_text(client, &url, retry).await?;
         let mut urls = locs(&body);
         // A sitemap index points at sitemaps: read the first few.
         if body.contains("<sitemapindex") {
-            let children = join_all(
-                urls.iter()
-                    .take(3)
-                    .filter_map(|u| Url::parse(u).ok())
-                    .map(|u| async move { small_text(client, &u).await.map(|b| locs(&b)).unwrap_or_default() }),
-            )
-            .await;
+            let children =
+                join_all(urls.iter().take(3).filter_map(|u| Url::parse(u).ok()).map(|u| child_map(client, u, retry)))
+                    .await;
             urls = children.into_iter().flatten().collect();
         }
         Some(urls)
@@ -643,7 +650,7 @@ impl Search {
         let (first, hints, _) = tokio::join!(
             visit(args, cfg, client, api_key, start, &site, &known, &field_scores),
             site_hints(args, client, api_key, start, &site),
-            robots.load_for(client, std::slice::from_ref(start)),
+            robots.load_for(client, std::slice::from_ref(start), Retry::for_run(args.no_browser_retry)),
         );
         let mut first = first?;
         let mut hints = hints?;
@@ -746,7 +753,7 @@ impl Search {
         loop {
             self.leads.retain(|l| self.robots.allows(&l.url));
             let best: Vec<Url> = self.leads.iter().take(SHORTLIST).map(|l| l.url.clone()).collect();
-            let n = self.robots.load_for(ctx.client, &best).await;
+            let n = self.robots.load_for(ctx.client, &best, Retry::for_run(ctx.args.no_browser_retry)).await;
             if n == 0 {
                 break;
             }
@@ -880,7 +887,8 @@ impl Search {
 async fn site_hints(args: &Args, client: &Client, api_key: &str, start: &Url, site: &Site) -> Result<Vec<ScoredLink>> {
     let q = args.ask.as_deref().unwrap_or_default();
     // The site's pages that share words with the question first, then the shallowest.
-    let mut links = links::most_relevant(q, site_map(client, start, site).await, MAX_HINTS);
+    let retry = Retry::for_run(args.no_browser_retry);
+    let mut links = links::most_relevant(q, site_map(client, start, site, retry).await, MAX_HINTS);
     // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
     links.retain(|l| links::key(&l.url) != links::key(start));
     links.insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false });
@@ -938,7 +946,12 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{answer::PRECISE_THRESHOLD, fetch::test_server, judge::BlockPage};
+    use crate::{
+        answer::PRECISE_THRESHOLD,
+        fetch::{Memo, test_server},
+        judge::BlockPage,
+    };
+    use test_server::{Kind, reply, retry_off, retry_on, serve_replies};
 
     #[test]
     fn menus_are_the_links_outside_the_text() {
@@ -1115,13 +1128,17 @@ mod tests {
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=windows-1252\r\nTransfer-Encoding: chunked\r\n\r\n";
         let body = b"Caf\xE9 costs \x80 5".to_vec();
         let url = |s: String| Url::parse(&s).unwrap();
-        let ours = small_text(&test_server::client(), &url(test_server::serve(head.into(), body.clone(), true)))
-            .await
-            .expect("a small file");
-        let page =
-            crate::fetch::fetch(&test_server::client(), &test_server::serve(head.into(), body.clone(), true), false)
+        let ours =
+            small_text(&test_server::client(), &url(test_server::serve(head.into(), body.clone(), true)), retry_off())
                 .await
-                .expect("a page");
+                .expect("a small file");
+        let page = crate::fetch::fetch(
+            &test_server::client(),
+            &test_server::serve(head.into(), body.clone(), true),
+            retry_off(),
+        )
+        .await
+        .expect("a page");
         let res = test_server::client().get(test_server::serve(head.into(), body, true)).send().await.expect("a reply");
         assert_eq!(ours, "Café costs € 5");
         assert_eq!(ours, page.body);
@@ -1132,8 +1149,46 @@ mod tests {
     async fn a_small_file_past_its_cap_is_refused_and_one_at_it_is_read() {
         let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
         let url = |body: Vec<u8>| Url::parse(&test_server::serve(head.into(), body, true)).unwrap();
-        assert_eq!(small_text_within(&test_server::client(), &url(vec![b'a'; 4096]), 1024).await, None);
-        assert!(small_text_within(&test_server::client(), &url(vec![b'a'; 1024]), 1024).await.is_some());
+        assert_eq!(small_text_within(&test_server::client(), &url(vec![b'a'; 4096]), 1024, retry_off()).await, None);
+        assert!(small_text_within(&test_server::client(), &url(vec![b'a'; 1024]), 1024, retry_off()).await.is_some());
+    }
+
+    /// A site's robots.txt, served from `base` (the server a test made).
+    fn robots_of(base: &str) -> Url {
+        Url::parse(base).unwrap().join("/robots.txt").unwrap()
+    }
+
+    #[tokio::test]
+    async fn robots_and_sitemaps_go_straight_to_the_browser_client_for_a_host_that_needs_it() {
+        let file = "User-agent: *\nDisallow: /private\n";
+        let (base, served) =
+            serve_replies(vec![Some(reply("200 OK", "Content-Type: text/plain\r\n", file.as_bytes()))]);
+        let memo = Memo::default();
+        // A retry showed a moment ago that this host needs the browser client.
+        assert!(memo.learn_url(&Url::parse(&base).unwrap(), std::time::Instant::now()));
+        let body = small_text(&test_server::client(), &robots_of(&base), retry_on(&memo)).await;
+        assert_eq!(body.as_deref(), Some(file));
+        assert_eq!(served.kinds(), [Kind::Browser]);
+    }
+
+    #[tokio::test]
+    async fn robots_and_sitemaps_stay_plain_for_a_host_that_has_not_needed_the_browser_client() {
+        let (base, served) =
+            serve_replies(vec![Some(reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\n"))]);
+        let memo = Memo::default();
+        assert!(small_text(&test_server::client(), &robots_of(&base), retry_on(&memo)).await.is_some());
+        assert_eq!(served.kinds(), [Kind::Plain]);
+    }
+
+    #[tokio::test]
+    async fn robots_and_sitemaps_stay_plain_when_the_run_opts_out_even_for_a_host_on_the_browser_client() {
+        let (base, served) =
+            serve_replies(vec![Some(reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\n"))]);
+        let memo = Memo::default();
+        assert!(memo.learn_url(&Url::parse(&base).unwrap(), std::time::Instant::now()));
+        let off = crate::fetch::Retry { on: false, memo: &memo };
+        assert!(small_text(&test_server::client(), &robots_of(&base), off).await.is_some());
+        assert_eq!(served.kinds(), [Kind::Plain]);
     }
 
     #[test]

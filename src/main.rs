@@ -195,19 +195,17 @@ pub(crate) async fn load(
         t.lap("render");
         page
     } else {
-        let retry =
-            fetch::browser_retry_allowed(args.no_browser_retry, std::env::var_os("JURL_NO_BROWSER_RETRY").is_some());
+        let retry = fetch::Retry::for_run(args.no_browser_retry);
         let page = fetch::fetch(client, target.as_str(), retry).await?;
         t.lap("fetch");
-        if let Some(retry) = page.browser_retry {
+        if page.via_browser {
             decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
-            if args.timing {
-                eprintln!(
-                    "jurl: HTTP {} from the first request, read on a retry with a browser's TLS fingerprint in {}ms",
-                    retry.refused,
-                    retry.took.as_millis()
-                );
-            }
+        }
+        // Once per host: the first page that put a host on the browser client says so, and the host's later pages don't.
+        if let Some(host) = &page.switched
+            && args.timing
+        {
+            eprintln!("jurl: {host}: using the browser client");
         }
         page
     };
