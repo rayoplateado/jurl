@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use futures::future::join_all;
 use reqwest::Client;
 use serde_json::Map;
@@ -459,9 +459,14 @@ async fn visit(
     site: &Site,
     known: &HashSet<String>,
     field_scores: &FieldScores,
+    read: &HashSet<String>,
 ) -> Result<Visit> {
     let mut t = Timer::new();
     let (url, ex) = load(args, cfg, client, url, &mut t).await?;
+    // A lead can read as a page read already (a markdown lead whose HTML page the search read): it is not judged again.
+    if read.contains(&links::key(&url)) {
+        bail!("already read: {url}");
+    }
     let menus = menus(&ex);
     let (found, score, warmth, links, new_field_scores) = {
         let ctx = site.ctx(args, client, api_key, &url, &ex);
@@ -603,6 +608,9 @@ struct Search {
     leads: Vec<Lead>,
     /// The pages opened or read, by [`links::key`]: a search doesn't open the same page twice.
     visited: HashSet<String>,
+    /// The pages read so far, by where each one was read from. A markdown lead that reads as an HTML page already read
+    /// is not judged again. Kept apart from `visited`, which holds the leads picked as well.
+    read: HashSet<String>,
     /// The menu links of the pages read so far (see [`menus`]).
     known: HashSet<String>,
     field_scores: FieldScores,
@@ -637,8 +645,9 @@ impl Search {
         let mut known = HashSet::new();
         let mut field_scores = FieldScores::new();
         let mut robots = RobotsByHost::default();
+        let read_before = HashSet::new();
         let (first, hints, _) = tokio::join!(
-            visit(args, cfg, client, api_key, start, &site, &known, &field_scores),
+            visit(args, cfg, client, api_key, start, &site, &known, &field_scores, &read_before),
             site_hints(args, client, api_key, start, &site),
             robots.load_for(client, std::slice::from_ref(start), Retry::for_run(args.no_browser_retry, args.timing)),
         );
@@ -654,6 +663,7 @@ impl Search {
         let start_fit = hints.remove(0).p.max(COLD_PAGE);
         let mut search = Search {
             visited: HashSet::from([links::key(start), links::key(&first.url)]),
+            read: HashSet::from([links::key(&first.url)]),
             site,
             max,
             threshold,
@@ -795,6 +805,7 @@ impl Search {
                 Ok(mut v) => {
                     self.pages += 1;
                     self.visited.insert(links::key(&v.url));
+                    self.read.insert(links::key(&v.url));
                     self.known.extend(v.menus.iter().cloned());
                     self.field_scores.extend(std::mem::take(&mut v.new_field_scores));
                     let mut path = lead.path.clone();
@@ -924,11 +935,9 @@ pub async fn run(
     while let Some(batch) = search.next_batch(&site_ctx, t).await? {
         // The pages of a batch are read side by side: each reads the field scores from before the batch, and what it
         // asked is kept once the batch is in.
-        let results = join_all(
-            batch
-                .iter()
-                .map(|l| visit(args, cfg, client, api_key, &l.url, &search.site, &search.known, &search.field_scores)),
-        )
+        let results = join_all(batch.iter().map(|l| {
+            visit(args, cfg, client, api_key, &l.url, &search.site, &search.known, &search.field_scores, &search.read)
+        }))
         .await;
         t.lap(format!("{} more", batch.len()));
         search.absorb_batch(batch, results, args.timing)?;
@@ -1305,6 +1314,7 @@ mod tests {
             opened: 1,
             leads: Vec::new(),
             visited: HashSet::new(),
+            read: HashSet::new(),
             known: HashSet::new(),
             field_scores: FieldScores::new(),
             robots: RobotsByHost::default(),

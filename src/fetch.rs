@@ -281,10 +281,18 @@ async fn get(client: &Client, url: &str, max: usize) -> Result<Reply> {
     }
     let final_url = res.url().clone();
     let ct = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    let links: Vec<String> =
+        res.headers().get_all(header::LINK).iter().filter_map(|v| v.to_str().ok()).map(String::from).collect();
     let Some(bytes) = read_capped(&mut res, max).await? else {
         bail!("{url}: page larger than {}", size_label(max));
     };
-    Ok(Reply::Page { status, page: to_page(final_url, &ct, &bytes) })
+    let mut page = to_page(final_url, &ct, &bytes);
+    // The body is read as its markdown, but the page a person reads is the HTML page it is the alternate of.
+    if page.is_markdown {
+        let md = page.url.clone();
+        page.url = html_twin(client, &md, &links).await.unwrap_or(md);
+    }
+    Ok(Reply::Page { status, page })
 }
 
 /// One GET of `url` with the browser client, which asks with its own headers: the page, or the refusal. No reply at all,
@@ -414,6 +422,71 @@ fn charset_of(content_type: &str) -> &'static Encoding {
 /// collapses into one line; plain text read as markdown loses nothing.
 fn served_markdown(content_type: &str, body: &str) -> bool {
     content_type.contains("markdown") || (content_type.starts_with("text/plain") && !body.trim_start().starts_with('<'))
+}
+
+/// How long a check that a page's HTML twin exists may take. It reads the response's headers and no more.
+const TWIN_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// The HTML page a markdown page is the alternate of, if there is one. A `Link: <…>; rel="canonical"` header names it
+/// (RFC 8288; RFC 6596 defines the relation). Failing that, a `…/x.md` URL is the markdown of `…/x`, as the llms.txt
+/// proposal (llmstxt.org) has it: a page's markdown is at the same URL with `.md` appended, and a directory's at
+/// `index.md`. A candidate counts only if it answers with an HTML page on the same host, so a page the site doesn't
+/// have is never named.
+async fn html_twin(client: &Client, url: &Url, links: &[String]) -> Option<Url> {
+    let canonical = links.iter().filter_map(|l| canonical_link(l)).filter_map(|c| url.join(c).ok());
+    for candidate in canonical.chain(md_stem(url)) {
+        if candidate == *url || candidate.host_str() != url.host_str() {
+            continue;
+        }
+        if let Some(page) = serves_html(client, &candidate).await {
+            return Some(page);
+        }
+    }
+    None
+}
+
+/// The target of the first link in a `Link` header value whose `rel` is `canonical`. A link is `<uri>` and then its
+/// `;`-separated parameters; links are separated by commas.
+fn canonical_link(value: &str) -> Option<&str> {
+    let mut rest = value;
+    while let Some(open) = rest.find('<') {
+        let after = &rest[open + 1..];
+        let close = after.find('>')?;
+        let params = after[close + 1..].split(',').next().unwrap_or_default();
+        let canonical = params.split(';').any(|p| {
+            p.split_once('=').is_some_and(|(name, rel)| {
+                name.trim().eq_ignore_ascii_case("rel")
+                    && rel.trim().trim_matches('"').split_whitespace().any(|r| r.eq_ignore_ascii_case("canonical"))
+            })
+        });
+        if canonical {
+            return Some(&after[..close]);
+        }
+        rest = &after[close + 1..];
+    }
+    None
+}
+
+/// The page a `…/x.md` URL is the markdown of: `…/x`, or for `…/index.md` the directory `…/`. None for any other URL.
+fn md_stem(url: &Url) -> Option<Url> {
+    let path = url.path().strip_suffix(".md").filter(|p| !p.is_empty() && !p.ends_with('/'))?;
+    let stem = match path.rsplit_once('/') {
+        Some((dir, last)) if last == "index" || last == "index.html" => format!("{dir}/"),
+        _ => path.to_string(),
+    };
+    let mut page = url.clone();
+    page.set_path(&stem);
+    Some(page)
+}
+
+/// The URL of the page at `url` if it answers with an HTML page on the same host, after any redirects. The request asks
+/// for HTML outright: a site that answers every request with its markdown must not pass for its own HTML.
+async fn serves_html(client: &Client, url: &Url) -> Option<Url> {
+    let res = client.get(url.as_str()).header(header::ACCEPT, "text/html").timeout(TWIN_TIMEOUT).send().await.ok()?;
+    let ct = res.headers().get(header::CONTENT_TYPE)?.to_str().ok()?;
+    let html = ct.starts_with("text/html") || ct.starts_with("application/xhtml+xml");
+    let same_host = res.url().host_str() == url.host_str();
+    (res.status().is_success() && html && same_host).then(|| res.url().clone())
 }
 
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.
@@ -1021,6 +1094,78 @@ mod tests {
             Ok(Reply::Refused(refusal)) => json!({ "status": refusal.status.as_u16() }),
             Err(e) => json!({ "error": format!("{e:#}") }),
         }
+    }
+
+    /// A test site: each `(path, Content-Type, extra header lines, body)` is served at its path, and any other path is a
+    /// 404. Returns its base URL.
+    fn twin_site(routes: Vec<(&'static str, &'static str, &'static str, &'static str)>) -> String {
+        serve_routed(move |head| {
+            let path = head.split_whitespace().nth(1).unwrap_or_default();
+            Some(match routes.iter().find(|route| route.0 == path) {
+                Some((_, content_type, extra, body)) => {
+                    reply("200 OK", &format!("Content-Type: {content_type}\r\n{extra}"), body.as_bytes())
+                }
+                None => reply("404 Not Found", "", b""),
+            })
+        })
+        .0
+    }
+
+    #[test]
+    fn a_canonical_link_is_found_among_the_others() {
+        let preload = "</fonts/a.woff2>; rel=preload; as=font, </x.css>; rel=preload";
+        assert_eq!(canonical_link(preload), None);
+        let both = format!("{preload}, <https://site.test/page>; rel=\"alternate canonical\"");
+        assert_eq!(canonical_link(&both), Some("https://site.test/page"));
+    }
+
+    #[test]
+    fn a_md_url_names_the_page_it_is_the_markdown_of() {
+        let stem = |u: &str| md_stem(&Url::parse(u).expect("a URL")).map(|s| s.to_string());
+        assert_eq!(stem("https://linear.app/docs/saml.md").as_deref(), Some("https://linear.app/docs/saml"));
+        assert_eq!(stem("https://site.test/docs/page.html.md").as_deref(), Some("https://site.test/docs/page.html"));
+        assert_eq!(stem("https://site.test/docs/index.md").as_deref(), Some("https://site.test/docs/"));
+        assert_eq!(stem("https://site.test/docs/saml"), None);
+        assert_eq!(stem("https://site.test/.md"), None);
+    }
+
+    #[tokio::test]
+    async fn a_markdown_page_at_md_is_read_as_the_html_page_it_is_the_alternate_of() {
+        let md = "# Pricing\n\nThe Enterprise plan includes SSO.\n";
+        let base = twin_site(vec![
+            ("/docs/saml.md", "text/markdown; charset=utf-8", "", md),
+            ("/docs/saml", "text/html", "", "<h1>Pricing</h1>"),
+        ]);
+        let page =
+            fetch(&client(), &format!("{base}/docs/saml.md"), retry_off()).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(page.is_markdown);
+        assert_eq!(page.url.as_str(), format!("{base}/docs/saml"));
+        assert_eq!(page.body, md);
+    }
+
+    #[tokio::test]
+    async fn a_markdown_page_whose_twin_is_missing_or_not_html_keeps_its_md_url() {
+        // `a`'s twin is missing (404); `b`'s answers with markdown again, which is not an HTML page.
+        let base = twin_site(vec![
+            ("/docs/a.md", "text/markdown", "", "# A\n"),
+            ("/docs/b.md", "text/markdown", "", "# B\n"),
+            ("/docs/b", "text/markdown", "", "# B\n"),
+        ]);
+        for path in ["/docs/a.md", "/docs/b.md"] {
+            let url = format!("{base}{path}");
+            let page = fetch(&client(), &url, retry_off()).await.unwrap_or_else(|e| panic!("{e:#}"));
+            assert_eq!(page.url.as_str(), url);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_canonical_link_names_the_html_page() {
+        let base = twin_site(vec![
+            ("/docs/one", "text/markdown", "Link: </docs/canon>; rel=\"canonical\"\r\n", "# One\n"),
+            ("/docs/canon", "text/html", "", "<p>One</p>"),
+        ]);
+        let page = fetch(&client(), &format!("{base}/docs/one"), retry_off()).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.url.as_str(), format!("{base}/docs/canon"));
     }
 }
 
