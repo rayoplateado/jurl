@@ -1,20 +1,23 @@
 # Browser-fingerprint retry, measured
 
-The fetch layer only, on 38 public sites, two passes from one Mac on 2026-10-09 (raw rows: [results/browser-retry-2026-10-09.json](results/browser-retry-2026-10-09.json)). No model is called, so Jev and Clef cost nothing here.
+Two parts, both from one Mac on 2026-10-09:
+
+1. **The fetch layer on 38 public sites** (two passes, no model calls, so Jev and Clef cost nothing). Raw rows: [results/browser-retry-sticky-2026-10-09.json](results/browser-retry-sticky-2026-10-09.json) for the current code, and [results/browser-retry-2026-10-09.json](results/browser-retry-2026-10-09.json) for the first pass, made before the host memo and the Retry-After rule.
+2. **`--follow` on a walled site**, before and after the host memo, with the Jev cost. Raw: [results/follow-walled-2026-10-09.json](results/follow-walled-2026-10-09.json).
 
 - **normal**: jurl's HTTP client, unchanged.
 - **browser**: the same request through a client with Chrome 149's TLS and HTTP/2 fingerprint and headers, on its own.
-- **retry path**: `fetch()` with the retry on. The normal request goes first, and the browser client is asked only after a 403 or 503.
+- **retry path**: `fetch()` with the retry on. The normal request goes first; the browser client is asked only after a 403, or a 503 without a Retry-After.
 
-Run it with `cargo test --release bench_browser_retry -- --ignored --nocapture`. The sites are in [browser-retry/sites.json](browser-retry/sites.json), and it prints one `BENCH` line per site. The categories are ours; we did not check which bot protection each site uses.
+Run the fetch layer with `cargo test --release bench_browser_retry -- --ignored --nocapture`. The sites are in [browser-retry/sites.json](browser-retry/sites.json), and the run prints one `BENCH` line per site. The categories are ours; we did not check which bot protection each site uses.
 
-## Success by category
+## Success by category (current code, two passes)
 
 Counts are per pass, run 1 / run 2. "2xx" counts any success status, including the soft blocks below.
 
 | category | sites | normal 2xx | browser 2xx | retry path ok |
 | --- | ---: | ---: | ---: | ---: |
-| news (Spain) | 3 | 1 / 1 | 3 / 2 | 2 / 2 |
+| news (Spain) | 3 | 1 / 1 | 2 / 2 | 3 / 2 |
 | news (France) | 2 | 2 / 2 | 2 / 2 | 2 / 2 |
 | news (Germany) | 2 | 2 / 2 | 2 / 2 | 2 / 2 |
 | news (Italy) | 1 | 1 / 1 | 1 / 1 | 1 / 1 |
@@ -23,12 +26,14 @@ Counts are per pass, run 1 / run 2. "2xx" counts any success status, including t
 | news (Argentina) | 1 | 1 / 1 | 1 / 1 | 1 / 1 |
 | news (Hong Kong) | 1 | 1 / 1 | 1 / 1 | 1 / 1 |
 | e-commerce | 3 | 3 / 3 | 3 / 3 | 3 / 3 |
-| airline | 3 | 1 / 1 | 3 / 3 | 3 / 3 |
+| airline | 3 | 0 / 0 | 3 / 3 | 2 / 2 |
 | hotel / booking | 1 | 1 / 1 | 1 / 1 | 1 / 1 |
 | ticketing | 2 | 1 / 1 | 1 / 1 | 1 / 1 |
 | CDN-fronted (guess) | 3 | 1 / 1 | 2 / 2 | 2 / 2 |
 | control | 10 | 10 / 10 | 10 / 10 | 10 / 10 |
-| **all** | **38** | **28 / 28** | **34 / 33** | **33 / 33** |
+| **all** | **38** | **27 / 27** | **33 / 33** | **33 / 32** |
+
+The first pass, made before the memo and the Retry-After rule, read 28 / 28 normal, 34 / 33 browser and 33 / 33 retry. The gap is British Airways (below) and one elpais.com answer.
 
 ## What the retry recovers
 
@@ -48,7 +53,7 @@ Five sites refuse the normal client with 403, and the browser client reads them 
 | --- | --- | --- | --- |
 | wsj.com, reuters.com | 401 | 401 | 401 is not 403 or 503, so the rule never retries it |
 | stubhub.com, g2.com | 403 | 403 | both fingerprints refused |
-| elpais.com | 403 | 200 (run 1), 403 (run 2) | flaky: the retry call in run 1 got 403 too |
+| elpais.com | 403 | 200 or 403, depending on the pass | flaky: the same site answers differently between requests |
 
 ## Soft blocks the status rule cannot see
 
@@ -56,17 +61,39 @@ These answer with a success status, so jurl reads them as the page:
 
 | site | normal | browser |
 | --- | --- | --- |
-| britishairways.com | 200, 8,998 bytes (both passes) | 200, 434,864 bytes (both passes) |
+| britishairways.com | 200, 8,998 bytes (first pass) | 200, 434,864 bytes (both passes) |
 | booking.com | 202, 7,033 or 8,410 bytes | 200, 511,958 bytes, or 202, 8,410 bytes |
 | amazon.com | 202, 0 bytes | 202, 2,007 bytes |
 
 We did not look at what the short bodies say.
 
+British Airways also timed out on the plain client in both current passes (a 20 s timeout). Minutes later the same plain request returned 200 in about 0.1 s from both curl and the pre-retry baseline binary, and the new binary's plain path did too. We read the timeouts as transient and counted them as misses in the table.
+
 ## Latency
 
-- The five sites above: the refused normal request takes 138 ms (median), the browser request 390 ms, and the retry path 498 ms in all (range 197 to 1,971 ms): the refusal, then the browser request.
-- A page the normal client reads is never asked again, so it costs what it did before: 172 ms median for a plain GET (56 samples across both passes).
+- The five sites above, medians: the refused plain request 128 ms, the browser request 351 ms, the retry path 348 ms. The retry path is lower than the first pass's 498 ms because its browser request reuses the connection that the bench's own browser call opened a moment before; in a real run the shared client does the same across hops.
+- Pages the normal client reads are never asked again, so they cost what they did before: 162 ms median for a plain GET (54 samples across both passes).
+
+## `--follow` on a walled site, before and after
+
+The start page is eleconomista.es's front door, which the plain client is refused (403). The question is "How many Starbucks stores are there worldwide?". The answer, "unos 41.000 establecimientos propios y franquiciados en todo el mundo", is in an article linked from the front page, not on the front page itself (checked with Chrome impersonation, which spends no Jev).
+
+Command: `jurl --follow 5 --precise -q "How many Starbucks stores are there worldwide?" https://www.eleconomista.es/ -t --json`
+
+| run | build | wall | phases total | "2 more" batch | plain refusals | host switch lines | pages read | answer | Jev requests / input tokens |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| before 1 | per-hop retry | 2.3 s | 2,218 ms | 1,017 ms | 3 | 0 | 3 | 41.000 (p 0.97) | 10 / 77,288 |
+| after 1 | host memo | 1.8 s | 1,750 ms | 594 ms | 1 | 1 | 3 | 41.000 (p 0.98) | 10 / 77,015 |
+| before 2 | per-hop retry | 2.1 s | 2,047 ms | 666 ms | 3 | 0 | 3 | 41.000 (p 0.98) | 10 / 76,999 |
+| after 2 | host memo | 1.8 s | 1,787 ms | 630 ms | 1 | 1 | 3 | 41.000 (p 0.98) | 10 / 77,128 |
+| after 3 (final commit's binary) | host memo | 2.3 s | 1,745 ms | 574 ms | 1 | 1 | 3 | 41.000 (p 0.98) | 10 / 77,004 |
+
+- **Hops:** the front page, then, in the first batch, the front page's second section and the article. The path is front page → article in every run.
+- **Plain refusals:** before, every page is asked plain first and refused (three). After, only the start page is (one); the host is then on the browser client, so the batch's two pages go straight there. The `-t` output shows the change: three retry lines before, one "using the browser client" line after.
+- **Latency:** "page 1 + site map" is the same in both builds (about 0.9 s), because the start page is still plain first. The saving is in the two-page batch. Over the two pairs the phase total is 17% lower on average (2,133 ms before, 1,769 ms after); the wall clock is 2.2 s before and 1.8 s after.
+- **Site map:** llms.txt and sitemap.xml are read alongside the start page, so they run before its retry can teach the host. They were plain in both builds and listed no pages in any run. The memo covers them from the next search in the same process, not this one.
+- **Cost:** 385,434 Jev input tokens across the five runs, about $0.016 at $0.042 per million, under the $0.02 cap. Three one-page checks against britishairways.com added 2,171 tokens.
 
 ## Binary
 
-Stripped release build (`cargo build --release --locked`): 7,212,992 bytes before, 10,841,360 after (+3.6 MB, +50%). We did not break the increase down by crate.
+Stripped release build (`cargo build --release --locked`): 7,212,992 bytes before the retry, 10,841,360 with it (+3.6 MB, +50%), and 10,857,872 for the committed build with the host memo (+3.6 MB, +50%). The size increase was accepted by the owner. Estimated from unstripped symbols: BoringSSL about 1.0 MB, the Rust brotli crate about 0.9 MB (TLS certificate compression that Chrome's fingerprint advertises), wreq and its HTTP/2 code about 0.4 MB, zstd about 0.14 MB.
