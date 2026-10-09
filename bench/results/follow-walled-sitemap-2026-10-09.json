@@ -1,0 +1,132 @@
+{
+ "measured": "2026-10-09",
+ "site": "https://www.eleconomista.es/ (walled: 403 to the plain client)",
+ "question": "How many Starbucks stores are there worldwide?",
+ "command": "jurl --follow 5 --precise -q \"<question>\" https://www.eleconomista.es/ -t --json",
+ "article": {
+  "url": "https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html",
+  "front_page_when_checked": "not linked (checked with Chrome impersonation after the runs)",
+  "in_news_sitemaps": {
+   "sitemap_news_ssl.php": "entry 260 of 607",
+   "sitemap_noticias.php": "entry 262 of 1474"
+  },
+  "news_sitemaps_named_in": "robots.txt (Sitemap: lines)",
+  "read_by_jurl": "no: jurl reads /sitemap.xml and the first three child sitemaps (company lists, 2,336 pages, none about Starbucks)"
+ },
+ "runs": [
+  {
+   "run": "before 1",
+   "binary": "54738cb (host memo; robots.txt, llms.txt and sitemap plain only)",
+   "phases": "page 1 + site map (1 pages listed) 916ms · robots 2 205ms · next 241ms · 2 more 1024ms · next 231ms · 2 more 8503ms · total 11122ms",
+   "pages_read": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/empresas-finanzas/",
+    "https://empresite.eleconomista.es/",
+    "https://www.eleconomista.es/busqueda/",
+    "https://www.eleconomista.es/economia/"
+   ],
+   "answer": null,
+   "error": "read 5 pages of eleconomista.es and none answers that",
+   "usage": {
+    "browser_retry": true,
+    "clef": {
+     "images": 0,
+     "input_tokens": 0,
+     "requests": 0
+    },
+    "jev": {
+     "input_tokens": 107839,
+     "requests": 15
+    },
+    "pages": 5
+   }
+  },
+  {
+   "run": "before 2",
+   "binary": "54738cb (host memo; robots.txt, llms.txt and sitemap plain only)",
+   "phases": "page 1 + site map (1 pages listed) 912ms · next 231ms · 2 more 446ms · next 218ms · 2 more 8422ms · total 10230ms",
+   "pages_read": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/empresas-finanzas/",
+    "https://www.eleconomista.es/ultimas-noticias/",
+    "https://www.eleconomista.es/busqueda/",
+    "https://www.eleconomista.es/economia/"
+   ],
+   "answer": null,
+   "error": "read 5 pages of eleconomista.es and none answers that",
+   "usage": {
+    "browser_retry": true,
+    "clef": {
+     "images": 0,
+     "input_tokens": 0,
+     "requests": 0
+    },
+    "jev": {
+     "input_tokens": 106523,
+     "requests": 14
+    },
+    "pages": 5
+   }
+  },
+  {
+   "run": "after 1",
+   "binary": "838f6c0 (side files follow the retry rule)",
+   "phases": "page 1 + site map (301 pages listed) 1079ms · robots 1 185ms · next 253ms · 2 more 8518ms · next 231ms · 2 more 427ms · total 10696ms",
+   "pages_read": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/busqueda/",
+    "https://www.eleconomista.es/empresas-finanzas/",
+    "https://www.eleconomista.es/ultimas-noticias/",
+    "https://www.eleconomista.es/diccionario-de-economia"
+   ],
+   "answer": null,
+   "error": "read 5 pages of eleconomista.es and none answers that",
+   "usage": {
+    "browser_requests": 11,
+    "browser_retry": true,
+    "clef": {
+     "images": 0,
+     "input_tokens": 0,
+     "requests": 0
+    },
+    "jev": {
+     "input_tokens": 138834,
+     "requests": 16
+    },
+    "pages": 5,
+    "plain_refusals": 4
+   }
+  },
+  {
+   "run": "after 2",
+   "binary": "838f6c0 (side files follow the retry rule)",
+   "phases": "page 1 + site map (301 pages listed) 1106ms · next 208ms · 2 more 8425ms · next 213ms · 2 more 381ms · total 10336ms",
+   "pages_read": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/busqueda/",
+    "https://www.eleconomista.es/empresas-finanzas/",
+    "https://www.eleconomista.es/mercados-cotizaciones/",
+    "https://www.eleconomista.es/actualidad/"
+   ],
+   "answer": null,
+   "error": "read 5 pages of eleconomista.es and none answers that",
+   "usage": {
+    "browser_requests": 11,
+    "browser_retry": true,
+    "clef": {
+     "images": 0,
+     "input_tokens": 0,
+     "requests": 0
+    },
+    "jev": {
+     "input_tokens": 132029,
+     "requests": 16
+    },
+    "pages": 5,
+    "plain_refusals": 4
+   }
+  }
+ ],
+ "jev_input_tokens_total": 485225,
+ "jev_cost_usd_at_0.042_per_million": 0.0204
+}
