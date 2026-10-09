@@ -329,6 +329,7 @@ async fn browser_reply(res: wreq::Response, url: &str, max: usize) -> Result<Rep
 static BROWSER: LazyLock<std::result::Result<wreq::Client, String>> = LazyLock::new(|| {
     let builder = wreq::Client::builder()
         .emulation(wreq_util::Emulation::Chrome149)
+        .default_headers(browser_language_headers())
         // wreq follows no redirects unless asked; the normal client follows up to 10, and so does this one.
         .redirect(wreq::redirect::Policy::limited(10))
         .timeout(crate::HTTP_TIMEOUT)
@@ -422,6 +423,46 @@ fn charset_of(content_type: &str) -> &'static Encoding {
 /// collapses into one line; plain text read as markdown loses nothing.
 fn served_markdown(content_type: &str, body: &str) -> bool {
     content_type.contains("markdown") || (content_type.starts_with("text/plain") && !body.trim_start().starts_with('<'))
+}
+
+/// The Accept-Language every page request sends, when the run names one. jurl does not detect the language of the question (a
+/// precise answer has no `lang`), so it sends none unless `JURL_ACCEPT_LANGUAGE` is set, e.g. `es` for a question in Spanish:
+/// a site that answers in the language it is asked for then answers in it. The caller chooses the value.
+pub(crate) fn accept_language() -> Option<String> {
+    accept_language_of(std::env::var("JURL_ACCEPT_LANGUAGE").ok())
+}
+
+/// [`accept_language`]'s rule for the value of `JURL_ACCEPT_LANGUAGE` (or none): the value, trimmed, when it is a header
+/// value; none when it is unset, empty or not a header value.
+pub(crate) fn accept_language_of(value: Option<String>) -> Option<String> {
+    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty() && header::HeaderValue::from_str(v).is_ok())
+}
+
+/// The Accept-Language as a header map for the plain client: one line when the run names a language, none otherwise.
+pub(crate) fn language_headers() -> header::HeaderMap {
+    language_headers_of(accept_language())
+}
+
+fn language_headers_of(language: Option<String>) -> header::HeaderMap {
+    let mut headers = header::HeaderMap::new();
+    if let Some(value) = language.and_then(|v| header::HeaderValue::from_str(&v).ok()) {
+        headers.insert(header::ACCEPT_LANGUAGE, value);
+    }
+    headers
+}
+
+/// The same for the browser client. With none named it adds no line of its own: its emulation profile keeps Chrome's
+/// `en-US,en;q=0.9`, as it always has (see [`BROWSER`]).
+fn browser_language_headers() -> wreq::header::HeaderMap {
+    browser_language_headers_of(accept_language())
+}
+
+fn browser_language_headers_of(language: Option<String>) -> wreq::header::HeaderMap {
+    let mut headers = wreq::header::HeaderMap::new();
+    if let Some(value) = language.and_then(|v| wreq::header::HeaderValue::from_str(&v).ok()) {
+        headers.insert(wreq::header::ACCEPT_LANGUAGE, value);
+    }
+    headers
 }
 
 /// How long a check that a page's HTML twin exists may take. It reads the response's headers and no more.
@@ -642,6 +683,63 @@ mod tests {
         assert_eq!(charset_of("text/html; Charset=\"Shift_JIS\"").name(), "Shift_JIS");
         assert_eq!(charset_of("text/html").name(), "UTF-8");
         assert_eq!(charset_of("text/html; charset=no-such-label").name(), "UTF-8");
+    }
+
+    #[test]
+    fn the_accept_language_is_none_unless_the_run_names_one() {
+        assert_eq!(accept_language_of(None), None);
+        assert_eq!(accept_language_of(Some(String::new())), None);
+        assert_eq!(accept_language_of(Some("  ".to_string())), None);
+        assert_eq!(accept_language_of(Some(" es-ES, es;q=0.9 ".to_string())).as_deref(), Some("es-ES, es;q=0.9"));
+        assert_eq!(accept_language_of(Some("es\nx".to_string())), None, "not a header value");
+    }
+
+    /// The Accept-Language lines (lower-cased) of the request that `served` recorded for `path`.
+    fn accept_language_lines(heads: &[String], path: &str) -> Vec<String> {
+        let head = heads
+            .iter()
+            .find(|h| h.lines().next().is_some_and(|l| l.split(' ').nth(1) == Some(path)))
+            .expect("a request for the path");
+        head.lines()
+            .filter(|l| l.to_ascii_lowercase().starts_with("accept-language:"))
+            .map(|l| l.to_ascii_lowercase())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_named_language_is_the_one_line_each_client_sends_and_none_adds_no_line_of_jurls_own() {
+        let (base, served) = serve_routed(|_| Some(reply("200 OK", "Content-Type: text/plain\r\n", b"ok")));
+        let plain = |language: Option<String>| {
+            reqwest::Client::builder()
+                .default_headers(language_headers_of(language))
+                .no_proxy()
+                .build()
+                .expect("a client")
+        };
+        let browser = |language: Option<String>| {
+            wreq::Client::builder()
+                .emulation(wreq_util::Emulation::Chrome149)
+                .default_headers(browser_language_headers_of(language))
+                .no_proxy()
+                .build()
+                .expect("a client")
+        };
+        let bare =
+            wreq::Client::builder().emulation(wreq_util::Emulation::Chrome149).no_proxy().build().expect("a client");
+        plain(Some("es".to_string())).get(format!("{base}/plain-es")).send().await.expect("a reply");
+        browser(Some("es".to_string())).get(format!("{base}/browser-es")).send().await.expect("a reply");
+        plain(None).get(format!("{base}/plain-none")).send().await.expect("a reply");
+        browser(None).get(format!("{base}/browser-none")).send().await.expect("a reply");
+        bare.get(format!("{base}/browser-bare")).send().await.expect("a reply");
+        let heads = served.heads();
+        assert_eq!(accept_language_lines(&heads, "/plain-es"), ["accept-language: es"]);
+        assert_eq!(accept_language_lines(&heads, "/browser-es"), ["accept-language: es"]);
+        assert!(accept_language_lines(&heads, "/plain-none").is_empty(), "the plain client sends none");
+        assert_eq!(
+            accept_language_lines(&heads, "/browser-none"),
+            accept_language_lines(&heads, "/browser-bare"),
+            "with none, the browser client sends only its emulation's own line"
+        );
     }
 
     #[test]
@@ -1227,6 +1325,11 @@ pub(crate) mod test_server {
     impl Served {
         pub(crate) fn count(&self) -> usize {
             self.heads.lock().expect("the request log").len()
+        }
+
+        /// The requests' heads, in the order they came.
+        pub(crate) fn heads(&self) -> Vec<String> {
+            self.heads.lock().expect("the request log").clone()
         }
 
         /// Which client made each request, in order.

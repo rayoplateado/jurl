@@ -76,6 +76,7 @@ pub(crate) fn http_client() -> Result<Client> {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/",
             env!("CARGO_PKG_VERSION")
         ))
+        .default_headers(fetch::language_headers())
         .timeout(HTTP_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .build()?)
