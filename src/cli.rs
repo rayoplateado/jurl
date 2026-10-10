@@ -44,7 +44,7 @@ pub(crate) struct Args {
     /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text, or unfilled template placeholders)
     #[arg(short, long)]
     pub(crate) render: bool,
-    /// Don't ask a page that answers 403 or 503 again with a browser's TLS fingerprint (JURL_NO_BROWSER_RETRY does the same)
+    /// Don't ask a page that answers 202, 403 or 503 again with a browser's TLS fingerprint (JURL_NO_BROWSER_RETRY does the same)
     #[arg(long)]
     pub(crate) no_browser_retry: bool,
     /// What the run may read, set from the start URL once it is known (see `reach.rs`). Not a flag.

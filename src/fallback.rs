@@ -1,5 +1,5 @@
 //! Rung 3 of the read ladder: a residential fallback proxy, used only for a host that refused the direct clients in this run
-//! with HTTP 401, 403 or 429 (or from its first request under `JURL_PROXY_FIRST=1`).
+//! with HTTP 202, 401, 403 or 429 (or from its first request under `JURL_PROXY_FIRST=1`).
 //!
 //! The credential is `JURL_FALLBACK_PROXY=http://user:pass@host:port`. jurl does not print it: a `-t` line names the host only,
 //! and an error from a request through the proxy has the URL and credential taken out of it (see [`Fallback::scrubbed`]).
@@ -246,9 +246,12 @@ fn proxy_first(get: &impl Fn(&str) -> Option<String>) -> bool {
 }
 
 /// Whether a refusal with `status` puts a host on the proxy. Decided on the status alone (the project's no-ad-hoc-heuristics
-/// rule).
+/// rule). A 202 Accepted is included: it is no page (RFC 9110 §15.3.3), so it is refused as a 403 is.
 pub(crate) fn refused_enough(status: StatusCode) -> bool {
-    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS)
+    matches!(
+        status,
+        StatusCode::ACCEPTED | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS
+    )
 }
 
 /// The trace line that says a host is on the proxy. It names the host only, never the URL.
@@ -308,7 +311,8 @@ mod tests {
     }
 
     #[test]
-    fn statuses_that_switch_are_401_403_429() {
+    fn statuses_that_switch_are_202_401_403_429() {
+        assert!(refused_enough(StatusCode::ACCEPTED));
         assert!(refused_enough(StatusCode::UNAUTHORIZED));
         assert!(refused_enough(StatusCode::FORBIDDEN));
         assert!(refused_enough(StatusCode::TOO_MANY_REQUESTS));

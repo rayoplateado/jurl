@@ -206,8 +206,8 @@ pub(crate) fn host_key(url: &Url) -> Option<String> {
 /// The page at `url`. When the normal client is refused and the retry is on, the same URL is asked once more by the
 /// browser client, whose TLS and HTTP/2 fingerprint some bot protection accepts where it refuses the normal client. A host
 /// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried. A page that a host
-/// refuses with 401, 403 or 429 is read again through the fallback proxy, when the run has one (rung 3), and a page still refused
-/// with 401, 403 or 429 is last asked of the stealth sidecar, when the run has one (see `refused_page`).
+/// refuses with 202, 401, 403 or 429 is read again through the fallback proxy, when the run has one (rung 3), and a page still
+/// refused with 202, 401, 403 or 429 is last asked of the stealth sidecar, when the run has one (see `refused_page`).
 pub(crate) async fn fetch(url: &str, retry: Retry<'_>) -> Result<Page> {
     fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
 }
@@ -218,14 +218,22 @@ pub(crate) fn browser_retry_allowed(flag: bool, env_set: bool) -> bool {
     !flag && !env_set
 }
 
-/// The refusals that get the retry. A 403 always does. A 503 does unless it carries a Retry-After, in either form: that is
-/// maintenance or backoff, which is respected as a 429 is. A 429 never does.
+/// The refusals that get the retry. A 403 always does, and so does a 202 Accepted, which is no page (see [`gave_page`]). A 503
+/// does unless it carries a Retry-After, in either form: that is maintenance or backoff, which is respected as a 429 is. A 429
+/// never does.
 fn retried(status: StatusCode, retry_after: bool) -> bool {
     match status {
-        StatusCode::FORBIDDEN => true,
+        StatusCode::FORBIDDEN | StatusCode::ACCEPTED => true,
         StatusCode::SERVICE_UNAVAILABLE => !retry_after,
         _ => false,
     }
+}
+
+/// Whether a reply with `status` gave what a GET asked for: a 2xx other than 202 Accepted. A 202 means the request was accepted
+/// for processing, which is not complete (RFC 9110 §15.3.3), so a GET answered 202 has not been served. It is a refusal, and
+/// climbs the ladder as a 403 does.
+fn gave_page(status: StatusCode) -> bool {
+    status.is_success() && status != StatusCode::ACCEPTED
 }
 
 /// What the error of a refusal says about the client that refused, when it says anything.
@@ -273,7 +281,7 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
     };
     // A success from the browser client means it got past the bot check: the host is on the client from now on.
     if let Some(parsed) = &parsed
-        && res.status().is_success()
+        && gave_page(res.status())
     {
         retry.learn(parsed, now);
     }
@@ -285,7 +293,7 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
 }
 
 /// What a page that a host refused is answered with, once the direct clients (and the browser client's retry, where it
-/// applies) have refused it. A direct refusal with 401, 403 or 429 puts the page's host on the fallback proxy, and the page is
+/// applies) have refused it. A direct refusal with 202, 401, 403 or 429 puts the page's host on the fallback proxy, and the page is
 /// read again through it (rung 3): that is the host's switch, said on stderr under `-t`. A refusal through the proxy, or one
 /// that does not switch a host, goes to the sidecar (rung 5) and else stands as the error (see `sidecar_or_error`).
 async fn refused_page(url: &str, refused: Refusal, via: Option<&str>, max: usize, retry: Retry<'_>) -> Result<Page> {
@@ -317,7 +325,7 @@ fn switch_why(status: StatusCode, via: Option<&str>) -> String {
     format!("{} from {from}", status.as_u16())
 }
 
-/// The stealth sidecar's answer to a refused page (rung 5), or else the refusal as the error. Only 401, 403 and 429 are asked of
+/// The stealth sidecar's answer to a refused page (rung 5), or else the refusal as the error. Only 202, 401, 403 and 429 are asked of
 /// the sidecar (see [`stealth::asked_for`]), and a run with no sidecar never asks.
 async fn sidecar_or_error(
     url: &str,
@@ -353,7 +361,7 @@ pub(crate) async fn refused_render(
 
 /// A small text file (robots.txt, llms.txt, a sitemap) at `url`, or None. It follows the retry rule for pages, with the same
 /// memo: a host on the browser client is read from there alone; otherwise the plain client is asked first, and a refusal the
-/// rule retries (a 403, or a 503 without a Retry-After) is asked once more of the browser client, whose success teaches the
+/// rule retries (a 403, a 202, or a 503 without a Retry-After) is asked once more of the browser client, whose success teaches the
 /// host. Its body is decoded as a page is; which bodies count as the site's file is for the caller to say. It never asks the
 /// stealth sidecar: rung 5 is for pages, and these files are not pages. A host on the fallback proxy has its files read through
 /// it, as its pages are, and a refused file does not put a host on the proxy: only a refused page does (see `refused_page`).
@@ -381,7 +389,7 @@ pub(crate) async fn fetch_small(
         Err(_) => return None,
     };
     let status = res.status();
-    if status.is_success() {
+    if gave_page(status) {
         let content_type =
             res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
         let bytes = read_capped(&mut res, max).await.ok().flatten()?;
@@ -398,7 +406,7 @@ pub(crate) async fn fetch_small(
         Err(e) if e.downcast_ref::<NotPublic>().is_some() => return small_refused(url, retry.timing),
         Err(_) => return None,
     };
-    if res.status().is_success() {
+    if gave_page(res.status()) {
         retry.learn(url, now);
     }
     small_from_browser(res, max, retry).await
@@ -415,7 +423,7 @@ fn small_refused(url: &Url, timing: bool) -> Option<String> {
 /// The body of a small file from a browser client's reply: decoded as a page is, or None on a refusal or a body larger than
 /// `max`.
 async fn small_from_browser(res: wreq::Response, max: usize, retry: Retry<'_>) -> Option<String> {
-    if !res.status().is_success() {
+    if !gave_page(res.status()) {
         return None;
     }
     let content_type =
@@ -428,7 +436,7 @@ async fn small_from_browser(res: wreq::Response, max: usize, retry: Retry<'_>) -
 /// What a request for a page came back with: the page, or the refusal to give one.
 enum Reply {
     Page {
-        // Only the bench reports it: a page is read whatever its 2xx status.
+        // Only the bench reports it: a page is read whatever its 2xx status, but 202 (see `gave_page`).
         #[cfg_attr(not(test), allow(dead_code))]
         status: StatusCode,
         page: Page,
@@ -494,7 +502,7 @@ async fn get(client: &Client, url: &str, max: usize, retry: Retry<'_>) -> Result
         send_get(client, url, retry, &[("accept", "text/markdown, text/html;q=0.9, */*;q=0.5".to_string())], None)
             .await?;
     let status = res.status();
-    if !status.is_success() {
+    if !gave_page(status) {
         crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
         let retry_after = res.headers().get(header::RETRY_AFTER).map(retry_after_text);
         return Ok(Reply::Refused(Refusal { status, retry_after, via_proxy }));
@@ -532,7 +540,7 @@ async fn browser_send(url: &str, retry: Retry<'_>) -> Result<wreq::Response> {
 /// The browser client's reply to `url`: the page, or the refusal. A reply that cannot be read is an error.
 async fn browser_reply(res: wreq::Response, url: &str, max: usize, retry: Retry<'_>) -> Result<Reply> {
     let status = res.status();
-    if !status.is_success() {
+    if !gave_page(status) {
         let retry_after = res.headers().get(wreq::header::RETRY_AFTER).map(retry_after_text);
         return Ok(Reply::Refused(Refusal { status, retry_after, via_proxy: false }));
     }
@@ -820,7 +828,7 @@ pub(crate) async fn image_bytes(page: &Url, url: &Url, retry: Retry<'_>, max: us
         Err(_) => return Err(ImageRefused(refused.error(url.as_str(), None).to_string()).into()),
     };
     // A success from the browser client means it got past the bot check: the host is on the browser client from now on.
-    if res.status().is_success() {
+    if gave_page(res.status()) {
         retry.learn(url, now);
     }
     browser_image(res, url, max, VIA_BROWSER_TOO, retry).await
@@ -1039,7 +1047,7 @@ async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url
     let ct = res.headers().get(header::CONTENT_TYPE)?.to_str().ok()?;
     let html = ct.starts_with("text/html") || ct.starts_with("application/xhtml+xml");
     let same_host = res.url().host_str() == url.host_str();
-    (res.status().is_success() && html && same_host).then(|| res.url().clone())
+    (gave_page(res.status()) && html && same_host).then(|| res.url().clone())
 }
 
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.
@@ -1301,6 +1309,18 @@ mod tests {
     }
 
     #[test]
+    fn a_202_is_no_page_and_is_retried_as_a_403_is() {
+        assert!(!gave_page(StatusCode::ACCEPTED));
+        for code in [200, 203, 204, 206] {
+            assert!(gave_page(StatusCode::from_u16(code).unwrap()), "{code} gave no page");
+        }
+        assert!(retried(StatusCode::ACCEPTED, false));
+        assert!(retried(StatusCode::ACCEPTED, true), "a 202 is retried whatever its Retry-After, as a 403 is");
+        assert!(!retried(StatusCode::NOT_FOUND, false));
+        assert!(!retried(StatusCode::SERVICE_UNAVAILABLE, true));
+    }
+
+    #[test]
     fn the_retry_is_on_unless_the_run_or_the_environment_opts_out() {
         assert!(browser_retry_allowed(false, false));
         assert!(!browser_retry_allowed(true, false));
@@ -1311,6 +1331,22 @@ mod tests {
     async fn a_403_is_asked_again_with_a_browser_fingerprint_and_read() {
         let (url, served) = serve_replies(vec![
             Some(reply("403 Forbidden", "", b"")),
+            Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Hello, page.</p>")),
+        ]);
+        let memo = Memo::default();
+        let now = Instant::now();
+        let page = fetch_capped(&url, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.body, "<p>Hello, page.</p>");
+        assert!(page.via_browser());
+        assert!(memo.on_browser(&host_of(&url), now), "the host is learned");
+        assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
+    }
+
+    #[tokio::test]
+    async fn a_202_page_is_asked_again_with_a_browser_fingerprint_and_the_browser_page_is_read() {
+        // Accepted for processing is not served (RFC 9110 §15.3.3): an empty 202 is asked again as a 403 is.
+        let (url, served) = serve_replies(vec![
+            Some(reply("202 Accepted", "", b"")),
             Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Hello, page.</p>")),
         ]);
         let memo = Memo::default();
@@ -1406,6 +1442,27 @@ mod tests {
         let err = fetch_capped(&url, PAGE_MAX, retry_off(), Instant::now()).await.err().expect("refused");
         assert!(format!("{err:#}").ends_with("returned HTTP 403 Forbidden"), "{err:#}");
         assert_eq!(served.kinds(), [Kind::Plain]);
+    }
+
+    #[tokio::test]
+    async fn a_202_that_stands_is_an_error_that_ends_with_its_status_as_any_refusal_does() {
+        let (url, served) = serve_replies(vec![Some(reply("202 Accepted", "", b""))]);
+        let err = fetch_capped(&url, PAGE_MAX, retry_off(), Instant::now()).await.err().expect("refused");
+        assert!(format!("{err:#}").ends_with("returned HTTP 202 Accepted"), "{err:#}");
+        assert_eq!(served.kinds(), [Kind::Plain]);
+
+        // Both clients answer 202: the error says the browser's answer too, and a 202 from the browser teaches the host nothing.
+        let (url, served) =
+            serve_replies(vec![Some(reply("202 Accepted", "", b"")), Some(reply("202 Accepted", "", b""))]);
+        let memo = Memo::default();
+        let now = Instant::now();
+        let err = fetch_capped(&url, PAGE_MAX, retry_on(&memo), now).await.err().expect("refused");
+        assert!(
+            format!("{err:#}").ends_with("returned HTTP 202 Accepted (also with a browser's TLS fingerprint)"),
+            "{err:#}"
+        );
+        assert_eq!(served.count(), 2);
+        assert!(!memo.on_browser(&host_of(&url), now), "a 202 from the browser client does not teach the host");
     }
 
     #[tokio::test]
@@ -1611,6 +1668,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_202_small_file_is_asked_again_with_a_browser_fingerprint_and_read() {
+        let (base, served) = serve_by_client(
+            reply("202 Accepted", "", b""),
+            reply("200 OK", "Content-Type: text/xml\r\n", b"<urlset/>"),
+        );
+        let memo = Memo::default();
+        let body = fetch_small(&file_at(&base, "/sitemap.xml"), PAGE_MAX, WAIT, retry_on(&memo), Instant::now()).await;
+        assert_eq!(body.as_deref(), Some("<urlset/>"));
+        assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
+    }
+
+    #[tokio::test]
+    async fn a_202_small_file_that_no_client_serves_is_no_file_and_not_an_empty_one() {
+        let (base, served) = serve_by_client(reply("202 Accepted", "", b""), reply("202 Accepted", "", b""));
+        let memo = Memo::default();
+        let now = Instant::now();
+        let body = fetch_small(&file_at(&base, "/sitemap.xml"), PAGE_MAX, WAIT, retry_on(&memo), now).await;
+        assert_eq!(body, None, "an empty 202 was read as an empty file");
+        assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
+        assert!(!memo.on_browser(&host_of(&base), now), "a refused file does not teach the host");
+    }
+
+    #[tokio::test]
     async fn with_the_retry_off_a_small_file_refused_on_the_plain_client_is_not_retried() {
         let (base, served) = serve_by_client(reply("403 Forbidden", "", b""), reply("200 OK", "", b"never"));
         let memo = Memo::default();
@@ -1794,6 +1874,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_twin_answered_202_is_not_named_as_the_html_page() {
+        // `/docs/a`'s HTML twin answers 202 Accepted with an HTML type and no body: it has not been served, so it is no twin.
+        let (base, _) = serve_routed(|head| {
+            let path = head.split_whitespace().nth(1).unwrap_or_default();
+            Some(match path {
+                "/docs/a.md" => reply("200 OK", "Content-Type: text/markdown\r\n", b"# A\n"),
+                "/docs/a" => reply("202 Accepted", "Content-Type: text/html\r\n", b""),
+                _ => reply("404 Not Found", "", b""),
+            })
+        });
+        let url = format!("{base}/docs/a.md");
+        let page = fetch(&url, retry_off()).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.url.as_str(), url);
+    }
+
+    #[tokio::test]
     async fn a_canonical_link_names_the_html_page() {
         let base = twin_site(vec![
             ("/docs/one", "text/markdown", "Link: </docs/canon>; rel=\"canonical\"\r\n", "# One\n"),
@@ -1904,6 +2000,33 @@ mod tests {
         assert_eq!(bytes, b"PNG");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
         assert!(memo.on_browser(&host_of(&base), now), "the host is learned, as a page's retry teaches it");
+    }
+
+    #[tokio::test]
+    async fn a_202_from_the_browser_client_for_an_image_teaches_the_host_nothing() {
+        let (base, served) = serve_routed(|head| {
+            Some(if head.contains("Chrome/") {
+                reply("202 Accepted", "", b"")
+            } else {
+                reply("403 Forbidden", "", b"")
+            })
+        });
+        let image = Url::parse(&format!("{base}/photo.png")).expect("a URL");
+        let memo = Memo::default();
+        let now = Instant::now();
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &PRIVATE,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
+        // What the browser's 202 makes of the image is not the point here: the host is not taught by it.
+        let _ = image_bytes(&image, &image, retry, PAGE_MAX).await;
+        assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
+        assert!(!memo.on_browser(&host_of(&base), now), "a 202 from the browser client does not teach the host");
     }
 
     #[tokio::test]
@@ -2108,6 +2231,25 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(page.route, Route::Proxy);
         assert_eq!(site_served.count(), 1, "a 429 is not retried with the browser: only the plain request was made");
+    }
+
+    #[tokio::test]
+    async fn a_202_from_direct_and_browser_puts_the_host_on_the_proxy_as_a_403_does() {
+        let (site, site_served) = refusing_site("202 Accepted");
+        let (proxy, _) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let page = fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Proxy);
+        assert_eq!(page.body, "<p>Via the proxy</p>");
+        assert_eq!(
+            site_served.kinds(),
+            [Kind::Plain, Kind::Browser],
+            "the site: plain, then with the browser's fingerprint"
+        );
+        assert_eq!(fallback.hosts(), [name_of(&site)]);
     }
 
     #[tokio::test]
