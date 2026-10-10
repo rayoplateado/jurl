@@ -128,7 +128,8 @@ impl std::error::Error for OtherLanguage {}
 /// The primary language subtag of a declared language (BCP 47): the part before the first `-`, lowercased, so
 /// `es-ES` is `es`. None when there is none.
 fn primary_subtag(tag: &str) -> Option<String> {
-    let primary = tag.split('-').next()?.to_ascii_lowercase();
+    // BCP 47 separates subtags with '-'; some pages write '_' (zh_CN), as POSIX locales do.
+    let primary = tag.split(['-', '_']).next()?.to_ascii_lowercase();
     (!primary.is_empty()).then_some(primary)
 }
 
@@ -1967,6 +1968,7 @@ mod tests {
         assert_eq!(other_language(Some("es"), None), None);
         assert_eq!(other_language(None, Some("zh-CN")), None);
         assert_eq!(other_language(Some(""), Some("zh")), None);
+        assert_eq!(primary_subtag("zh_CN").as_deref(), Some("zh"), "an underscore separates a subtag too");
     }
 
     /// A site at a loopback server: each path is given its file, with `{host}` in it replaced by the request's own host
