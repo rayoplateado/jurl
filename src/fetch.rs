@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
+    fmt,
     path::Path,
     process::Stdio,
     sync::{LazyLock, Mutex, MutexGuard, PoisonError, atomic::Ordering::Relaxed},
@@ -231,6 +232,8 @@ fn retried(status: StatusCode, retry_after: bool) -> bool {
 const VIA_BROWSER: &str = "with a browser's TLS fingerprint";
 const VIA_BROWSER_TOO: &str = "also with a browser's TLS fingerprint";
 const VIA_PROXY: &str = "through the proxy";
+/// The same for a page Lightpanda's render was refused (see [`refused_render`]).
+const VIA_RENDER: &str = "when rendered";
 
 /// `fetch`, refusing a page larger than `max` bytes, and judging the host's memo as of `now`.
 async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> Result<Page> {
@@ -308,6 +311,7 @@ fn switch_why(status: StatusCode, via: Option<&str>) -> String {
     let from = match via {
         Some(VIA_BROWSER) => "browser",
         Some(VIA_BROWSER_TOO) => "direct and browser",
+        Some(VIA_RENDER) => "render",
         _ => "direct",
     };
     format!("{} from {from}", status.as_u16())
@@ -330,6 +334,21 @@ async fn sidecar_or_error(
         return Ok(Page { url: target, body, is_markdown: false, route: Route::Stealth });
     }
     Err(refused.error(url, via))
+}
+
+/// The page a render of `url` gives when its host refused the render with `status` (see [`RenderRefused`]). It is answered as a
+/// refused fetch is (see `refused_page`): the page the fallback proxy gives it (rung 3), when the host is not on the proxy yet; else
+/// the stealth sidecar's page (rung 5); else the refusal as the error. A render whose host is on the proxy already went through it,
+/// so only the sidecar is left for it.
+pub(crate) async fn refused_render(
+    url: &Url,
+    status: StatusCode,
+    retry_after: Option<String>,
+    retry: Retry<'_>,
+) -> Result<Page> {
+    let via_proxy = retry.fallback.uses(url);
+    let refused = Refusal { status, retry_after, via_proxy };
+    refused_page(url.as_str(), refused, Some(VIA_RENDER), PAGE_MAX, retry).await
 }
 
 /// A small text file (robots.txt, llms.txt, a sitemap) at `url`, or None. It follows the retry rule for pages, with the same
@@ -439,6 +458,29 @@ impl Refusal {
         }
     }
 }
+
+/// An HTTP error status that a render (Lightpanda's, see [`render`]) came back with, for the page at `url`, with its Retry-After
+/// when it has one. A 401, 403 or 429 is a refusal of the page, which climbs the ladder as a refused fetch does (see
+/// [`refused_render`]); the other error statuses stay the render's own error.
+#[derive(Debug)]
+pub(crate) struct RenderRefused {
+    pub(crate) url: String,
+    pub(crate) status: StatusCode,
+    pub(crate) retry_after: Option<String>,
+}
+
+impl fmt::Display for RenderRefused {
+    /// The message a render has always had: the URL, the status as a number, and the Retry-After in brackets.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} returned HTTP {}", self.url, self.status.as_u16())?;
+        match &self.retry_after {
+            Some(retry) => write!(f, " (retry after {retry})"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for RenderRefused {}
 
 /// A Retry-After header's value as text. A value that is not text is kept, lossily: the header is there either way.
 fn retry_after_text(value: &header::HeaderValue) -> String {
@@ -1004,7 +1046,8 @@ async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url
 /// Waits for the network to settle and for real visible text to appear, capped at 8s:
 /// SPAs keep background traffic going and often paint content after the network calms down.
 /// A host on the fallback proxy is rendered through it: Lightpanda is given the proxy, and every request of the render goes
-/// through it, the page's scripts and images included (see the README). An error of such a render is scrubbed of the proxy.
+/// through it, the page's scripts and images included (see the README). An error of such a render is scrubbed of the proxy, except
+/// a [`RenderRefused`], whose message names no proxy (see `Fallback::scrubbed`).
 pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> {
     let proxy = fallback.lightpanda_args(url);
     let proxied = !proxy.is_empty();
@@ -1033,19 +1076,29 @@ async fn dom_of(bin: &Path, url: &Url, proxy: &[String]) -> Result<String> {
         .await
         .context("lightpanda timed out")?
         .with_context(|| format!("running {}", bin.display()))?;
-    // --json wraps the dump with the page's HTTP status and headers, so a 429 fails here too.
-    let v: Value = serde_json::from_slice(&out.stdout)
-        .with_context(|| format!("lightpanda rendered nothing for {url} (exit {})", out.status))?;
+    dom_from_json(url, &out.stdout, out.status)
+}
+
+/// The DOM in Lightpanda's `--json` output for `url`, whose process ended with `exit` (said in the error when there is no
+/// output). The output wraps the dump with the page's HTTP status and headers, so a 429 fails here too: an error status is a
+/// [`RenderRefused`], and whether a host refused it is for the status alone to say (see `load`).
+fn dom_from_json(url: &Url, stdout: &[u8], exit: impl fmt::Display) -> Result<String> {
+    let v: Value = serde_json::from_slice(stdout)
+        .with_context(|| format!("lightpanda rendered nothing for {url} (exit {exit})"))?;
     let status = v["http_status"].as_u64().unwrap_or(0);
     if status >= 400 {
-        let retry = v["headers"].as_array().into_iter().flatten().find_map(|h| {
+        let retry_after = v["headers"].as_array().into_iter().flatten().find_map(|h| {
             h["name"].as_str().filter(|n| n.eq_ignore_ascii_case("retry-after"))?;
             h["value"].as_str()
         });
-        match retry {
-            Some(r) => bail!("{url} returned HTTP {status} (retry after {r})"),
-            None => bail!("{url} returned HTTP {status}"),
-        }
+        // A number that is no HTTP status at all keeps the bare message.
+        let Some(code) = u16::try_from(status).ok().and_then(|s| StatusCode::from_u16(s).ok()) else {
+            let retry = retry_after.map(|r| format!(" (retry after {r})")).unwrap_or_default();
+            bail!("{url} returned HTTP {status}{retry}");
+        };
+        return Err(
+            RenderRefused { url: url.to_string(), status: code, retry_after: retry_after.map(str::to_string) }.into()
+        );
     }
     let body = v["content"].as_str().unwrap_or_default();
     if body.is_empty() {
@@ -2125,6 +2178,280 @@ mod tests {
         assert_eq!(side_seen.lock().unwrap().len(), 1, "the sidecar is asked once");
     }
 
+    /// A sidecar's answer with a page, as the stealth tests' answers are.
+    const SIDECAR_PAGE: &str = r#"{"outcome":"content","status":200,"html":"<html><body><p>Precio: 5 €</p></body></html>","text":"Precio: 5 €","title":"Tienda","reason":null,"wall_s":3.1,"robots":"allowed"}"#;
+
+    /// A stealth sidecar at `base`, set up as a run sets one up.
+    fn sidecar_at(base: &str) -> Sidecar {
+        Sidecar::configured(
+            |key| match key {
+                "JURL_STEALTH_URL" => Some(base.to_string()),
+                "JURL_STEALTH_TOKEN" => Some("s3cret-token".to_string()),
+                _ => None,
+            },
+            false,
+            false,
+            false,
+        )
+        .expect("a sidecar")
+    }
+
+    #[tokio::test]
+    async fn a_render_refused_with_403_puts_the_host_on_the_proxy_and_reads_the_page_through_it() {
+        let (site, site_served) = refusing_site("403 Forbidden");
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let url = Url::parse(&format!("{site}/precio")).expect("a URL");
+        let page = refused_render(&url, StatusCode::FORBIDDEN, None, proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Proxy);
+        assert_eq!(page.body, "<p>Via the proxy</p>");
+        assert_eq!(site_served.count(), 0, "the refused render is the answer: the site is not asked directly");
+        assert_eq!(proxy_served.count(), 1);
+        assert_eq!(fallback.hosts(), [name_of(&site)]);
+    }
+
+    #[tokio::test]
+    async fn a_render_refused_with_403_with_no_proxy_is_read_from_the_sidecar() {
+        let (site, site_served) = refusing_site("403 Forbidden");
+        let (side, side_seen) = crate::mock::serve(vec![(200, "", SIDECAR_PAGE)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        let retry = Retry { stealth: Some(&sidecar), ..proxied(&memo, &PRIVATE, &NO_FALLBACK) };
+        let url = Url::parse(&format!("{site}/precio")).expect("a URL");
+        let page = refused_render(&url, StatusCode::FORBIDDEN, None, retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Stealth);
+        assert!(page.body.contains("Precio: 5"), "{}", page.body);
+        assert_eq!(site_served.count(), 0);
+        assert_eq!(side_seen.lock().unwrap().len(), 1, "the sidecar is asked once");
+    }
+
+    #[tokio::test]
+    async fn a_render_refused_with_403_with_neither_a_proxy_nor_a_sidecar_stands_as_the_error() {
+        let (site, _) = refusing_site("403 Forbidden");
+        let memo = Memo::default();
+        let url = Url::parse(&format!("{site}/precio")).expect("a URL");
+        let err = refused_render(&url, StatusCode::FORBIDDEN, None, proxied(&memo, &PRIVATE, &NO_FALLBACK))
+            .await
+            .err()
+            .expect("refused");
+        assert_eq!(format!("{err:#}"), format!("{url} returned HTTP 403 Forbidden (when rendered)"));
+    }
+
+    #[tokio::test]
+    async fn a_render_refused_through_the_proxy_goes_to_the_sidecar_and_not_to_the_proxy_again() {
+        let (site, _) = refusing_site("403 Forbidden");
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        let (side, side_seen) = crate::mock::serve(vec![(200, "", SIDECAR_PAGE)]);
+        let sidecar = sidecar_at(&side);
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let url = Url::parse(&format!("{site}/precio")).expect("a URL");
+        // The render went through the proxy: its host is on it already.
+        fallback.put_on_proxy(&url, "403 from direct", false);
+        let memo = Memo::default();
+        let retry = Retry { stealth: Some(&sidecar), ..proxied(&memo, &PRIVATE, &fallback) };
+        let page = refused_render(&url, StatusCode::FORBIDDEN, None, retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Stealth);
+        assert_eq!(proxy_served.count(), 0, "a refusal that came through the proxy is not sent to it again");
+        assert_eq!(side_seen.lock().unwrap().len(), 1);
+    }
+
+    /// A page a JavaScript app serves: its script and an empty mount point, and no text.
+    #[cfg(unix)]
+    const APP_SHELL: &str = r#"<html><body><div id="root"></div><script src="/app.js"></script></body></html>"#;
+    /// A page the server rendered: text and no script, so it is read as it is.
+    #[cfg(unix)]
+    const SERVER_PAGE: &str =
+        "<html><body><p>Precio y envío a domicilio: el envío es gratis a partir de cien euros.</p></body></html>";
+    /// A stand-in Lightpanda that renders through the proxy (a `--http-proxy` argument) and refuses a direct render with 403.
+    #[cfg(unix)]
+    const RENDERS_THROUGH_PROXY: &str = r#"case "$*" in *--http-proxy*) printf '%s' '{"http_status":200,"headers":[],"content":"<html><body><p>Rendered through the proxy.</p></body></html>"}' ;; *) printf '%s' '{"http_status":403,"headers":[],"content":""}' ;; esac"#;
+    /// A stand-in Lightpanda that refuses every render with 403.
+    #[cfg(unix)]
+    const REFUSES_EVERY_RENDER: &str = r#"printf '%s' '{"http_status":403,"headers":[],"content":""}'"#;
+    /// A stand-in Lightpanda whose render fails with 500.
+    #[cfg(unix)]
+    const FAILS_WITH_500: &str = r#"printf '%s' '{"http_status":500,"headers":[],"content":""}'"#;
+
+    /// A stand-in Lightpanda: an executable shell script running `script`, in a directory of its own named for `test`. Returns its
+    /// path, whose directory the test removes when it is done.
+    #[cfg(unix)]
+    fn stand_in(test: &str, script: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("jurl-render-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a test directory");
+        let bin = dir.join("lightpanda");
+        std::fs::write(&bin, format!("#!/bin/sh\n{script}\n")).expect("the stand-in");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        bin
+    }
+
+    /// A site that serves the app shell at every path, and what it was sent.
+    #[cfg(unix)]
+    fn shell_site() -> (String, test_server::Served) {
+        serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", APP_SHELL.as_bytes())))
+    }
+
+    /// `load` on `page` as a run with these settings reads it: `--render` when `render`, the fallback proxy at the test server
+    /// `proxy`, the stealth sidecar `sidecar`, and a stand-in Lightpanda that runs `script`.
+    #[cfg(unix)]
+    async fn load_as_a_run(
+        test: &str,
+        page: &str,
+        render: bool,
+        proxy: Option<&str>,
+        sidecar: Option<Sidecar>,
+        script: &str,
+    ) -> Result<(Url, crate::extract::Extracted, Served)> {
+        use clap::Parser;
+        let bin = stand_in(test, script);
+        let mut args = crate::cli::Args::parse_from(["jurl", page]);
+        args.render = render;
+        let proxy = proxy.map(proxy_url);
+        args.fallback = Fallback::with(proxy.as_deref(), false);
+        args.stealth = sidecar;
+        let cfg = crate::config::Config::with(&[("JURL_LIGHTPANDA", bin.to_str().expect("a path"))]);
+        let target = Url::parse(page).expect("a URL");
+        let mut t = crate::timing::Timer::new();
+        let read = crate::load(&args, &cfg, &target, &mut t).await;
+        let _ = std::fs::remove_dir_all(bin.parent().expect("a directory"));
+        read
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_render_refused_with_403_reads_the_page_through_the_proxy_the_host_goes_on() {
+        let (site, site_served) = shell_site();
+        let (proxy, proxy_served) = proxy_answering(SERVER_PAGE.as_bytes());
+        let (_, ex, served) = load_as_a_run(
+            "render-proxy-read",
+            &format!("{site}/precio"),
+            false,
+            Some(&proxy),
+            None,
+            RENDERS_THROUGH_PROXY,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(served.name(), "proxy", "the proxy's page is not a shell, so it is read as it is");
+        assert!(ex.blocks.iter().any(|b| b.text.contains("Precio y envío")), "the proxy's page is what is read");
+        assert_eq!(site_served.count(), 1, "the site is asked once: its refused render is not asked again");
+        assert_eq!(proxy_served.count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_proxy_page_that_is_still_an_app_shell_is_rendered_once_more_through_the_proxy() {
+        let (site, _) = shell_site();
+        let (proxy, proxy_served) = proxy_answering(APP_SHELL.as_bytes());
+        let (_, ex, served) = load_as_a_run(
+            "render-proxy-twice",
+            &format!("{site}/precio"),
+            false,
+            Some(&proxy),
+            None,
+            RENDERS_THROUGH_PROXY,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(served.name(), "proxy+render");
+        assert!(ex.blocks.iter().any(|b| b.text.contains("Rendered through the proxy.")), "the render is what is read");
+        assert_eq!(proxy_served.count(), 1, "the proxy is asked for the page once; its render goes through it");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_proxy_page_refused_again_by_its_render_goes_to_the_sidecar() {
+        let (site, site_served) = shell_site();
+        let (proxy, proxy_served) = proxy_answering(APP_SHELL.as_bytes());
+        let (side, side_seen) = crate::mock::serve(vec![(200, "", SIDECAR_PAGE)]);
+        let (_, ex, served) = load_as_a_run(
+            "render-proxy-sidecar",
+            &format!("{site}/precio"),
+            false,
+            Some(&proxy),
+            Some(sidecar_at(&side)),
+            REFUSES_EVERY_RENDER,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(served.name(), "stealth", "the sidecar's HTML is read, and not rendered again");
+        assert!(ex.blocks.iter().any(|b| b.text.contains("Precio: 5")));
+        assert_eq!(side_seen.lock().unwrap().len(), 1, "the sidecar is asked once");
+        assert_eq!(proxy_served.count(), 1);
+        assert_eq!(site_served.count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_render_refused_with_403_without_a_proxy_is_read_from_the_sidecar() {
+        let (site, site_served) = shell_site();
+        let (side, side_seen) = crate::mock::serve(vec![(200, "", SIDECAR_PAGE)]);
+        let (_, ex, served) = load_as_a_run(
+            "render-sidecar",
+            &format!("{site}/precio"),
+            false,
+            None,
+            Some(sidecar_at(&side)),
+            REFUSES_EVERY_RENDER,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(served.name(), "stealth");
+        assert!(ex.blocks.iter().any(|b| b.text.contains("Precio: 5")));
+        assert_eq!(side_seen.lock().unwrap().len(), 1);
+        assert_eq!(site_served.count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_render_refused_with_403_with_neither_a_proxy_nor_a_sidecar_is_the_error_for_an_app_shell() {
+        let (site, _) = shell_site();
+        let url = format!("{site}/precio");
+        let err = load_as_a_run("render-refused", &url, false, None, None, REFUSES_EVERY_RENDER)
+            .await
+            .err()
+            .expect("refused");
+        assert_eq!(format!("{err:#}"), format!("{url} returned HTTP 403 Forbidden (when rendered)"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_render_that_fails_with_another_status_is_the_error_it_was_and_no_host_goes_on_the_proxy() {
+        let (site, _) = shell_site();
+        let (proxy, proxy_served) = proxy_answering(SERVER_PAGE.as_bytes());
+        let url = format!("{site}/precio");
+        let err = load_as_a_run("render-500", &url, false, Some(&proxy), None, FAILS_WITH_500)
+            .await
+            .err()
+            .expect("the render fails");
+        assert_eq!(format!("{err:#}"), format!("{url} returned HTTP 500"));
+        assert_eq!(proxy_served.count(), 0, "a 500 is not a refusal: the host is not put on the proxy");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_render_asked_for_and_refused_with_403_is_rendered_through_the_proxy_once_more() {
+        let (site, site_served) = shell_site();
+        let (proxy, proxy_served) = proxy_answering(SERVER_PAGE.as_bytes());
+        let (_, ex, served) = load_as_a_run(
+            "render-flag-proxy",
+            &format!("{site}/precio"),
+            true,
+            Some(&proxy),
+            None,
+            RENDERS_THROUGH_PROXY,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(served.name(), "proxy+render");
+        assert!(ex.blocks.iter().any(|b| b.text.contains("Rendered through the proxy.")));
+        assert_eq!(site_served.count(), 0, "--render renders the page first: the site is not asked directly");
+        assert_eq!(proxy_served.count(), 1);
+    }
+
     #[tokio::test]
     async fn a_public_run_refuses_a_private_target_before_the_proxy_is_asked() {
         let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
@@ -2357,6 +2684,55 @@ mod tests {
         assert!(text.contains("proxy"), "the proxy is named by its place-holder: {text}");
         assert_eq!(fallback.renders(), 1, "the render was counted as it started");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_render_that_comes_back_with_an_error_status_is_typed_and_says_it_as_a_fetch_does() {
+        let url = Url::parse("https://shop.example/p").expect("a URL");
+        let answer =
+            |status: u64, headers: Value| json!({"http_status": status, "headers": headers, "content": ""}).to_string();
+        let err = dom_from_json(&url, answer(403, json!([])).as_bytes(), "exit status: 0").expect_err("refused");
+        let refused = err.downcast_ref::<RenderRefused>().expect("a typed refusal");
+        assert_eq!(refused.status, StatusCode::FORBIDDEN);
+        assert_eq!(format!("{err:#}"), "https://shop.example/p returned HTTP 403");
+        let retry = json!([{"name": "Retry-After", "value": "60"}]);
+        let err = dom_from_json(&url, answer(429, retry).as_bytes(), "exit status: 0").expect_err("refused");
+        assert_eq!(format!("{err:#}"), "https://shop.example/p returned HTTP 429 (retry after 60)");
+        // A 500 is typed too, but it is not one of the refusals a host gets (see `load`).
+        let err = dom_from_json(&url, answer(500, json!([])).as_bytes(), "exit status: 0").expect_err("an error");
+        let status = err.downcast_ref::<RenderRefused>().expect("typed").status;
+        assert!(!fallback::refused_enough(status));
+        assert_eq!(format!("{err:#}"), "https://shop.example/p returned HTTP 500");
+        // A number that is no HTTP status keeps the bare message, with no type.
+        let err = dom_from_json(&url, answer(1000, json!([])).as_bytes(), "exit status: 0").expect_err("an error");
+        assert!(err.downcast_ref::<RenderRefused>().is_none());
+        assert_eq!(format!("{err:#}"), "https://shop.example/p returned HTTP 1000");
+        let dom = json!({"http_status": 200, "headers": [], "content": "<p>Hi</p>"}).to_string();
+        assert_eq!(dom_from_json(&url, dom.as_bytes(), "exit status: 0").expect("the DOM"), "<p>Hi</p>");
+        let empty = json!({"http_status": 200, "headers": [], "content": "", "error": "timeout"}).to_string();
+        let err = dom_from_json(&url, empty.as_bytes(), "exit status: 0").expect_err("nothing rendered");
+        assert_eq!(format!("{err:#}"), "lightpanda rendered nothing for https://shop.example/p (timeout)");
+    }
+
+    #[test]
+    fn a_render_refusal_switches_the_host_and_says_so_as_a_render() {
+        assert_eq!(switch_why(StatusCode::FORBIDDEN, Some(VIA_RENDER)), "403 from render");
+        assert_eq!(switch_why(StatusCode::TOO_MANY_REQUESTS, None), "429 from direct");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refused_render_through_the_proxy_keeps_its_type_and_shows_no_credential() {
+        let bin = stand_in("refused-render-scrub", REFUSES_EVERY_RENDER);
+        let fallback = Fallback::with(Some("http://jurlcred:s3cret-pw@proxy.test:8080"), true);
+        let url = Url::parse("http://93.184.216.34/precio").expect("a URL");
+        let err = render(&bin, &url, &fallback).await.err().expect("the stand-in refuses");
+        let _ = std::fs::remove_dir_all(bin.parent().expect("a directory"));
+        let text = format!("{err:#}");
+        assert!(!text.contains("s3cret-pw") && !text.contains("jurlcred"), "{text}");
+        let refused = err.downcast_ref::<RenderRefused>().expect("the refusal keeps its type");
+        assert_eq!(refused.status, StatusCode::FORBIDDEN);
+        assert_eq!(text, "http://93.184.216.34/precio returned HTTP 403");
     }
 
     #[tokio::test]

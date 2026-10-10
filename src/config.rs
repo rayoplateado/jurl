@@ -129,6 +129,14 @@ fn write_private(path: &Path, text: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+impl Config {
+    /// A config whose saved settings are `pairs`, for tests that run a render with a stand-in Lightpanda.
+    pub(crate) fn with(pairs: &[(&str, &str)]) -> Self {
+        Self { file: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

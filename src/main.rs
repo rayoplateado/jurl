@@ -32,6 +32,7 @@ mod vision;
 
 use std::{
     io::{stderr, stdout},
+    path::Path,
     process::ExitCode,
     time::Duration,
 };
@@ -278,13 +279,6 @@ async fn read(
     }
 }
 
-/// Whether a fetched page is rendered with Lightpanda afterwards: an app shell or a page with placeholders, unless the run
-/// already rendered it (`--render`) or the stealth sidecar served it. The sidecar's HTML is a browser's DOM after the scripts
-/// ran, and a render would ask again the host that refused the page.
-fn renders_after_fetch(render: bool, route: fetch::Route, shell: bool, placeholders: bool) -> bool {
-    !render && route != fetch::Route::Stealth && (shell || placeholders)
-}
-
 /// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images. Also says how the page was
 /// served, for the usage's `route`.
 pub(crate) async fn load(
@@ -293,79 +287,161 @@ pub(crate) async fn load(
     target: &url::Url,
     t: &mut Timer,
 ) -> Result<(url::Url, Extracted, fetch::Served)> {
-    let page = if args.render {
+    // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
+    let retry = fetch::Retry::for_run(
+        args.no_browser_retry,
+        args.timing,
+        &args.reach,
+        &args.cookies,
+        args.stealth.as_ref(),
+        &args.fallback,
+    );
+    let (page, served) = if args.render {
         fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
-        let page = fetch::render(&bin, target, &args.fallback).await?;
+        let rendered = render_or_refused(&bin, target, retry).await?;
         t.lap("render");
-        page
+        rendered
     } else {
-        // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
-        let retry = fetch::Retry::for_run(
-            args.no_browser_retry,
-            args.timing,
-            &args.reach,
-            &args.cookies,
-            args.stealth.as_ref(),
-            &args.fallback,
-        );
         let page = fetch::fetch(target.as_str(), retry).await?;
         t.lap("fetch");
         if page.via_browser() {
             decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        page
+        let served = fetch::Served { route: page.route, rendered: false };
+        (page, served)
     };
-    let mut served = fetch::Served { route: page.route, rendered: args.render };
-    // --precise may answer with the page's JSON-LD values (see `extract::json_ld`), read from the HTML that was extracted
-    // (the rendered one, when the page is rendered); they are added once the render decision is made.
-    let mut json_ld_html = (args.precise && !page.is_markdown).then(|| page.body.clone());
-    // Only HTML can carry placeholders: a markdown page has no script to have left them.
-    let (mut ex, placeholders) = if page.is_markdown {
+    decide::USAGE.pages.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let (page, served, mut ex) = read_page(args, cfg, retry, page, served, t).await?;
+    // --precise may answer with the page's JSON-LD values (see `extract::json_ld`), read from the HTML the page was read as.
+    if args.precise && !page.is_markdown {
+        extract::json_ld::add_to(&mut ex, &page.body);
+    }
+    Ok((page.url, ex, served))
+}
+
+/// Whether a page is rendered with Lightpanda after it is served: not when it is rendered already, nor when the stealth sidecar
+/// served it (its HTML is a browser's DOM after the scripts ran, and a render would ask again the host that refused the page).
+/// Otherwise a page is rendered when the run asks for it (`--render`), or when it is an app shell or has unfilled placeholders.
+fn renders_after_fetch(render: bool, served: fetch::Served, shell: bool, placeholders: bool) -> bool {
+    !served.rendered && served.route != fetch::Route::Stealth && (render || shell || placeholders)
+}
+
+/// The page's text cut into blocks, and whether its template placeholders are unfilled (see `extract::html_with_placeholders`).
+/// Only HTML can carry placeholders: a markdown page has no script to have left them, and a rendered page has had its scripts
+/// run already.
+fn extract_page(page: &fetch::Page, rendered: bool, t: &mut Timer) -> (Extracted, bool) {
+    let read = if page.is_markdown {
         (extract::markdown(&page.body, &page.url), false)
+    } else if rendered {
+        (extract::html(&page.body, &page.url), false)
     } else {
         extract::html_with_placeholders(&page.body, &page.url)
     };
     t.lap(if page.is_markdown { "extract(md)" } else { "extract" });
-    decide::USAGE.pages.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    read
+}
 
-    // A JS app with (almost) no server-rendered text, or a page whose script left template placeholders in its text
-    // (a long text is no proof that the script ran): render it instead of giving up.
+/// Whether the text of a page is an app shell with (almost) no text: it has nothing to read without its render.
+fn is_shell(ex: &Extracted) -> bool {
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
-    let shell = ex.app_shell && text < APP_SHELL_TEXT;
-    if renders_after_fetch(args.render, page.route, shell, placeholders) {
-        if let Err(e) = fetch::render_allowed(&page.url, &args.reach, args.public_only, args.render_sandboxed).await {
-            // An app shell has nothing to read without its render. A page with placeholders is readable as it is.
-            if shell {
-                return Err(e);
+    ex.app_shell && text < APP_SHELL_TEXT
+}
+
+/// Lightpanda's render of `url`. A render that the host refuses with 401, 403 or 429 climbs the rungs a refused fetch climbs
+/// (see `fetch::refused_render`): what comes back is the page the proxy gave, not rendered, or the sidecar's page. Any other
+/// error is the render's own.
+async fn render_or_refused(
+    bin: &Path,
+    url: &url::Url,
+    retry: fetch::Retry<'_>,
+) -> Result<(fetch::Page, fetch::Served)> {
+    let (page, rendered) = match fetch::render(bin, url, retry.fallback).await {
+        Ok(page) => (page, true),
+        Err(e) => match e.downcast::<fetch::RenderRefused>() {
+            Ok(refused) if fallback::refused_enough(refused.status) => {
+                (fetch::refused_render(url, refused.status, refused.retry_after, retry).await?, false)
             }
+            Ok(refused) => return Err(refused.into()),
+            Err(e) => return Err(e),
+        },
+    };
+    let served = fetch::Served { route: page.route, rendered };
+    Ok((page, served))
+}
+
+/// The render `read_page` asks for: the page as Lightpanda renders it, or as the rungs after a refused render give it (see
+/// `render_or_refused`). None when the page is read as it is. Without the run's permission to render, or without Lightpanda, the
+/// failure is said on stderr and the page is read as it is, unless the failure is the answer: the page is an app shell, which has
+/// no text without its render, or the run asked for the render (`--render`).
+async fn render_page(
+    args: &Args,
+    cfg: &Config,
+    retry: fetch::Retry<'_>,
+    page: &fetch::Page,
+    shell: bool,
+) -> Result<Option<(fetch::Page, fetch::Served)>> {
+    let answer = shell || args.render;
+    if let Err(e) = fetch::render_allowed(&page.url, &args.reach, args.public_only, args.render_sandboxed).await {
+        if answer {
+            return Err(e);
+        }
+        eprintln!("jurl: could not render the page, reading it as it is: {e:#}");
+        return Ok(None);
+    }
+    let bin = match lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await {
+        Ok(bin) => bin,
+        Err(e) if args.render => return Err(e),
+        Err(e) => {
+            eprintln!("jurl: {e:#}");
+            return Ok(None);
+        }
+    };
+    if !args.render {
+        let why = if shell { "no text without JavaScript" } else { "unfilled template placeholders in the text" };
+        eprintln!("jurl: {why}, rendering with Lightpanda…");
+    }
+    // A page the proxy gave is rendered through the proxy, so its host has to be on it: a redirect of its request may have
+    // taken it to a host that is not yet (see `fetch::send_get`). Then a refusal of that render goes to the sidecar, not back
+    // to the proxy.
+    if page.route == fetch::Route::Proxy {
+        retry.fallback.put_on_proxy(&page.url, "its page came through the proxy", retry.timing);
+    }
+    match render_or_refused(&bin, &page.url, retry).await {
+        Ok(rendered) => Ok(Some(rendered)),
+        Err(e) if answer => Err(e),
+        Err(e) => {
             eprintln!("jurl: could not render the page, reading it as it is: {e:#}");
-        } else {
-            match lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await {
-                Ok(bin) => {
-                    let why =
-                        if shell { "no text without JavaScript" } else { "unfilled template placeholders in the text" };
-                    eprintln!("jurl: {why}, rendering with Lightpanda…");
-                    match fetch::render(&bin, &page.url, &args.fallback).await {
-                        Ok(rendered) => {
-                            ex = extract::html(&rendered.body, &rendered.url);
-                            served.rendered = true;
-                            json_ld_html = args.precise.then(|| rendered.body.clone());
-                            t.lap("render");
-                        }
-                        // An app shell has nothing to read without its render; a page with placeholders is readable anyway.
-                        Err(e) if shell => return Err(e),
-                        Err(e) => eprintln!("jurl: could not render the page, reading it as it is: {e:#}"),
-                    }
-                }
-                Err(e) => eprintln!("jurl: {e:#}"),
-            }
+            Ok(None)
         }
     }
-    if let Some(html) = &json_ld_html {
-        extract::json_ld::add_to(&mut ex, html);
+}
+
+/// Extracts `page` as `load` reads it, and renders it when it needs JavaScript (see `renders_after_fetch`). The page that a
+/// refused render gives is read the same way, and rendered once more at most: a refusal of that render goes to the sidecar.
+/// Returns the page read, how it was served, and its text.
+async fn read_page(
+    args: &Args,
+    cfg: &Config,
+    retry: fetch::Retry<'_>,
+    mut page: fetch::Page,
+    mut served: fetch::Served,
+    t: &mut Timer,
+) -> Result<(fetch::Page, fetch::Served, Extracted)> {
+    let mut renders = 0;
+    loop {
+        let (ex, placeholders) = extract_page(&page, served.rendered, t);
+        let shell = is_shell(&ex);
+        if renders == 2 || !renders_after_fetch(args.render, served, shell, placeholders) {
+            return Ok((page, served, ex));
+        }
+        renders += 1;
+        let Some((next, next_served)) = render_page(args, cfg, retry, &page, shell).await? else {
+            return Ok((page, served, ex));
+        };
+        t.lap("render");
+        (page, served) = (next, next_served);
     }
-    Ok((page.url, ex, served))
 }
 
 #[cfg(test)]
@@ -374,11 +450,23 @@ mod tests {
 
     #[test]
     fn a_page_the_stealth_sidecar_served_is_not_rendered_again() {
-        use fetch::Route;
-        assert!(renders_after_fetch(false, Route::Direct, true, false));
-        assert!(renders_after_fetch(false, Route::Browser, false, true));
-        assert!(!renders_after_fetch(false, Route::Stealth, true, true), "the sidecar's DOM is already rendered");
-        assert!(!renders_after_fetch(true, Route::Direct, true, true), "--render rendered it already");
-        assert!(!renders_after_fetch(false, Route::Direct, false, false));
+        use fetch::{Route, Served};
+        let served = |route, rendered| Served { route, rendered };
+        assert!(renders_after_fetch(false, served(Route::Direct, false), true, false));
+        assert!(renders_after_fetch(false, served(Route::Browser, false), false, true));
+        assert!(
+            !renders_after_fetch(false, served(Route::Stealth, false), true, true),
+            "the sidecar's DOM is already rendered"
+        );
+        assert!(
+            !renders_after_fetch(true, served(Route::Stealth, false), true, true),
+            "--render does not render it either"
+        );
+        assert!(!renders_after_fetch(true, served(Route::Direct, true), true, true), "--render rendered it already");
+        assert!(
+            renders_after_fetch(true, served(Route::Proxy, false), false, false),
+            "--render renders the proxy's page"
+        );
+        assert!(!renders_after_fetch(false, served(Route::Direct, false), false, false));
     }
 }

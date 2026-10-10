@@ -19,7 +19,10 @@ use anyhow::{Result, anyhow, bail};
 use reqwest::{Client, StatusCode, redirect::Policy};
 use url::Url;
 
-use crate::{fetch::host_key, reach};
+use crate::{
+    fetch::{RenderRefused, host_key},
+    reach,
+};
 
 /// What a credential becomes in an error or a trace.
 const REDACTED: &str = "proxy";
@@ -111,10 +114,11 @@ impl Fallback {
 
     /// The error of a request, scrubbed of the proxy's URL and credential when the request went through the proxy (see
     /// [`scrub_with`]). A direct request's error is returned as it is, and so is the guard's refusal, which names no address and
-    /// is looked for by its type.
+    /// is looked for by its type. So is a render's refusal ([`RenderRefused`]): its message is the page's URL, status and
+    /// Retry-After, never the proxy's.
     pub(crate) fn scrubbed(&self, via_proxy: bool, err: anyhow::Error) -> anyhow::Error {
         match &self.proxy {
-            Some(proxy) if via_proxy && !reach::refused(err.as_ref()) => {
+            Some(proxy) if via_proxy && !reach::refused(err.as_ref()) && !err.is::<RenderRefused>() => {
                 anyhow!(scrub_with(&proxy.url, &format!("{err:#}")))
             }
             _ => err,
@@ -335,6 +339,15 @@ mod tests {
         assert!(refused.downcast_ref::<reach::NotPublic>().is_some(), "the guard's refusal keeps its type");
         let proxied = fb.scrubbed(true, anyhow!("via http://user:s3cret@proxy.test:8080"));
         assert!(!format!("{proxied:#}").contains("s3cret"), "{proxied:#}");
+    }
+
+    #[test]
+    fn a_render_refusal_keeps_its_type_through_the_proxy_scrub() {
+        let fb = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
+        let refused =
+            RenderRefused { url: "https://shop.example/p".into(), status: StatusCode::FORBIDDEN, retry_after: None };
+        let kept = fb.scrubbed(true, refused.into());
+        assert!(kept.downcast_ref::<RenderRefused>().is_some(), "{kept:#}");
     }
 
     #[test]
