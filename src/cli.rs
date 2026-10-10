@@ -53,6 +53,13 @@ pub(crate) struct Args {
     /// Whether `JURL_PUBLIC_ONLY=1` is set (see `reach.rs`): it refuses a proxy and rendering as well. Not a flag.
     #[arg(skip)]
     pub(crate) public_only: bool,
+    /// Whether `JURL_RENDER_SANDBOXED=1` is set (see `reach.rs`): a public run may render under `JURL_PUBLIC_ONLY`. Not a flag.
+    #[arg(skip)]
+    pub(crate) render_sandboxed: bool,
+    /// The cookies this run has been sent: kept in memory for this run alone, and never read from or written to a file
+    /// (see `fetch.rs`). Not a flag.
+    #[arg(skip)]
+    pub(crate) cookies: reqwest::cookie::Jar,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,

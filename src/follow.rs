@@ -116,9 +116,9 @@ struct Robots {
 
 impl Robots {
     /// The rules in the `robots.txt` of `u`'s host. No file, or none within 4 s: no rules.
-    async fn load(client: &Client, u: &Url, retry: Retry<'_>) -> Self {
+    async fn load(u: &Url, retry: Retry<'_>) -> Self {
         let Ok(url) = u.join("/robots.txt") else { return Self::default() };
-        let Some(body) = small_text(client, &url, retry).await else { return Self::default() };
+        let Some(body) = small_text(&url, retry).await else { return Self::default() };
         Self::parse(&body)
     }
 
@@ -256,7 +256,7 @@ impl RobotsByHost {
     }
 
     /// Reads the `robots.txt` of each host of `urls` that has none yet, all at once. Returns how many it read.
-    async fn load_for(&mut self, client: &Client, urls: &[Url], retry: Retry<'_>) -> usize {
+    async fn load_for(&mut self, urls: &[Url], retry: Retry<'_>) -> usize {
         let mut new: Vec<&Url> = Vec::new();
         for u in urls {
             let Some(host) = host_key(u) else { continue };
@@ -264,7 +264,7 @@ impl RobotsByHost {
                 new.push(u);
             }
         }
-        let read = join_all(new.iter().map(|u| Robots::load(client, u, retry))).await;
+        let read = join_all(new.iter().map(|u| Robots::load(u, retry))).await;
         for (u, robots) in new.iter().zip(read) {
             self.insert(u, robots);
         }
@@ -280,31 +280,31 @@ const SMALL_TEXT_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// A small text file from the site (robots.txt, llms.txt, a sitemap), or nothing. A host that a retry showed needs the
 /// browser client gets its files from there, as its pages do (see [`Retry::sticky`]).
-async fn small_text(client: &Client, url: &Url, retry: Retry<'_>) -> Option<String> {
-    small_text_within(client, url, SMALL_TEXT_MAX, retry).await
+async fn small_text(url: &Url, retry: Retry<'_>) -> Option<String> {
+    small_text_within(url, SMALL_TEXT_MAX, retry).await
 }
 
 /// [`small_text`] with its cap given. The body is read and decoded as fetch.rs reads and decodes a page.
-async fn small_text_within(client: &Client, url: &Url, max: usize, retry: Retry<'_>) -> Option<String> {
+async fn small_text_within(url: &Url, max: usize, retry: Retry<'_>) -> Option<String> {
     // The same retry rule as a page's, with the same memo: the file is read through it (see `fetch::fetch_small`).
-    let body = crate::fetch::fetch_small(client, url, max, SMALL_TEXT_TIMEOUT, retry, Instant::now()).await?;
+    let body = crate::fetch::fetch_small(url, max, SMALL_TEXT_TIMEOUT, retry, Instant::now()).await?;
     (!body.trim_start().starts_with('<') || body.contains("<urlset") || body.contains("<sitemapindex")).then_some(body)
 }
 
 /// The pages a child sitemap of a sitemap index lists, or none if it can't be read.
-async fn child_map(client: &Client, sitemap: Url, retry: Retry<'_>) -> Vec<String> {
-    small_text(client, &sitemap, retry).await.map(|b| locs(&b)).unwrap_or_default()
+async fn child_map(sitemap: Url, retry: Retry<'_>) -> Vec<String> {
+    small_text(&sitemap, retry).await.map(|b| locs(&b)).unwrap_or_default()
 }
 
 /// The pages one sitemap lists: its `<loc>`s, or for a sitemap index, the pages of its newest few sitemaps (see
 /// [`crate::sitemaps::index_children`]).
-async fn sitemap_pages(client: &Client, sitemap: &Url, retry: Retry<'_>) -> Vec<String> {
-    let Some(body) = small_text(client, sitemap, retry).await else { return Vec::new() };
+async fn sitemap_pages(sitemap: &Url, retry: Retry<'_>) -> Vec<String> {
+    let Some(body) = small_text(sitemap, retry).await else { return Vec::new() };
     if !body.contains("<sitemapindex") {
         return locs(&body);
     }
     let children: Vec<Url> = crate::sitemaps::index_children(&body).iter().filter_map(|c| Url::parse(c).ok()).collect();
-    join_all(children.into_iter().map(|c| child_map(client, c, retry))).await.into_iter().flatten().collect()
+    join_all(children.into_iter().map(|c| child_map(c, retry))).await.into_iter().flatten().collect()
 }
 
 /// The sitemaps robots.txt names that are read: [`crate::sitemaps::ROBOTS_SITEMAPS`] of them, in file order, each once,
@@ -337,26 +337,26 @@ struct SiteFiles {
 /// The site's own files, read at once: `robots.txt`, `llms.txt` (written for exactly this) and `/sitemap.xml`, and the
 /// sitemaps `robots.txt` names (its `Sitemap:` lines, see [`robots_sitemap_urls`]), which wait for the robots file. A
 /// sitemap index is read through its newest sitemaps (see [`sitemap_pages`]).
-async fn site_files(client: &Client, start: &Url, site: &Site, retry: Retry<'_>) -> SiteFiles {
+async fn site_files(start: &Url, site: &Site, retry: Retry<'_>) -> SiteFiles {
     let robots = async {
         let url = start.join("/robots.txt").ok()?;
-        small_text(client, &url, retry).await
+        small_text(&url, retry).await
     };
     let llms = async {
         let url = start.join("/llms.txt").ok()?;
-        let body = small_text(client, &url, retry).await?;
+        let body = small_text(&url, retry).await?;
         Some(extract::markdown(&body, &url).links)
     };
     let own_url = start.join("/sitemap.xml").ok();
     let own = async {
         match &own_url {
-            Some(url) => sitemap_pages(client, url, retry).await,
+            Some(url) => sitemap_pages(url, retry).await,
             None => Vec::new(),
         }
     };
     let (robots, llms, own) = tokio::join!(robots, llms, own);
     let listed = robots_sitemap_urls(robots.as_deref().unwrap_or_default(), start, own_url.as_ref());
-    let listed_pages = join_all(listed.iter().map(|u| sitemap_pages(client, u, retry))).await;
+    let listed_pages = join_all(listed.iter().map(|u| sitemap_pages(u, retry))).await;
 
     let mut out: Vec<Link> = Vec::new();
     let mut seen = HashSet::new();
@@ -381,19 +381,19 @@ async fn site_files(client: &Client, start: &Url, site: &Site, retry: Retry<'_>)
 /// The pages the sitemaps of each of `hosts` list (see [`crate::hosts::linked_hosts`]): the host's /sitemap.xml and the
 /// sitemaps its robots.txt names, read as the start site's own are (see [`site_files`]). Kept when they share the start
 /// page's registrable domain.
-async fn linked_sitemaps(client: &Client, start: &Url, hosts: &[Url], retry: Retry<'_>) -> Vec<Link> {
+async fn linked_sitemaps(start: &Url, hosts: &[Url], retry: Retry<'_>) -> Vec<Link> {
     let per_host = join_all(hosts.iter().map(|origin| async move {
         let own = origin.join("/sitemap.xml").ok();
         let robots = match origin.join("/robots.txt") {
-            Ok(url) => small_text(client, &url, retry).await,
+            Ok(url) => small_text(&url, retry).await,
             Err(_) => None,
         };
         let mut urls: Vec<String> = Vec::new();
         if let Some(own) = &own {
-            urls.extend(sitemap_pages(client, own, retry).await);
+            urls.extend(sitemap_pages(own, retry).await);
         }
         for listed in robots_sitemap_urls(robots.as_deref().unwrap_or_default(), origin, own.as_ref()) {
-            urls.extend(sitemap_pages(client, &listed, retry).await);
+            urls.extend(sitemap_pages(&listed, retry).await);
         }
         urls
     }))
@@ -409,9 +409,9 @@ async fn linked_sitemaps(client: &Client, start: &Url, hosts: &[Url], retry: Ret
 
 /// The llms.txt of each of `hosts` (see [`crate::hosts::linked_hosts`]): the pages it lists, kept when they share the start
 /// page's registrable domain. Read as the start site's own llms.txt is (see [`site_files`]).
-async fn linked_llms(client: &Client, start: &Url, hosts: &[Url], retry: Retry<'_>) -> Vec<Link> {
+async fn linked_llms(start: &Url, hosts: &[Url], retry: Retry<'_>) -> Vec<Link> {
     let files = join_all(hosts.iter().filter_map(|h| h.join("/llms.txt").ok()).map(|url| async move {
-        let body = small_text(client, &url, retry).await?;
+        let body = small_text(&url, retry).await?;
         Some(extract::markdown(&body, &url).links)
     }))
     .await;
@@ -569,7 +569,7 @@ async fn visit(
     read: &HashSet<String>,
 ) -> Result<Visit> {
     let mut t = Timer::new();
-    let (url, ex) = load(args, cfg, client, url, &mut t).await?;
+    let (url, ex) = load(args, cfg, url, &mut t).await?;
     judge(args, client, api_key, url, ex, site, known, field_scores, read).await
 }
 
@@ -785,9 +785,9 @@ impl Search {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let site = Site::new(start);
-        let retry = Retry::for_run(args.no_browser_retry, args.timing, &args.reach);
+        let retry = Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
 
-        let (loaded, files) = tokio::join!(load(args, cfg, client, start, t), site_files(client, start, &site, retry));
+        let (loaded, files) = tokio::join!(load(args, cfg, start, t), site_files(start, &site, retry));
         let (url, ex) = loaded?;
         let SiteFiles { robots, links: mut map } = files;
         // The hosts the page links to on its own registrable domain (docs.stripe.com from stripe.com): their llms.txt is
@@ -801,10 +801,8 @@ impl Search {
         let (known0, field0) = (HashSet::new(), FieldScores::new());
         let (first, hints) =
             tokio::join!(judge(args, client, api_key, url, ex, &site, &known0, &field0, &read_before), async {
-                let (llms, sitemaps) = tokio::join!(
-                    linked_llms(client, start, &linked, retry),
-                    linked_sitemaps(client, start, &linked, retry),
-                );
+                let (llms, sitemaps) =
+                    tokio::join!(linked_llms(start, &linked, retry), linked_sitemaps(start, &linked, retry),);
                 map.extend(llms);
                 map.extend(sitemaps);
                 site_hints(args, client, api_key, start, &site, map).await
@@ -918,9 +916,8 @@ impl Search {
             let n = self
                 .robots
                 .load_for(
-                    ctx.client,
                     &best,
-                    Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing, &ctx.args.reach),
+                    Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing, &ctx.args.reach, &ctx.args.cookies),
                 )
                 .await;
             if n == 0 {
@@ -1109,7 +1106,7 @@ pub async fn run(
     read_batches(args, cfg, client, api_key, &mut search, &site_ctx, t).await?;
     // A precise search that found no answer gets a second pass: the site's own search (see `site_search`) adds its results
     // as leads, and the budget grows. A search that found one never gets here, so answered cells are not changed.
-    if args.precise && search.found.is_empty() && second_pass(args, client, &start, &mut search, &site_ctx).await? {
+    if args.precise && search.found.is_empty() && second_pass(args, &start, &mut search, &site_ctx).await? {
         read_batches(args, cfg, client, api_key, &mut search, &site_ctx, t).await?;
     }
     search.conclude(args, client, api_key)
@@ -1143,16 +1140,10 @@ const SECOND_PASS: usize = 3;
 
 /// The second pass (see [`run`]): the site's own search results that are not read yet become leads, scored by Jev like the
 /// others, and the search may open [`SECOND_PASS`] more pages. Returns whether there were any such leads.
-async fn second_pass(
-    args: &Args,
-    client: &Client,
-    start: &Url,
-    search: &mut Search,
-    site_ctx: &Ctx<'_>,
-) -> Result<bool> {
-    let retry = crate::fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach);
+async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &Ctx<'_>) -> Result<bool> {
+    let retry = crate::fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
     let question = args.ask.as_deref().unwrap_or_default();
-    let mut results = crate::site_search::candidates(client, start, question, true, retry).await;
+    let mut results = crate::site_search::candidates(start, question, true, retry).await;
     results.retain(|l| !search.visited.contains(&links::key(&l.url)));
     if results.is_empty() {
         return Ok(false);
@@ -1350,17 +1341,12 @@ mod tests {
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=windows-1252\r\nTransfer-Encoding: chunked\r\n\r\n";
         let body = b"Caf\xE9 costs \x80 5".to_vec();
         let url = |s: String| Url::parse(&s).unwrap();
-        let ours =
-            small_text(&test_server::client(), &url(test_server::serve(head.into(), body.clone(), true)), retry_off())
-                .await
-                .expect("a small file");
-        let page = crate::fetch::fetch(
-            &test_server::client(),
-            &test_server::serve(head.into(), body.clone(), true),
-            retry_off(),
-        )
-        .await
-        .expect("a page");
+        let ours = small_text(&url(test_server::serve(head.into(), body.clone(), true)), retry_off())
+            .await
+            .expect("a small file");
+        let page = crate::fetch::fetch(&test_server::serve(head.into(), body.clone(), true), retry_off())
+            .await
+            .expect("a page");
         let res = test_server::client().get(test_server::serve(head.into(), body, true)).send().await.expect("a reply");
         assert_eq!(ours, "Café costs € 5");
         assert_eq!(ours, page.body);
@@ -1371,8 +1357,8 @@ mod tests {
     async fn a_small_file_past_its_cap_is_refused_and_one_at_it_is_read() {
         let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
         let url = |body: Vec<u8>| Url::parse(&test_server::serve(head.into(), body, true)).unwrap();
-        assert_eq!(small_text_within(&test_server::client(), &url(vec![b'a'; 4096]), 1024, retry_off()).await, None);
-        assert!(small_text_within(&test_server::client(), &url(vec![b'a'; 1024]), 1024, retry_off()).await.is_some());
+        assert_eq!(small_text_within(&url(vec![b'a'; 4096]), 1024, retry_off()).await, None);
+        assert!(small_text_within(&url(vec![b'a'; 1024]), 1024, retry_off()).await.is_some());
     }
 
     /// A site's robots.txt, served from `base` (the server a test made).
@@ -1388,7 +1374,7 @@ mod tests {
         let memo = Memo::default();
         // A retry showed a moment ago that this host needs the browser client.
         assert!(memo.learn_url(&Url::parse(&base).unwrap(), std::time::Instant::now()));
-        let body = small_text(&test_server::client(), &robots_of(&base), retry_on(&memo)).await;
+        let body = small_text(&robots_of(&base), retry_on(&memo)).await;
         assert_eq!(body.as_deref(), Some(file));
         assert_eq!(served.kinds(), [Kind::Browser]);
     }
@@ -1398,7 +1384,7 @@ mod tests {
         let (base, served) =
             serve_replies(vec![Some(reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\n"))]);
         let memo = Memo::default();
-        assert!(small_text(&test_server::client(), &robots_of(&base), retry_on(&memo)).await.is_some());
+        assert!(small_text(&robots_of(&base), retry_on(&memo)).await.is_some());
         assert_eq!(served.kinds(), [Kind::Plain]);
     }
 
@@ -1408,9 +1394,14 @@ mod tests {
             serve_replies(vec![Some(reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\n"))]);
         let memo = Memo::default();
         assert!(memo.learn_url(&Url::parse(&base).unwrap(), std::time::Instant::now()));
-        let off =
-            crate::fetch::Retry { on: false, memo: &memo, timing: false, reach: &crate::fetch::test_server::PRIVATE };
-        assert!(small_text(&test_server::client(), &robots_of(&base), off).await.is_some());
+        let off = crate::fetch::Retry {
+            on: false,
+            memo: &memo,
+            timing: false,
+            reach: &crate::fetch::test_server::PRIVATE,
+            cookies: &crate::fetch::test_server::NO_COOKIES,
+        };
+        assert!(small_text(&robots_of(&base), off).await.is_some());
         assert_eq!(served.kinds(), [Kind::Plain]);
     }
 
@@ -1442,7 +1433,7 @@ mod tests {
         });
         let start = Url::parse(&base).unwrap();
         let memo = Memo::default();
-        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_on(&memo)).await.links;
+        let links = site_files(&start, &Site::new(&start), retry_on(&memo)).await.links;
         assert!(links.iter().any(|l| l.url.path() == "/news/a.html"), "the sitemap's page is a hint");
         let kinds = served.kinds();
         assert_eq!(kinds.iter().filter(|k| **k == Kind::Browser).count(), 1, "one browser retry, for the sitemap");
@@ -1461,7 +1452,7 @@ mod tests {
         let start = Url::parse(&base).unwrap();
         let memo = Memo::default();
         let mut rules = RobotsByHost::default();
-        assert_eq!(rules.load_for(&test_server::client(), std::slice::from_ref(&start), retry_on(&memo)).await, 1);
+        assert_eq!(rules.load_for(std::slice::from_ref(&start), retry_on(&memo)).await, 1);
         assert!(!rules.allows(&start.join("/private/page").unwrap()), "the browser client's rules apply");
         assert!(rules.allows(&start.join("/news").unwrap()));
         assert_eq!(served.kinds().iter().filter(|k| **k == Kind::Browser).count(), 1);
@@ -1476,7 +1467,7 @@ mod tests {
         });
         let start = Url::parse(&base).unwrap();
         let memo = Memo::default();
-        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_on(&memo)).await.links;
+        let links = site_files(&start, &Site::new(&start), retry_on(&memo)).await.links;
         assert!(links.is_empty(), "the sitemap is not read");
         assert!(served.kinds().iter().all(|k| *k == Kind::Plain), "a 503 that says when to come back is not retried");
     }
@@ -1491,10 +1482,10 @@ mod tests {
             _ => Some(reply("403 Forbidden", "", b"")),
         });
         let start = Url::parse(&base).unwrap();
-        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_off()).await.links;
+        let links = site_files(&start, &Site::new(&start), retry_off()).await.links;
         assert!(links.is_empty());
         let mut rules = RobotsByHost::default();
-        assert_eq!(rules.load_for(&test_server::client(), std::slice::from_ref(&start), retry_off()).await, 1);
+        assert_eq!(rules.load_for(std::slice::from_ref(&start), retry_off()).await, 1);
         assert!(rules.allows(&start.join("/private/page").unwrap()), "no rules were read");
         assert!(served.kinds().iter().all(|k| *k == Kind::Plain), "the browser client was never asked");
     }
@@ -1799,7 +1790,7 @@ mod tests {
             ("/feeds/pages.xml", "<urlset><url><loc>http://{host}/news/a.html</loc></url></urlset>"),
             ("/sitemap.xml", "<urlset><url><loc>http://{host}/news/b.html</loc></url></urlset>"),
         ]);
-        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_off()).await.links;
+        let links = site_files(&start, &Site::new(&start), retry_off()).await.links;
         let mut paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
         paths.sort();
         assert_eq!(paths, ["/news/a.html", "/news/b.html"]);
@@ -1817,8 +1808,14 @@ mod tests {
             allowed: std::collections::HashSet::from([std::net::IpAddr::from([127, 0, 0, 1])]),
         };
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach };
-        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry).await.links;
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &reach,
+            cookies: &crate::fetch::test_server::NO_COOKIES,
+        };
+        let links = site_files(&start, &Site::new(&start), retry).await.links;
         let paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
         assert_eq!(paths, ["/news/b.html"]);
         assert!(links.iter().all(|l| l.url.host_str() != Some("127.0.0.2")));
@@ -1841,7 +1838,7 @@ mod tests {
             ("/s/2021.xml", "<urlset><url><loc>http://{host}/news/2021.html</loc></url></urlset>"),
             ("/s/2023.xml", "<urlset><url><loc>http://{host}/news/2023.html</loc></url></urlset>"),
         ]);
-        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry_off()).await.links;
+        let links = site_files(&start, &Site::new(&start), retry_off()).await.links;
         let mut paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
         paths.sort();
         assert_eq!(paths, ["/news/2021.html", "/news/2023.html", "/news/2024.html"]);
@@ -1857,7 +1854,7 @@ mod tests {
         )]);
         // The front door is on the same host (and so the same registrable domain) as the linked one.
         let start = Url::parse(&format!("http://127.0.0.1:{}/", linked.port().unwrap())).unwrap();
-        let links = linked_llms(&test_server::client(), &start, std::slice::from_ref(&linked), retry_off()).await;
+        let links = linked_llms(&start, std::slice::from_ref(&linked), retry_off()).await;
         let urls: Vec<String> = links.iter().map(|l| l.url.path().to_string()).collect();
         assert_eq!(urls, ["/rate-limits"]);
     }
@@ -1899,7 +1896,7 @@ mod tests {
             ("/feeds/docs.xml", "<urlset><url><loc>http://{host}/rate-limits</loc></url></urlset>"),
         ]);
         let start = Url::parse(&format!("http://127.0.0.1:{}/", linked.port().unwrap())).unwrap();
-        let links = linked_sitemaps(&test_server::client(), &start, std::slice::from_ref(&linked), retry_off()).await;
+        let links = linked_sitemaps(&start, std::slice::from_ref(&linked), retry_off()).await;
         let urls: Vec<String> = links.iter().map(|l| l.url.path().to_string()).collect();
         assert_eq!(urls, ["/rate-limits"]);
     }

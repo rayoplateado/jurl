@@ -168,6 +168,10 @@ With `-q`, each link is scored by how likely following it leads to the answer. M
 | Author avatar | `Will Allen` | 0.38 | **0.21** |
 | Company logo | `Cloudflare` | 0.09 | **0.08** |
 
+jurl asks for each image the way a browser's `<img>` does: with the page as its Referer, and an Accept without AVIF, which jurl can't decode. A 401, 403 or 429 is asked once more with the browser client, and a host that such a retry showed needs it is asked there first, as a page is. A host that refuses an image gets one or two requests in a run, not one per image: the rest of its images are skipped.
+
+With `--vision` each image in the JSON has a `pixels` field: `looked` when Clef looked at its pixels, `refused` when its host refused the download, and `skipped` when it was not looked at (past the look cap, or after its host refused an earlier image). `--image` has no `pixels`, since it looks at nothing.
+
 ### Find a photo by description
 
 ```console
@@ -299,7 +303,7 @@ A host that a retry showed needs that client is asked there first for the next 1
 
 `--no-browser-retry`, or `JURL_NO_BROWSER_RETRY` set to anything, turns all of this off. `-t` says on stderr once per host when it switches (`jurl: example.com: using the browser client`), and `--json` has `"browser_retry": true` in `usage` when a page was read with the browser client, `"plain_refusals"` for the plain requests that got a refusal, and `"browser_requests"` for the requests sent with the browser client. [bench/browser-retry.md](bench/browser-retry.md) has the numbers.
 
-**Public addresses.** A run that starts at a public address reads only public addresses. Each page it fetches, each redirect it follows and each file it reads (`robots.txt`, sitemaps, `llms.txt`) must be at a public address: jurl checks the address before each request, and a direct connection only goes to a public address, so a name that points at a private one is refused. A link to a loopback, private or link-local address is skipped, and `-t` says so. A run that starts at a private address, such as a local page you ask for, reads as before. `JURL_PUBLIC_ONLY=1` refuses a private start, a proxy and rendering; the cloud runner sets it. Known limits: (1) A page rendered in a public run (`--render`, or the browser for a page that is only JavaScript) has its own address checked first, and nothing more: the page's scripts and the requests the browser makes itself are not checked, as they were not for single URLs before this. (2) With `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` set, a public run uses the proxy, and the proxy resolves each name itself: jurl resolves each host and checks it before each request, redirects included, but a name that changes its answer between that check and the proxy's own lookup can still reach a private address.
+**Public addresses.** A run that starts at a public address reads only public addresses. Each page it fetches, each redirect it follows and each file it reads (`robots.txt`, sitemaps, `llms.txt`) must be at a public address: jurl checks the address before each request, and a direct connection only goes to a public address, so a name that points at a private one is refused. A link to a loopback, private or link-local address is skipped, and `-t` says so. A run that starts at a private address, such as a local page you ask for, reads as before. `JURL_PUBLIC_ONLY=1` refuses a private start, a proxy and rendering; the cloud runner sets it. `JURL_RENDER_SANDBOXED=1` allows rendering under it, for a host whose network outside jurl confines the browser, as the cloud runner's firewall does (it drops the container's connections to private ranges). The page's own address is still checked first. Known limits: (1) A page rendered in a public run (`--render`, or the browser for a page that is only JavaScript) has its own address checked first, and nothing more: the page's scripts and the requests the browser makes itself are not checked, as they were not for single URLs before this. Under `JURL_RENDER_SANDBOXED=1` the network outside jurl checks them instead. (2) With `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` set, a public run uses the proxy, and the proxy resolves each name itself: jurl resolves each host and checks it before each request, redirects included, but a name that changes its answer between that check and the proxy's own lookup can still reach a private address.
 
 ### Exit codes
 
@@ -385,7 +389,7 @@ With your own keys, jurl has no server and no account of its own. It talks to th
 
 - **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result says what its run used, a `--precise` miss included: `"usage": {"pages": 3, "browser_retry": false, "plain_refusals": 0, "browser_requests": 0, "jev": {"requests": 6, "input_tokens": 41250}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); `browser_retry` is true when one of them was read with the browser client (after a retry, or because its host needed it); `plain_refusals` and `browser_requests` count the requests sent with each client, a refusal being any non-success status; a request counts once it has answered.
 - **What leaves your machine:** the text of the page goes to TypeSafe. With `--vision` or `--find`, the images go to Cloudflare too. Keep that in mind for internal or private pages.
-- **What jurl can't read:** it sends no cookies, so pages behind a login are out of reach.
+- **What jurl can't read:** pages behind a login. jurl keeps the cookies a site sets for the length of one run, in memory, and sends each one back only to the host and path that set it (RFC 6265). It never reads your browser's cookies and never saves any to disk, so a page that needs your login stays out of reach.
 
 With [jurl cloud](#jurl-cloud), the URL and your question go to jurl cloud, which reads the page on its servers with the same models. It keeps a private log of each read for your organization, with the retention your organization sets. It also keeps an anonymous, de-identified record of reads of public pages (no account, user or key), used to improve jurl. Your organization can opt out of that record.
 
@@ -431,7 +435,7 @@ url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · 
   - Each image gets its own HTTP/1 connection: sharing one HTTP/2 connection made the slowest calls about twice as slow.
   - A call that takes longer than 700 ms is sent again, and whichever copy answers first wins.
   - An image still pending at 2.5 s keeps its text-only score.
-- **Lightpanda isn't bundled.** It's AGPL-3.0 and about 90 MB. jurl downloads a pinned 1.0.0 from Lightpanda's official release, checks its SHA-256 and caches it. If one is already on your `PATH`, jurl uses that. `JURL_LIGHTPANDA` points to a specific binary, and `JURL_NO_DOWNLOAD` stops the download. Lightpanda has no Windows build, so on Windows rendering is unavailable.
+- **Lightpanda isn't bundled.** It's AGPL-3.0 and about 90 MB. jurl downloads a pinned 1.0.0 from Lightpanda's official release, checks its SHA-256 and caches it. If one is already on your `PATH`, jurl uses that. `JURL_LIGHTPANDA` points to a specific binary, and `JURL_NO_DOWNLOAD` stops the download. With both set, as on a host that has Lightpanda preinstalled, that binary must be the pinned 1.0.0 release for this platform: jurl checks its SHA-256 and refuses any other. Lightpanda has no Windows build, so on Windows rendering is unavailable.
 
 </details>
 
@@ -458,7 +462,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
 | `src/extract/mod.rs` · `src/extract/html.rs` · `src/extract/markdown.rs` · `src/extract/join.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
-| `src/fetch.rs` · `src/lightpanda.rs` | Fetching (with the retry on a browser's fingerprint), rendering, the browser download |
+| `src/fetch.rs` · `src/lightpanda.rs` | Fetching (the retry on a browser's fingerprint, the run's cookies), rendering, the browser download |
 | `src/setup.rs` · `src/config.rs` | First-run setup (own keys or jurl cloud), `jurl init`, key storage |
 | `src/cloud.rs` | jurl cloud: which account a run reads with, the read, the usage |
 | `src/account.rs` | `jurl login`, `logout` and `status`: the sign-in in the browser, and signing out |

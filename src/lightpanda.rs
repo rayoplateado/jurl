@@ -4,7 +4,7 @@
 
 use std::{
     env, fs,
-    io::{IsTerminal, Write, stderr},
+    io::{IsTerminal, Read, Write, stderr},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -59,9 +59,14 @@ pub fn find(configured: Option<String>) -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join("lightpanda")).chain(cached()).find(|p| p.is_file())
 }
 
-/// Find Lightpanda, downloading it once if needed.
+/// Find Lightpanda, downloading it once if needed. A binary that `JURL_LIGHTPANDA` names is used as it is, unless
+/// `JURL_NO_DOWNLOAD` is set: then it must be the pinned release for this platform, and its SHA-256 is checked here.
 pub async fn ensure(configured: Option<String>) -> Result<PathBuf> {
+    let named = configured.is_some();
     if let Some(p) = find(configured) {
+        if named && env::var_os("JURL_NO_DOWNLOAD").is_some() {
+            check_pinned(&p)?;
+        }
         return Ok(p);
     }
     let Some((name, sha)) = asset() else {
@@ -77,6 +82,38 @@ pub async fn ensure(configured: Option<String>) -> Result<PathBuf> {
     let dest = cached().context("no cache directory ($HOME is not set)")?;
     download(name, sha, &dest).await?;
     Ok(dest)
+}
+
+/// Refuses a binary that is not the pinned release for this platform: its SHA-256 must be the one [`asset`] names.
+fn check_pinned(path: &Path) -> Result<()> {
+    let Some((_, sha)) = asset() else {
+        bail!("there is no pinned Lightpanda build for {}/{}", env::consts::OS, env::consts::ARCH);
+    };
+    matches_digest(path, sha)
+}
+
+/// Whether the file at `path` has the SHA-256 `sha` (lower-case hex).
+fn matches_digest(path: &Path, sha: &str) -> Result<()> {
+    let reading = || format!("reading {}", path.display());
+    let mut file = fs::File::open(path).with_context(reading)?;
+    let mut hash = Sha256::new();
+    let mut buf = vec![0u8; 64 << 10];
+    loop {
+        let n = file.read(&mut buf).with_context(reading)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+    }
+    let digest: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    if digest != sha {
+        bail!(
+            "{} is not the Lightpanda {VERSION} release jurl pins for this platform (sha256 {digest}, expected {sha}); \
+             JURL_NO_DOWNLOAD allows only that one",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Where a download is written before it is verified: `lightpanda-1.0.0.part`. `with_extension` would replace the `.0`.
@@ -132,6 +169,18 @@ async fn download(name: &str, sha: &str, dest: &PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_binary_without_discovery_must_have_the_pinned_digest() {
+        let path = env::temp_dir().join(format!("jurl-lightpanda-test-{}", std::process::id()));
+        fs::write(&path, b"hello").expect("a test file");
+        // The SHA-256 of "hello".
+        let hello = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        assert!(matches_digest(&path, hello).is_ok());
+        let err = matches_digest(&path, &"0".repeat(64)).expect_err("another binary is refused");
+        assert!(format!("{err:#}").contains("expected 0000"), "{err:#}");
+        let _ = fs::remove_file(&path);
+    }
 
     #[test]
     fn partial_download_keeps_the_full_name() {
