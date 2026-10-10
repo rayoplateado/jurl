@@ -404,6 +404,7 @@ With [jurl cloud](#jurl-cloud), the URL and your question go to jurl cloud, whic
 ```text
 url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · images
           └─ empty JavaScript app or unfilled template? ─▶ render in Lightpanda
+          └─ explicit anti-bot challenge and JURL_STEALTH_URL set? ─▶ stealth sidecar
                           │
             one yes/no question per candidate
               ┌───────────┴───────────┐
@@ -436,6 +437,7 @@ url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · 
   - A call that takes longer than 700 ms is sent again, and whichever copy answers first wins.
   - An image still pending at 2.5 s keeps its text-only score.
 - **Lightpanda isn't bundled.** It's AGPL-3.0 and about 90 MB. jurl downloads a pinned 1.0.0 from Lightpanda's official release, checks its SHA-256 and caches it. If one is already on your `PATH`, jurl uses that. `JURL_LIGHTPANDA` points to a specific binary, and `JURL_NO_DOWNLOAD` stops the download. With both set, as on a host that has Lightpanda preinstalled, that binary must be the pinned 1.0.0 release for this platform: jurl checks its SHA-256 and refuses any other. Lightpanda has no Windows build, so on Windows rendering is unavailable.
+- **Stealth is a sidecar, and only for challenges.** When a page answers with an explicit anti-bot wall (a CAPTCHA frame, a "just a moment" title, a thin DataDome/Incapsula/Akamai shell), and `JURL_STEALTH_URL` names a local service, jurl asks that service once for the same URL. The sidecar (`jurl-cloud/infra/stealth`) loads the public page in Camoufox (MPL-2.0) and returns the rendered text. It never solves a CAPTCHA: that outcome is an error, and the cell is for human review. Without `JURL_STEALTH_URL`, a challenge is an ordinary failed read.
 
 </details>
 

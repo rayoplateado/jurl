@@ -24,6 +24,7 @@ mod reach;
 mod setup;
 mod site_search;
 mod sitemaps;
+mod stealth;
 mod timing;
 mod update;
 mod vision;
@@ -274,7 +275,7 @@ async fn read(
 
 /// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images.
 pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut Timer) -> Result<(url::Url, Extracted)> {
-    let page = if args.render {
+    let mut page = if args.render {
         fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
         let page = fetch::render(&bin, target).await?;
@@ -290,6 +291,12 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
         }
         page
     };
+    // Rung 5: a page rungs 1–4 left as an anti-bot challenge is asked once of the stealth
+    // sidecar (JURL_STEALTH_URL). A CAPTCHA stops the run for human review.
+    if let Some(updated) = stealth::maybe_render(cfg, &page).await? {
+        page = updated;
+        t.lap("stealth");
+    }
     // --precise may answer with the page's JSON-LD values (see `extract::json_ld`), read from the HTML that was extracted
     // (the rendered one, when the page is rendered); they are added once the render decision is made.
     let mut json_ld_html = (args.precise && !page.is_markdown).then(|| page.body.clone());
