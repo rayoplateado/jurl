@@ -50,7 +50,7 @@ pub(crate) struct Args {
     /// What the run may read, set from the start URL once it is known (see `reach.rs`). Not a flag.
     #[arg(skip)]
     pub(crate) reach: crate::reach::Reach,
-    /// Whether `JURL_PUBLIC_ONLY=1` is set (see `reach.rs`): it refuses a proxy and rendering as well. Not a flag.
+    /// Whether `JURL_PUBLIC_ONLY=1` is set (see `reach.rs`): it refuses an environment proxy and rendering as well. Not a flag.
     #[arg(skip)]
     pub(crate) public_only: bool,
     /// Whether `JURL_RENDER_SANDBOXED=1` is set (see `reach.rs`): a public run may render under `JURL_PUBLIC_ONLY`. Not a flag.

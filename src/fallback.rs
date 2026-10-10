@@ -79,7 +79,7 @@ impl Fallback {
         };
         let plain = Url::parse(&url).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
         if !plain {
-            bail!("JURL_FALLBACK_PROXY is not an http:// proxy address (http://user:password@host:port)");
+            bail!("JURL_FALLBACK_PROXY is not an http or https proxy address (http://user:password@host:port)");
         }
         let proxy = reqwest::Proxy::all(url.as_str())
             .map_err(|_| anyhow!("JURL_FALLBACK_PROXY is not a proxy address that jurl can use"))?;
