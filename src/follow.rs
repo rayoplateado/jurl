@@ -790,8 +790,14 @@ impl Search {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let site = Site::new(start);
-        let retry =
-            Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies, args.stealth.as_ref());
+        let retry = Retry::for_run(
+            args.no_browser_retry,
+            args.timing,
+            &args.reach,
+            &args.cookies,
+            args.stealth.as_ref(),
+            &args.fallback,
+        );
 
         let (loaded, files) = tokio::join!(load(args, cfg, start, t), site_files(start, &site, retry));
         let (url, ex, served) = loaded?;
@@ -930,6 +936,7 @@ impl Search {
                         &ctx.args.reach,
                         &ctx.args.cookies,
                         ctx.args.stealth.as_ref(),
+                        &ctx.args.fallback,
                     ),
                 )
                 .await;
@@ -1162,6 +1169,7 @@ async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &C
         &args.reach,
         &args.cookies,
         args.stealth.as_ref(),
+        &args.fallback,
     );
     let question = args.ask.as_deref().unwrap_or_default();
     let mut results = crate::site_search::candidates(start, question, true, retry).await;
@@ -1185,7 +1193,7 @@ mod tests {
         fetch::{Memo, test_server},
         judge::BlockPage,
     };
-    use test_server::{Kind, Served, reply, retry_off, retry_on, serve_replies, serve_routed};
+    use test_server::{Kind, NO_FALLBACK, Served, reply, retry_off, retry_on, serve_replies, serve_routed};
 
     #[test]
     fn menus_are_the_links_outside_the_text() {
@@ -1422,6 +1430,7 @@ mod tests {
             reach: &crate::fetch::test_server::PRIVATE,
             cookies: &crate::fetch::test_server::NO_COOKIES,
             stealth: None,
+            fallback: &NO_FALLBACK,
         };
         assert!(small_text(&robots_of(&base), off).await.is_some());
         assert_eq!(served.kinds(), [Kind::Plain]);
@@ -1884,6 +1893,7 @@ mod tests {
             reach: &reach,
             cookies: &crate::fetch::test_server::NO_COOKIES,
             stealth: None,
+            fallback: &NO_FALLBACK,
         };
         let links = site_files(&start, &Site::new(&start), retry).await.links;
         let paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();

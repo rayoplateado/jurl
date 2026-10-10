@@ -14,7 +14,7 @@ use anyhow::Result;
 use reqwest::{Client, StatusCode};
 use serde_json::{Map, Value, json};
 
-use crate::fetch::Served;
+use crate::{fallback::Fallback, fetch::Served};
 
 const JEV_MODEL: &str = "jev-1.13.0";
 
@@ -85,7 +85,8 @@ impl Usage {
         *self.served.lock().unwrap_or_else(PoisonError::into_inner) = Some(served);
     }
 
-    pub(crate) fn json(&self) -> Value {
+    /// The usage as `--json` prints it. The bytes, the proxied renders and the proxied hosts are the run's own (see `run`).
+    pub(crate) fn json(&self, run: &Fallback) -> Value {
         let n = |c: &AtomicU64| c.load(Relaxed);
         let route = self.served.lock().unwrap_or_else(PoisonError::into_inner).map(Served::name);
         json!({
@@ -94,6 +95,9 @@ impl Usage {
             "plain_refusals": n(&self.plain_refusals),
             "browser_requests": n(&self.browser_requests),
             "route": route,
+            "bytes": { "direct": run.bytes(false), "proxy": run.bytes(true) },
+            "proxied_renders": run.renders(),
+            "proxied_hosts": run.hosts(),
             "jev": { "requests": n(&self.jev_requests), "input_tokens": n(&self.jev_tokens) },
             "clef": { "requests": n(&self.clef_requests), "input_tokens": n(&self.clef_tokens), "images": n(&self.clef_images) },
         })
@@ -278,13 +282,16 @@ mod tests {
     fn the_usage_names_the_route_the_answer_was_served_by() {
         use crate::fetch::Route;
         let usage = Usage::new();
-        assert_eq!(usage.json()["route"], Value::Null, "no page read: no route");
+        let run = Fallback::default();
+        assert_eq!(usage.json(&run)["route"], Value::Null, "no page read: no route");
         usage.record_route(Served { route: Route::Stealth, rendered: true });
-        assert_eq!(usage.json()["route"], "stealth+render");
+        assert_eq!(usage.json(&run)["route"], "stealth+render");
+        usage.record_route(Served { route: Route::Proxy, rendered: true });
+        assert_eq!(usage.json(&run)["route"], "proxy+render");
         usage.record_route(Served { route: Route::Browser, rendered: false });
-        assert_eq!(usage.json()["route"], "browser");
+        assert_eq!(usage.json(&run)["route"], "browser");
         usage.record_route(Served { route: Route::Direct, rendered: false });
-        assert_eq!(usage.json()["route"], "direct");
+        assert_eq!(usage.json(&run)["route"], "direct");
     }
 
     #[test]
@@ -296,13 +303,16 @@ mod tests {
         u.clef(&clef_answers(&json!({ "result": { "answers": {}, "usage": { "input_tokens": 90 } } })), 1);
         u.clef(&clef_answers(&json!({ "result": { "answers": {} }, "usage": { "input_tokens": 70 } })), 1);
         assert_eq!(
-            u.json(),
+            u.json(&Fallback::default()),
             json!({
                 "pages": 2,
                 "browser_retry": false,
                 "plain_refusals": 0,
                 "browser_requests": 0,
                 "route": null,
+                "bytes": { "direct": 0, "proxy": 0 },
+                "proxied_renders": 0,
+                "proxied_hosts": [],
                 "jev": { "requests": 4, "input_tokens": 2000 },
                 "clef": { "requests": 2, "input_tokens": 160, "images": 2 },
             })

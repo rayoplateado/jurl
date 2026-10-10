@@ -9,6 +9,7 @@ mod cloud;
 mod config;
 mod decide;
 mod extract;
+mod fallback;
 mod fetch;
 mod follow;
 mod hosts;
@@ -163,6 +164,7 @@ async fn run(mut args: Args) -> Result<()> {
     reach::set_reach(&mut args).await?;
     args.stealth =
         stealth::Sidecar::configured(|key| cfg.get(key), args.public_only, args.render_sandboxed, args.timing);
+    args.fallback = fallback::Fallback::configured(|key| cfg.get(key))?;
     let access = setup::access(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
@@ -294,7 +296,7 @@ pub(crate) async fn load(
     let page = if args.render {
         fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
-        let page = fetch::render(&bin, target).await?;
+        let page = fetch::render(&bin, target, &args.fallback).await?;
         t.lap("render");
         page
     } else {
@@ -305,6 +307,7 @@ pub(crate) async fn load(
             &args.reach,
             &args.cookies,
             args.stealth.as_ref(),
+            &args.fallback,
         );
         let page = fetch::fetch(target.as_str(), retry).await?;
         t.lap("fetch");
@@ -343,7 +346,7 @@ pub(crate) async fn load(
                     let why =
                         if shell { "no text without JavaScript" } else { "unfilled template placeholders in the text" };
                     eprintln!("jurl: {why}, rendering with Lightpanda…");
-                    match fetch::render(&bin, &page.url).await {
+                    match fetch::render(&bin, &page.url, &args.fallback).await {
                         Ok(rendered) => {
                             ex = extract::html(&rendered.body, &rendered.url);
                             served.rendered = true;

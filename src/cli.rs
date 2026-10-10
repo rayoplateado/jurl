@@ -64,6 +64,10 @@ pub(crate) struct Args {
     /// memo and its budget are this run's own. Not a flag.
     #[arg(skip)]
     pub(crate) stealth: Option<crate::stealth::Sidecar>,
+    /// The fallback proxy this run is set up with (see `fallback.rs`), when `JURL_FALLBACK_PROXY` names one. The hosts it puts on
+    /// the proxy are this run's own. Not a flag.
+    #[arg(skip)]
+    pub(crate) fallback: crate::fallback::Fallback,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,

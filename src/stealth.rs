@@ -390,7 +390,8 @@ mod tests {
 
     use crate::{
         fetch::{
-            Memo, Retry, test_server::NO_COOKIES, test_server::PRIVATE, test_server::reply, test_server::serve_routed,
+            Memo, Retry, test_server::NO_COOKIES, test_server::NO_FALLBACK, test_server::PRIVATE, test_server::reply,
+            test_server::serve_routed,
         },
         mock,
     };
@@ -427,7 +428,7 @@ mod tests {
 
     /// The retry of a test run: the browser retry on, the run's reach, and `stealth` as its sidecar.
     fn retry_for<'a>(memo: &'a Memo, reach: &'a Reach, stealth: Option<&'a Sidecar>) -> Retry<'a> {
-        Retry { on: true, memo, timing: false, reach, cookies: &NO_COOKIES, stealth }
+        Retry { on: true, memo, timing: false, reach, cookies: &NO_COOKIES, stealth, fallback: &NO_FALLBACK }
     }
 
     /// A reach that reads loopback, as a run from a public address reads only public ones and the start's own.

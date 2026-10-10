@@ -63,7 +63,7 @@ pub(crate) fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::U
     let json = |v: &Value| -> Result<String> {
         let mut v = v.clone();
         if let Some(o) = v.as_object_mut() {
-            o.insert("usage".to_string(), usage.json());
+            o.insert("usage".to_string(), usage.json(&args.fallback));
         }
         Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
     };
@@ -161,6 +161,9 @@ mod tests {
             "plain_refusals": 0,
             "browser_requests": 0,
             "route": null,
+            "bytes": { "direct": 0, "proxy": 0 },
+            "proxied_renders": 0,
+            "proxied_hosts": [],
             "jev": { "requests": 4, "input_tokens": 5321 },
             "clef": { "requests": 0, "input_tokens": 0, "images": 0 },
         });
