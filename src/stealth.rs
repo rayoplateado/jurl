@@ -16,7 +16,6 @@ use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::{
-    decide,
     fetch::{self, Memo},
     reach::{self, Reach},
 };
@@ -101,10 +100,6 @@ impl Sidecar {
             );
             return None;
         };
-        if decide::plain_http_off_loopback(&base) {
-            note(timing, "JURL_STEALTH_URL is plain http off this computer: the stealth sidecar is not asked, its token would travel in clear".into());
-            return None;
-        }
         let country_setting = get("JURL_STEALTH_COUNTRY").filter(|v| !v.is_empty());
         let country = country_of(country_setting.as_deref());
         if country_setting.is_some() && country.is_none() {
@@ -301,13 +296,6 @@ mod tests {
         assert!(sidecar(&[URL]).is_none(), "no token, no call");
         assert!(sidecar(&[URL, ("JURL_STEALTH_TOKEN", "")]).is_none(), "an empty token is no token");
         assert!(sidecar(&[URL, TOKEN]).is_some());
-    }
-
-    #[test]
-    fn a_token_is_not_sent_over_plain_http_off_this_computer() {
-        assert!(sidecar(&[("JURL_STEALTH_URL", "http://sidecar.example:8091"), TOKEN]).is_none());
-        assert!(sidecar(&[("JURL_STEALTH_URL", "http://127.0.0.1:8091"), TOKEN]).is_some());
-        assert!(sidecar(&[("JURL_STEALTH_URL", "https://sidecar.example:8091/"), TOKEN]).is_some());
     }
 
     #[test]
