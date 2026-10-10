@@ -206,8 +206,8 @@ pub(crate) fn host_key(url: &Url) -> Option<String> {
 /// The page at `url`. When the normal client is refused and the retry is on, the same URL is asked once more by the
 /// browser client, whose TLS and HTTP/2 fingerprint some bot protection accepts where it refuses the normal client. A host
 /// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried. A page that a host
-/// refuses with 202, 401, 403 or 429 is read again through the fallback proxy, when the run has one (rung 3), and a page still
-/// refused with 202, 401, 403 or 429 is last asked of the stealth sidecar, when the run has one (see `refused_page`).
+/// refuses with 202, 401, 403 or 429, or resets the stream of, is read again through the fallback proxy, when the run has one
+/// (rung 3), and a page still refused that way is last asked of the stealth sidecar, when the run has one (see `refused_page`).
 pub(crate) async fn fetch(url: &str, retry: Retry<'_>) -> Result<Page> {
     fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
 }
@@ -269,15 +269,19 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
         Reply::Refused(refused) => refused,
     };
     // A refusal that came through the proxy is not retried with the browser client: it is the proxy's answer.
-    if refused.via_proxy || !retry.on || !retried(refused.status, refused.retry_after.is_some()) {
+    if refused.via_proxy || !retry.on || !refused.retried() {
         return refused_page(url, refused, None, max, retry).await;
     }
     let res = match browser_send(url, retry).await {
         Ok(res) => res,
         // The guard's refusal is the answer, not the plain refusal.
         Err(e) if e.downcast_ref::<NotPublic>().is_some() => return Err(e),
-        // The browser client got no reply at all: the plain refusal stands, and the page is still refused.
-        Err(_) => return refused_page(url, refused, None, max, retry).await,
+        Err(e) => match e.downcast_ref::<ServerReset>() {
+            // The browser client's stream was reset by the server: that is the browser's refusal, as a status would be.
+            Some(reset) => return refused_page(url, Refusal::reset(reset), Some(VIA_BROWSER_TOO), max, retry).await,
+            // The browser client got no reply at all: the plain refusal stands, and the page is still refused.
+            None => return refused_page(url, refused, None, max, retry).await,
+        },
     };
     // A success from the browser client means it got past the bot check: the host is on the client from now on.
     if let Some(parsed) = &parsed
@@ -293,15 +297,16 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
 }
 
 /// What a page that a host refused is answered with, once the direct clients (and the browser client's retry, where it
-/// applies) have refused it. A direct refusal with 202, 401, 403 or 429 puts the page's host on the fallback proxy, and the page is
-/// read again through it (rung 3): that is the host's switch, said on stderr under `-t`. A refusal through the proxy, or one
-/// that does not switch a host, goes to the sidecar (rung 5) and else stands as the error (see `sidecar_or_error`).
+/// applies) have refused it. A direct refusal with 202, 401, 403 or 429, or a reset of the stream, puts the page's host on the
+/// fallback proxy, and the page is read again through it (rung 3): that is the host's switch, said on stderr under `-t`. A refusal
+/// through the proxy, or one that does not switch a host, goes to the sidecar (rung 5) and else stands as the error (see
+/// `sidecar_or_error`).
 async fn refused_page(url: &str, refused: Refusal, via: Option<&str>, max: usize, retry: Retry<'_>) -> Result<Page> {
     if let Some(target) = Url::parse(url).ok().filter(|_| retry.fallback.has_proxy())
         && !refused.via_proxy
-        && fallback::refused_enough(refused.status)
+        && refused.switches_host()
     {
-        retry.fallback.put_on_proxy(&target, &switch_why(refused.status, via), retry.timing);
+        retry.fallback.put_on_proxy(&target, &switch_why(refused.cause, via), retry.timing);
         return match get(plain_for(retry.reach), url, max, retry).await? {
             Reply::Page { page, .. } => Ok(page),
             Reply::Refused(again) => {
@@ -314,19 +319,22 @@ async fn refused_page(url: &str, refused: Refusal, via: Option<&str>, max: usize
     sidecar_or_error(url, refused, via, max, retry).await
 }
 
-/// Why a host is put on the proxy, for the `-t` line: the status that refused it, and which client did.
-fn switch_why(status: StatusCode, via: Option<&str>) -> String {
+/// Why a host is put on the proxy, for the `-t` line: the status or the reset that refused it, and which client did.
+fn switch_why(cause: Cause, via: Option<&str>) -> String {
     let from = match via {
         Some(VIA_BROWSER) => "browser",
         Some(VIA_BROWSER_TOO) => "direct and browser",
         Some(VIA_RENDER) => "render",
         _ => "direct",
     };
-    format!("{} from {from}", status.as_u16())
+    match cause {
+        Cause::Status(status) => format!("{} from {from}", status.as_u16()),
+        Cause::Reset(_) => format!("reset from {from}"),
+    }
 }
 
-/// The stealth sidecar's answer to a refused page (rung 5), or else the refusal as the error. Only 202, 401, 403 and 429 are asked of
-/// the sidecar (see [`stealth::asked_for`]), and a run with no sidecar never asks.
+/// The stealth sidecar's answer to a refused page (rung 5), or else the refusal as the error. Only 202, 401, 403, 429 and a reset
+/// of the stream are asked of the sidecar (see [`Refusal::asked_of_sidecar`]), and a run with no sidecar never asks.
 async fn sidecar_or_error(
     url: &str,
     refused: Refusal,
@@ -335,7 +343,7 @@ async fn sidecar_or_error(
     retry: Retry<'_>,
 ) -> Result<Page> {
     if let Some(sidecar) = retry.stealth
-        && stealth::asked_for(refused.status)
+        && refused.asked_of_sidecar()
         && let Ok(target) = Url::parse(url)
         && let Some(body) = sidecar.read(&target, retry.reach, max, retry.timing, retry.fallback).await?
     {
@@ -355,7 +363,7 @@ pub(crate) async fn refused_render(
     retry: Retry<'_>,
 ) -> Result<Page> {
     let via_proxy = retry.fallback.uses(url);
-    let refused = Refusal { status, retry_after, via_proxy };
+    let refused = Refusal { cause: Cause::Status(status), retry_after, via_proxy };
     refused_page(url.as_str(), refused, Some(VIA_RENDER), PAGE_MAX, retry).await
 }
 
@@ -444,27 +452,112 @@ enum Reply {
     Refused(Refusal),
 }
 
-/// A reply that is not a success: its status, its Retry-After when it has one (in either form, as text), and whether the request
-/// went through the fallback proxy.
+/// Why a request was refused: the status of the reply it got, or the server's reset of its stream before any reply (see
+/// [`ServerReset`]). A reset has no status, so it is not read as one: each rung decides it as the refusal a 403 is (see the
+/// methods of [`Refusal`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cause {
+    Status(StatusCode),
+    Reset(h2::Reason),
+}
+
+/// A request that was refused, or that got no reply: its cause, its Retry-After when it has one (in either form, as text), and
+/// whether the request went through the fallback proxy.
 struct Refusal {
-    status: StatusCode,
+    cause: Cause,
     retry_after: Option<String>,
     via_proxy: bool,
 }
 
 impl Refusal {
+    /// The refusal of a stream the server reset.
+    fn reset(reset: &ServerReset) -> Self {
+        Refusal { cause: Cause::Reset(reset.reason), retry_after: None, via_proxy: reset.via_proxy }
+    }
+
+    /// Whether a browser's fingerprint is asked for this refusal (see [`retried`]). A reset is, as a 403 is.
+    fn retried(&self) -> bool {
+        match self.cause {
+            Cause::Status(status) => retried(status, self.retry_after.is_some()),
+            Cause::Reset(_) => true,
+        }
+    }
+
+    /// Whether this refusal puts its host on the fallback proxy (see `fallback::refused_enough`). A reset does, as a 403 does.
+    fn switches_host(&self) -> bool {
+        match self.cause {
+            Cause::Status(status) => fallback::refused_enough(status),
+            Cause::Reset(_) => true,
+        }
+    }
+
+    /// Whether the stealth sidecar is asked for this refusal (see `stealth::asked_for`). A reset is, as a 403 is.
+    fn asked_of_sidecar(&self) -> bool {
+        match self.cause {
+            Cause::Status(status) => stealth::asked_for(status),
+            Cause::Reset(_) => true,
+        }
+    }
+
     /// The error for this refusal. `via` says which client refused, when the error should say.
     fn error(&self, url: &str, via: Option<&str>) -> anyhow::Error {
         let mut notes: Vec<String> = via.map(String::from).into_iter().collect();
         if let Some(r) = &self.retry_after {
             notes.push(if r.is_empty() { "retry after".to_string() } else { format!("retry after {r}") });
         }
-        if notes.is_empty() {
-            anyhow!("{url} returned HTTP {}", self.status)
-        } else {
-            anyhow!("{url} returned HTTP {} ({})", self.status, notes.join("; "))
+        match self.cause {
+            Cause::Status(status) if notes.is_empty() => anyhow!("{url} returned HTTP {status}"),
+            Cause::Status(status) => anyhow!("{url} returned HTTP {status} ({})", notes.join("; ")),
+            Cause::Reset(reason) => {
+                notes.insert(0, reason.to_string());
+                anyhow!("{url} was reset by the server ({})", notes.join("; "))
+            }
         }
     }
+}
+
+/// The server reset the stream of a request before it sent any reply: an RST_STREAM from the server, as bot protection sends to a
+/// client it turns away (Akamai answers with INTERNAL_ERROR). That is a refusal of the page, not a failure to reach the server, and
+/// it climbs the ladder as a 403 does (see [`Refusal`]). `via_proxy` is whether the request went through the fallback proxy.
+pub(crate) struct ServerReset {
+    pub(crate) reason: h2::Reason,
+    pub(crate) via_proxy: bool,
+}
+
+impl fmt::Debug for ServerReset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerReset")
+            .field("reason", &self.reason.to_string())
+            .field("via_proxy", &self.via_proxy)
+            .finish()
+    }
+}
+
+impl fmt::Display for ServerReset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the server reset the request's stream ({})", self.reason)
+    }
+}
+
+impl std::error::Error for ServerReset {}
+
+/// The reason of the server's reset of a request's stream, when `err` has one: an RST_STREAM the peer sent, as the HTTP/2 layer of
+/// either client reports it (`is_reset` and `is_remote` on the `h2::Error` or `http2::Error` in its chain). A reset this client made
+/// itself (a header block it cannot take, say) is not the server's, and a GOAWAY is about the connection: neither is a refusal. The
+/// reason is recorded, not judged: any reset the server sends before its reply counts.
+fn server_reset(err: &(dyn std::error::Error + 'static)) -> Option<h2::Reason> {
+    let mut cur = Some(err);
+    while let Some(e) = cur {
+        if let Some(h2err) = e.downcast_ref::<h2::Error>() {
+            return (h2err.is_reset() && h2err.is_remote()).then(|| h2err.reason()).flatten();
+        }
+        if let Some(h2err) = e.downcast_ref::<http2::Error>() {
+            let reason = (h2err.is_reset() && h2err.is_remote()).then(|| h2err.reason()).flatten();
+            return reason.map(|r| h2::Reason::from(u32::from(r)));
+        }
+        cur = e.source();
+    }
+    None
 }
 
 /// An HTTP error status that a render (Lightpanda's, see [`render`]) came back with, for the page at `url`, with its Retry-After
@@ -498,14 +591,24 @@ fn retry_after_text(value: &header::HeaderValue) -> String {
 /// One GET of `url` with the plain `client`, or through the fallback proxy where its host is on it (see `send_get`): the page,
 /// or the refusal.
 async fn get(client: &Client, url: &str, max: usize, retry: Retry<'_>) -> Result<Reply> {
-    let (mut res, via_proxy) =
+    let sent =
         send_get(client, url, retry, &[("accept", "text/markdown, text/html;q=0.9, */*;q=0.5".to_string())], None)
-            .await?;
+            .await;
+    let (mut res, via_proxy) = match sent {
+        Ok(sent) => sent,
+        Err(e) => match e.downcast_ref::<ServerReset>() {
+            Some(reset) => {
+                crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
+                return Ok(Reply::Refused(Refusal::reset(reset)));
+            }
+            None => return Err(e),
+        },
+    };
     let status = res.status();
     if !gave_page(status) {
         crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
         let retry_after = res.headers().get(header::RETRY_AFTER).map(retry_after_text);
-        return Ok(Reply::Refused(Refusal { status, retry_after, via_proxy }));
+        return Ok(Reply::Refused(Refusal { cause: Cause::Status(status), retry_after, via_proxy }));
     }
     let final_url = res.url().clone();
     let ct = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
@@ -525,10 +628,16 @@ async fn get(client: &Client, url: &str, max: usize, retry: Retry<'_>) -> Result
     Ok(Reply::Page { status, page })
 }
 
-/// One GET of `url` with the browser client, which asks with its own headers: the page, or the refusal. No reply at all,
-/// or a reply that cannot be read, is an error.
+/// One GET of `url` with the browser client, which asks with its own headers: the page, or the refusal (a reset of the stream
+/// included). Any other error, or a reply that cannot be read, is an error.
 async fn get_browser(url: &str, max: usize, retry: Retry<'_>) -> Result<Reply> {
-    browser_reply(browser_send(url, retry).await?, url, max, retry).await
+    match browser_send(url, retry).await {
+        Ok(res) => browser_reply(res, url, max, retry).await,
+        Err(e) => match e.downcast_ref::<ServerReset>() {
+            Some(reset) => Ok(Reply::Refused(Refusal::reset(reset))),
+            None => Err(e),
+        },
+    }
 }
 
 /// The browser client's request for `url`, sent. An error here means no reply came; the guard's refusal is its own error.
@@ -542,7 +651,7 @@ async fn browser_reply(res: wreq::Response, url: &str, max: usize, retry: Retry<
     let status = res.status();
     if !gave_page(status) {
         let retry_after = res.headers().get(wreq::header::RETRY_AFTER).map(retry_after_text);
-        return Ok(Reply::Refused(Refusal { status, retry_after, via_proxy: false }));
+        return Ok(Reply::Refused(Refusal { cause: Cause::Status(status), retry_after, via_proxy: false }));
     }
     let final_url = Url::parse(&res.uri().to_string()).with_context(|| format!("the address {url} ended at"))?;
     let ct =
@@ -687,6 +796,12 @@ pub(crate) async fn send_get(
             Ok(res) => res,
             Err(e) if reach::refused(&e) => return Err(NotPublic.into()),
             Err(e) => {
+                // A reset is a refusal the caller answers (see `get`), so it is typed here, before the proxy's scrubbing.
+                if let Some(reason) = server_reset(&e) {
+                    return Err(
+                        anyhow::Error::new(ServerReset { reason, via_proxy }).context(format!("fetching {target}"))
+                    );
+                }
                 let err = anyhow::Error::new(e).context(format!("fetching {target}"));
                 return Err(retry.fallback.scrubbed(via_proxy, err));
             }
@@ -732,7 +847,11 @@ async fn send_browser_get(
             Ok(res) => res,
             Err(e) if reach::refused(&e) => return Err(NotPublic.into()),
             Err(e) => {
-                return Err(anyhow::Error::new(e).context(format!("fetching {target} with a browser's fingerprint")));
+                let context = format!("fetching {target} with a browser's fingerprint");
+                if let Some(reason) = server_reset(&e) {
+                    return Err(anyhow::Error::new(ServerReset { reason, via_proxy: false }).context(context));
+                }
+                return Err(anyhow::Error::new(e).context(context));
             }
         };
         retry.cookies.set_cookies(&mut res.headers().get_all(wreq::header::SET_COOKIE).iter(), &target);
@@ -809,12 +928,14 @@ pub(crate) async fn image_bytes(page: &Url, url: &Url, retry: Retry<'_>, max: us
     }
     crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
     let refused = Refusal {
-        status: res.status(),
+        cause: Cause::Status(res.status()),
         retry_after: res.headers().get(header::RETRY_AFTER).map(retry_after_text),
         via_proxy,
     };
-    let asked_again =
-        matches!(refused.status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS);
+    let asked_again = matches!(
+        refused.cause,
+        Cause::Status(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS)
+    );
     // A refusal through the proxy is the answer too: an image never puts a host on the proxy, and is not retried with the browser.
     if via_proxy || !retry.on || !asked_again {
         let via = via_proxy.then_some(VIA_PROXY);
@@ -838,7 +959,7 @@ pub(crate) async fn image_bytes(page: &Url, url: &Url, retry: Retry<'_>, max: us
 async fn browser_image(res: wreq::Response, url: &Url, max: usize, via: &str, retry: Retry<'_>) -> Result<Vec<u8>> {
     if !res.status().is_success() {
         let retry_after = res.headers().get(wreq::header::RETRY_AFTER).map(retry_after_text);
-        let refused = Refusal { status: res.status(), retry_after, via_proxy: false };
+        let refused = Refusal { cause: Cause::Status(res.status()), retry_after, via_proxy: false };
         return Err(ImageRefused(refused.error(url.as_str(), Some(via)).to_string()).into());
     }
     let bytes = read_stream_capped(res.content_length(), res.bytes_stream(), max)
@@ -1807,7 +1928,10 @@ mod tests {
     fn outcome(reply: &Result<Reply>) -> Value {
         match reply {
             Ok(Reply::Page { status, page }) => json!({ "status": status.as_u16(), "bytes": page.body.len() }),
-            Ok(Reply::Refused(refusal)) => json!({ "status": refusal.status.as_u16() }),
+            Ok(Reply::Refused(refusal)) => match refusal.cause {
+                Cause::Status(status) => json!({ "status": status.as_u16() }),
+                Cause::Reset(reason) => json!({ "reset": reason.to_string() }),
+            },
             Err(e) => json!({ "error": format!("{e:#}") }),
         }
     }
@@ -2858,8 +2982,12 @@ mod tests {
 
     #[test]
     fn a_render_refusal_switches_the_host_and_says_so_as_a_render() {
-        assert_eq!(switch_why(StatusCode::FORBIDDEN, Some(VIA_RENDER)), "403 from render");
-        assert_eq!(switch_why(StatusCode::TOO_MANY_REQUESTS, None), "429 from direct");
+        assert_eq!(switch_why(Cause::Status(StatusCode::FORBIDDEN), Some(VIA_RENDER)), "403 from render");
+        assert_eq!(switch_why(Cause::Status(StatusCode::TOO_MANY_REQUESTS), None), "429 from direct");
+        assert_eq!(
+            switch_why(Cause::Reset(h2::Reason::INTERNAL_ERROR), Some(VIA_BROWSER_TOO)),
+            "reset from direct and browser"
+        );
     }
 
     #[cfg(unix)]
@@ -2934,6 +3062,113 @@ mod tests {
         let res = client.get(format!("http://{addr}/es-es")).send().await.unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(res.version(), reqwest::Version::HTTP_2);
         assert_eq!(res.text().await.expect("the body"), "<p>Hello, page.</p>");
+    }
+
+    /// A server that speaks HTTP/2 over plain TCP, as the prior-knowledge client does, and resets every request's stream before any
+    /// reply, with `reason`. Returns its base URL.
+    async fn resetting_h2_site(reason: h2::Reason) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let Ok(mut conn) = h2::server::handshake(socket).await else { return };
+                    while let Some(Ok((_request, mut respond))) = conn.accept().await {
+                        respond.send_reset(reason);
+                    }
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// The client of the tests that speak HTTP/2 over plain TCP: jurl's own settings, with prior knowledge and no proxy.
+    fn h2_client() -> reqwest::Client {
+        crate::client_builder().http2_prior_knowledge().no_proxy().build().expect("a client")
+    }
+
+    #[tokio::test]
+    async fn a_stream_the_server_resets_is_a_refusal_that_names_its_reason() {
+        for reason in [h2::Reason::INTERNAL_ERROR, h2::Reason::REFUSED_STREAM] {
+            let site = resetting_h2_site(reason).await;
+            let url = format!("{site}/page");
+            let refusal = match get(&h2_client(), &url, PAGE_MAX, retry_off()).await {
+                Ok(Reply::Refused(refusal)) => refusal,
+                Ok(Reply::Page { .. }) => panic!("a page from a reset stream"),
+                Err(e) => panic!("a reset is a refusal, not an error: {e:#}"),
+            };
+            assert!(matches!(refusal.cause, Cause::Reset(got) if got == reason), "{reason}");
+            assert_eq!(refusal.error(&url, None).to_string(), format!("{url} was reset by the server ({reason})"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reset_the_client_makes_itself_is_an_error_and_no_refusal() {
+        // A header block past the client's own limit: the client resets the stream, and that reset is its own, not the server's.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("a connection");
+            let mut conn = h2::server::handshake(socket).await.expect("the HTTP/2 handshake");
+            while let Some(Ok((_request, mut respond))) = conn.accept().await {
+                let preload = format!("<https://cdn.test/{}>; rel=preload", "a".repeat(31_000));
+                let response =
+                    http::Response::builder().status(200).header("link", preload).body(()).expect("a response");
+                let _ = respond.send_response(response, true);
+            }
+        });
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .http2_max_header_list_size(16 << 10)
+            .no_proxy()
+            .build()
+            .expect("a client");
+        let err = get(&client, &format!("http://{addr}/page"), PAGE_MAX, retry_off())
+            .await
+            .err()
+            .expect("the client resets the stream itself");
+        assert!(
+            err.downcast_ref::<ServerReset>().is_none(),
+            "a reset of the client's own is not the server's: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reset_climbs_to_the_proxy_as_a_403_does() {
+        let site = resetting_h2_site(h2::Reason::INTERNAL_ERROR).await;
+        let url = format!("{site}/precio");
+        let refusal = match get(&h2_client(), &url, PAGE_MAX, retry_off()).await {
+            Ok(Reply::Refused(refusal)) => refusal,
+            _ => panic!("the reset is a refusal"),
+        };
+        let (proxy, _) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let page = refused_page(&url, refusal, None, PAGE_MAX, proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Proxy);
+        assert_eq!(page.body, "<p>Via the proxy</p>");
+        assert_eq!(fallback.hosts(), [name_of(&site)]);
+    }
+
+    #[test]
+    fn a_reset_is_decided_on_each_rung_as_a_403_is_and_a_404_is_on_none() {
+        let refusal = |cause| Refusal { cause, retry_after: None, via_proxy: false };
+        let reset = refusal(Cause::Reset(h2::Reason::INTERNAL_ERROR));
+        assert!(reset.retried() && reset.switches_host() && reset.asked_of_sidecar());
+        let forbidden = refusal(Cause::Status(StatusCode::FORBIDDEN));
+        assert!(forbidden.retried() && forbidden.switches_host() && forbidden.asked_of_sidecar());
+        let missing = refusal(Cause::Status(StatusCode::NOT_FOUND));
+        assert!(!missing.retried() && !missing.switches_host() && !missing.asked_of_sidecar());
+    }
+
+    #[tokio::test]
+    async fn the_browser_client_sees_a_reset_of_its_stream_as_the_server_s() {
+        let site = resetting_h2_site(h2::Reason::REFUSED_STREAM).await;
+        let client = wreq::Client::builder().http2_only().no_proxy().build().expect("a client");
+        let err = client.get(format!("{site}/page")).send().await.expect_err("a reset");
+        assert!(server_reset(&err) == Some(h2::Reason::REFUSED_STREAM), "{err:#}");
     }
 
     /// The path a request head asks for.
@@ -3018,7 +3253,7 @@ mod tests {
         fetch(&format!("{base}/set"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
         match get_browser(&format!("{base}/browser"), PAGE_MAX, retry).await.unwrap_or_else(|e| panic!("{e:#}")) {
             Reply::Page { page, .. } => assert_eq!(page.body, "<p>Browser saw it</p>"),
-            Reply::Refused(refused) => panic!("refused with {}", refused.status),
+            Reply::Refused(refused) => panic!("refused: {}", refused.error(&format!("{base}/browser"), None)),
         }
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
     }

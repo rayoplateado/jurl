@@ -1312,6 +1312,7 @@ dependencies = [
  "futures",
  "h2",
  "http",
+ "http2",
  "image",
  "psl",
  "pulldown-cmark",
