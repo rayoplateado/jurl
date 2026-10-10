@@ -46,8 +46,8 @@ pub(crate) struct Fallback {
     first: bool,
     /// The hosts on the proxy in this run, by their memo name (see `fetch::host_key`).
     hosts: Mutex<BTreeSet<String>>,
-    /// The decoded body bytes read directly, and through the proxy, and the renders Lightpanda made through it: the usage's
-    /// `bytes` and `proxied_renders`. Counted per run, so a run's usage is its own.
+    /// The decoded body bytes read directly, and through the proxy, and the renders made through it (Lightpanda's, and each
+    /// stealth sidecar call's): the usage's `bytes` and `proxied_renders`. Counted per run, so a run's usage is its own.
     bytes_direct: AtomicU64,
     bytes_proxy: AtomicU64,
     renders: AtomicU64,
@@ -161,7 +161,7 @@ impl Fallback {
         counter.load(Relaxed)
     }
 
-    /// Counts one render that Lightpanda made through the proxy.
+    /// Counts one render made through the proxy: Lightpanda's, or a stealth sidecar's call through it (see `stealth.rs`).
     pub(crate) fn count_render(&self) {
         self.renders.fetch_add(1, Relaxed);
     }

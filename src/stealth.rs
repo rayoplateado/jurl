@@ -16,6 +16,7 @@ use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::{
+    fallback::Fallback,
     fetch::{self, Memo},
     reach::{self, Reach},
 };
@@ -134,21 +135,29 @@ impl Sidecar {
 
     /// Asks the sidecar for `url`, a page a host refused (see [`asked_for`]), when the run may. Returns the rendered HTML when the
     /// sidecar has content, and None when the refusal stands: the run may not ask, the host failed earlier in the run, the budget
-    /// is spent, or the sidecar could not read the page. A CAPTCHA is an error. `max` is the largest page the run reads.
+    /// is spent, or the sidecar could not read the page. A CAPTCHA is an error. `max` is the largest page the run reads. When the
+    /// run has a fallback proxy (`fallback`), the call goes through it, and it is counted as one proxied render as it is made.
     pub(crate) async fn read(
         &self,
         url: &Url,
         reach: &Reach,
         max: usize,
         timing: bool,
+        fallback: &Fallback,
     ) -> Result<Option<String>, Captcha> {
         if let Some(why) = self.not_asked(url, reach).await {
             note(timing, format!("{url}: not asked the stealth sidecar: {why}"));
             return Ok(None);
         }
+        // The sidecar's browser load goes through the proxy when the run has one. The proxy bills that load whatever comes back,
+        // and jurl cannot measure it, so the call is counted here, as `fetch::render` counts its own.
+        let proxy = fallback.has_proxy();
+        if proxy {
+            fallback.count_render();
+        }
         note(timing, format!("{url}: asking the stealth sidecar"));
         let host = fetch::host_key(url);
-        match self.call(url, max).await {
+        match self.call(url, max, proxy).await {
             Ok(html) => Ok(Some(html)),
             Err(Failed::Captcha) => {
                 self.fail(host.as_deref());
@@ -212,9 +221,11 @@ impl Sidecar {
         }
     }
 
-    /// One render call for `url`. The token travels only in the bearer header. What a failure says names no address: reqwest's own
-    /// errors name the request's URL, so only the kind of failure is kept (see [`Sidecar::unreachable`]).
-    async fn call(&self, url: &Url, max: usize) -> Result<String, Failed> {
+    /// One render call for `url`. The token travels only in the bearer header. `proxy` is whether the run has a fallback proxy:
+    /// the sidecar exits through the residential proxy only when the read may use the proxy. The sidecar holds the proxy's
+    /// credential itself, so jurl sends only the flag, and no `proxy` key when the run has none. What a failure says names no
+    /// address: reqwest's own errors name the request's URL, so only the kind of failure is kept (see [`Sidecar::unreachable`]).
+    async fn call(&self, url: &Url, max: usize, proxy: bool) -> Result<String, Failed> {
         let mut body = Map::new();
         body.insert("url".into(), json!(url.as_str()));
         if let Some(lang) = &self.lang {
@@ -222,6 +233,9 @@ impl Sidecar {
         }
         if let Some(country) = &self.country {
             body.insert("country".into(), json!(country));
+        }
+        if proxy {
+            body.insert("proxy".into(), json!(true));
         }
         let sent = self.client.post(format!("{}/render", self.base)).bearer_auth(&self.token).json(&body).send().await;
         let res = sent.map_err(|e| self.unreachable(&e))?;
@@ -716,6 +730,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_call_through_the_fallback_proxy_says_so_and_counts_as_a_render() {
+        // Three calls: two through the proxy (the second answers with no content, and is billed all the same) and one with no
+        // proxy. A fourth read is refused by the budget, so it is neither asked nor counted.
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT), (200, "", BLOCKED), (200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let proxied = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
+        let direct = Fallback::new();
+        let url = |host: &str| Url::parse(&format!("https://{host}/p")).expect("a URL");
+        let html = sidecar.read(&url("shop.example"), &PRIVATE, 1 << 20, false, &proxied).await;
+        assert!(html.expect("no CAPTCHA").is_some_and(|body| body.contains("Precio")));
+        assert_eq!(proxied.renders(), 1);
+        let empty = sidecar.read(&url("tienda.example"), &PRIVATE, 1 << 20, false, &proxied).await;
+        assert!(empty.expect("no CAPTCHA").is_none());
+        assert_eq!(proxied.renders(), 2, "a call through the proxy counts whatever comes back");
+        let plain = sidecar.read(&url("otra.example"), &PRIVATE, 1 << 20, false, &direct).await;
+        assert!(plain.expect("no CAPTCHA").is_some());
+        assert_eq!(direct.renders(), 0, "a call with no proxy is not a render");
+        let spent = sidecar.read(&url("cuarta.example"), &PRIVATE, 1 << 20, false, &proxied).await;
+        assert!(spent.expect("no CAPTCHA").is_none());
+        assert_eq!(proxied.renders(), 2, "a read that is not asked is not counted");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3, "the fourth read was not sent");
+        let bodies: Vec<Value> =
+            seen.iter().map(|sent| serde_json::from_str(&sent.body).expect("a JSON request")).collect();
+        assert_eq!(bodies[0]["proxy"], true);
+        assert_eq!(bodies[1]["proxy"], true);
+        assert!(bodies[2].get("proxy").is_none(), "{}", bodies[2]);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_through_the_fallback_proxy_is_asked_of_the_sidecar_with_the_proxy_flag() {
+        // The site refuses direct and browser requests, and so does the proxy the host is put on. The sidecar is then asked with
+        // the proxy flag, and its call is counted once.
+        let base = refusing("403 Forbidden");
+        let (proxy, proxy_served) = serve_routed(|_| Some(reply("403 Forbidden", "", b"denied")));
+        let proxy_url = proxy.replacen("http://", "http://user:s3cret@", 1);
+        let fallback = Fallback::with(Some(proxy_url.as_str()), false);
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        let retry = Retry { fallback: &fallback, ..retry_for(&memo, &PRIVATE, Some(&sidecar)) };
+        let page = fetch::fetch(&format!("{base}/precio"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, fetch::Route::Stealth);
+        assert_eq!(proxy_served.count(), 1, "the proxy is asked for the page once, and refuses it");
+        assert_eq!(fallback.renders(), 1, "the sidecar's call through the proxy is one proxied render");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let body: Value = serde_json::from_str(&seen[0].body).expect("a JSON request");
+        assert_eq!(body["proxy"], true);
+    }
+
+    #[tokio::test]
     async fn robots_and_sitemaps_never_reach_the_sidecar() {
         let base = refusing("403 Forbidden");
         let (side, seen) = mock::serve(vec![(200, "", CONTENT)]);
@@ -788,14 +854,14 @@ mod tests {
         let page = Url::parse("https://shop.example/p").expect("a URL");
         let mut failures = Vec::new();
         for (base, timeout) in [(closed.clone(), TIMEOUT), (slow.clone(), Duration::from_millis(300))] {
-            match sidecar_with(&base, timeout, MAX_PAGES).call(&page, 1 << 20).await {
+            match sidecar_with(&base, timeout, MAX_PAGES).call(&page, 1 << 20, false).await {
                 Err(Failed::Other { reason, .. }) => failures.push((base, reason)),
                 _ => panic!("a call to {base} that gets no answer is a failure"),
             }
         }
         let answers = sidecar_with(&answering, TIMEOUT, MAX_PAGES);
         for _ in 0..4 {
-            match answers.call(&page, 1 << 20).await {
+            match answers.call(&page, 1 << 20, false).await {
                 Err(Failed::Other { reason, .. }) => failures.push((answering.clone(), reason)),
                 _ => panic!("a reply that is not a page is a failure"),
             }
@@ -824,7 +890,7 @@ mod tests {
             base
         };
         let err = sidecar_with(&captcha_side, TIMEOUT, MAX_PAGES)
-            .read(&page, &PRIVATE, 1 << 20, false)
+            .read(&page, &PRIVATE, 1 << 20, false, &NO_FALLBACK)
             .await
             .expect_err("a CAPTCHA is an error");
         let err = err.to_string();

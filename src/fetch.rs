@@ -329,7 +329,7 @@ async fn sidecar_or_error(
     if let Some(sidecar) = retry.stealth
         && stealth::asked_for(refused.status)
         && let Ok(target) = Url::parse(url)
-        && let Some(body) = sidecar.read(&target, retry.reach, max, retry.timing).await?
+        && let Some(body) = sidecar.read(&target, retry.reach, max, retry.timing, retry.fallback).await?
     {
         return Ok(Page { url: target, body, is_markdown: false, route: Route::Stealth });
     }
