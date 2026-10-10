@@ -20,6 +20,7 @@ mod mcp;
 mod mock;
 mod output;
 mod precise;
+mod reach;
 mod setup;
 mod sitemaps;
 mod timing;
@@ -109,9 +110,10 @@ async fn no_args() -> Result<ExitCode> {
     }
 }
 
-/// The client every request goes through, pages and APIs alike: a browser's user agent, with jurl's version on the end.
-pub(crate) fn http_client() -> Result<Client> {
-    Ok(Client::builder()
+/// What every jurl client starts from: a browser's user agent, with jurl's version on the end, the Accept-Language a run
+/// names, and the time limits.
+pub(crate) fn client_builder() -> reqwest::ClientBuilder {
+    Client::builder()
         .user_agent(concat!(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/",
             env!("CARGO_PKG_VERSION")
@@ -119,7 +121,13 @@ pub(crate) fn http_client() -> Result<Client> {
         .default_headers(fetch::language_headers())
         .timeout(HTTP_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
-        .build()?)
+}
+
+/// The client for the APIs (Jev, Clef, jurl cloud, the sign-in) and the requests before a run's pages. It is never guarded:
+/// those servers are the ones jurl is configured to use, and they may be on a private network. Pages go through the run's
+/// reach instead (see `reach.rs`).
+pub(crate) fn http_client() -> Result<Client> {
+    Ok(client_builder().build()?)
 }
 
 async fn run(mut args: Args) -> Result<()> {
@@ -144,6 +152,7 @@ async fn run(mut args: Args) -> Result<()> {
         return mcp::serve(client).await;
     }
     prepare(&mut args)?;
+    reach::set_reach(&mut args).await?;
     let access = setup::access(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
@@ -265,13 +274,14 @@ pub(crate) async fn load(
     t: &mut Timer,
 ) -> Result<(url::Url, Extracted)> {
     let page = if args.render {
+        lightpanda_allowed(&args.reach)?;
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
         let page = fetch::render(&bin, target).await?;
         t.lap("render");
         page
     } else {
         // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
-        let retry = fetch::Retry::for_run(args.no_browser_retry, args.timing);
+        let retry = fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach);
         let page = fetch::fetch(client, target.as_str(), retry).await?;
         t.lap("fetch");
         if page.via_browser {
@@ -293,23 +303,42 @@ pub(crate) async fn load(
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
     let shell = ex.app_shell && text < APP_SHELL_TEXT;
     if !args.render && (shell || placeholders) {
-        match lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await {
-            Ok(bin) => {
-                let why =
-                    if shell { "no text without JavaScript" } else { "unfilled template placeholders in the text" };
-                eprintln!("jurl: {why}, rendering with Lightpanda…");
-                match fetch::render(&bin, &page.url).await {
-                    Ok(rendered) => {
-                        ex = extract::html(&rendered.body, &rendered.url);
-                        t.lap("render");
-                    }
-                    // An app shell has nothing to read without its render; a page with placeholders is readable anyway.
-                    Err(e) if shell => return Err(e),
-                    Err(e) => eprintln!("jurl: could not render the page, reading it as it is: {e:#}"),
-                }
+        if let Err(e) = lightpanda_allowed(&args.reach) {
+            // An app shell has nothing to read without its render. A page with placeholders is readable as it is.
+            if shell {
+                return Err(e);
             }
-            Err(e) => eprintln!("jurl: {e:#}"),
+            eprintln!("jurl: could not render the page, reading it as it is: {e:#}");
+        } else {
+            match lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await {
+                Ok(bin) => {
+                    let why =
+                        if shell { "no text without JavaScript" } else { "unfilled template placeholders in the text" };
+                    eprintln!("jurl: {why}, rendering with Lightpanda…");
+                    match fetch::render(&bin, &page.url).await {
+                        Ok(rendered) => {
+                            ex = extract::html(&rendered.body, &rendered.url);
+                            t.lap("render");
+                        }
+                        // An app shell has nothing to read without its render; a page with placeholders is readable anyway.
+                        Err(e) if shell => return Err(e),
+                        Err(e) => eprintln!("jurl: could not render the page, reading it as it is: {e:#}"),
+                    }
+                }
+                Err(e) => eprintln!("jurl: {e:#}"),
+            }
         }
     }
     Ok((page.url, ex))
+}
+
+/// Rendering runs a browser, which makes requests of its own (its DNS, its redirects, the page's scripts) that the address
+/// check cannot see. So a run from a public address does not render; a run from a private one may.
+fn lightpanda_allowed(reach: &crate::reach::Reach) -> Result<()> {
+    match reach {
+        crate::reach::Reach::Private => Ok(()),
+        crate::reach::Reach::Public { .. } => {
+            bail!("rendering is off in a run from a public address: the browser's own requests are not checked")
+        }
+    }
 }

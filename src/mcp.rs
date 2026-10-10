@@ -395,6 +395,7 @@ async fn run(client: &Client, argv: &[String]) -> Value {
     let found = async {
         let mut args = Args::try_parse_from(argv).map_err(|e| anyhow::anyhow!("{}", e.to_string().trim()))?;
         crate::prepare(&mut args)?;
+        crate::reach::set_reach(&mut args).await?;
         // Read per call, so keys added with `jurl init` or `jurl login` while the agent runs are picked up. Never prompts:
         // stdin is the protocol.
         let cfg = Config::load();

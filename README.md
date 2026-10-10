@@ -297,6 +297,8 @@ A host that a retry showed needs that client is asked there first for the next 1
 
 `--no-browser-retry`, or `JURL_NO_BROWSER_RETRY` set to anything, turns all of this off. `-t` says on stderr once per host when it switches (`jurl: example.com: using the browser client`), and `--json` has `"browser_retry": true` in `usage` when a page was read with the browser client, `"plain_refusals"` for the plain requests that got a refusal, and `"browser_requests"` for the requests sent with the browser client. [bench/browser-retry.md](bench/browser-retry.md) has the numbers.
 
+**Public addresses.** A run that starts at a public address reads only public addresses. Every page it fetches, every redirect, and the files it reads (`robots.txt`, sitemaps, `llms.txt`) must be at a public address, checked where each connection is made, so a name that points at a private one is refused too. A link to a loopback, private or link-local address is skipped, and `-t` says so. A run that starts at a private address, such as a local page you ask for, reads as before. `JURL_PUBLIC_ONLY=1` refuses a private start instead; the cloud runner sets it. In a public run, rendering with Lightpanda is off (its own requests are not checked), and proxy variables are not used (a proxy resolves the page's name itself).
+
 ### Exit codes
 
 As with grep, a script can tell "not there" from "something broke":
