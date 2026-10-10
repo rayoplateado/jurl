@@ -1660,6 +1660,20 @@ mod tests {
         assert!(s.found.is_empty() && s.closest.is_none());
     }
 
+    #[test]
+    fn a_captcha_on_a_later_page_is_skipped_and_the_search_goes_on() {
+        // A page behind an interactive CAPTCHA is for human review, not a stop: it is skipped like a page that failed to load, and
+        // its links never become leads. Only the start page's CAPTCHA fails a run (see `Search::start`).
+        let mut s = search();
+        let captcha: anyhow::Error = crate::stealth::Captcha("https://x.com/next".into()).into();
+        assert!(!is_api_error(&captcha), "an API error would end the search");
+        s.absorb_batch(vec![lead(0.5)], vec![Err(captcha)], true).expect("the search goes on");
+        assert_eq!(s.pages, 1);
+        assert!(s.leads.is_empty());
+        assert!(s.log.is_empty());
+        assert!(s.found.is_empty() && s.closest.is_none());
+    }
+
     /// The links a site lists for `urls`, in that order, as `site_map` lists them.
     fn listed(urls: &[&str]) -> Vec<Link> {
         urls.iter()
