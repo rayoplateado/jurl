@@ -581,7 +581,7 @@ async fn judge(
     client: &Client,
     api_key: &str,
     url: Url,
-    ex: Extracted,
+    mut ex: Extracted,
     site: &Site,
     known: &HashSet<String>,
     field_scores: &FieldScores,
@@ -593,7 +593,7 @@ async fn judge(
     }
     let menus = menus(&ex);
     let bare = bare_links(&ex);
-    let (found, score, warmth, links, new_field_scores) = {
+    let (found, score, warmth, links, new_field_scores, json_block) = {
         let ctx = site.ctx(args, client, api_key, &url, &ex);
         // The links `--links -q` would score, menus and footers included, and the URLs the text writes out. Any host:
         // the page gives them, so a link to another domain is a candidate like any other, and is scored like one. A menu
@@ -639,6 +639,21 @@ async fn judge(
         let leads = links::score(&ctx, &candidates, "Following the link in `links`", long.then_some(field_scores));
         let (answer, scores) = tokio::join!(answer, leads);
         let (answer, warmth) = answer?;
+        // --precise, and the page's text gives no answer above the threshold: its JSON-LD values are judged on their own
+        // (see `blocks::structured_pick`); the one that answers is appended to the page, so its pick is rendered from it.
+        let (answer, json_block) = match answer {
+            Some((Found::Precise(pick), p)) if p >= args.threshold_for(true) => (Some((Found::Precise(pick), p)), None),
+            text => {
+                let mut t = Timer::new();
+                match crate::blocks::structured_pick(&ctx, &ex, &mut t).await? {
+                    Some((block, pick)) => {
+                        let p = pick.p;
+                        (Some((Found::Precise(pick), p)), Some(block))
+                    }
+                    None => (text, None),
+                }
+            }
+        };
         let (scores, new_field_scores) = match scores {
             Ok(s) => s,
             Err(e) if is_api_error(&e) || is_block_page(&e) => return Err(e),
@@ -653,10 +668,13 @@ async fn judge(
             })
             .collect();
         match answer {
-            Some((found, score)) => (Some(found), score, warmth, links, new_field_scores),
-            None => (None, 0.0, warmth, links, new_field_scores),
+            Some((found, score)) => (Some(found), score, warmth, links, new_field_scores, json_block),
+            None => (None, 0.0, warmth, links, new_field_scores, json_block),
         }
     };
+    if let Some(block) = json_block {
+        ex.blocks.push(block);
+    }
     Ok(Visit { url, ex, found, score, warmth, links, menus, new_field_scores })
 }
 
@@ -1084,7 +1102,26 @@ pub async fn run(
     let mut search = Search::start(args, cfg, client, api_key, &start, t).await?;
     let empty = Extracted::default();
     let site_ctx = search.site.ctx(args, client, api_key, &start, &empty);
-    while let Some(batch) = search.next_batch(&site_ctx, t).await? {
+    read_batches(args, cfg, client, api_key, &mut search, &site_ctx, t).await?;
+    // A precise search that found no answer gets a second pass: the site's own search (see `site_search`) adds its results
+    // as leads, and the budget grows. A search that found one never gets here, so answered cells are not changed.
+    if args.precise && search.found.is_empty() && second_pass(args, client, &start, &mut search, &site_ctx).await? {
+        read_batches(args, cfg, client, api_key, &mut search, &site_ctx, t).await?;
+    }
+    search.conclude(args, client, api_key)
+}
+
+/// The pages a search opens, a batch at a time, until its budget or its trail runs out (or it finds an answer).
+async fn read_batches(
+    args: &Args,
+    cfg: &Config,
+    client: &Client,
+    api_key: &str,
+    search: &mut Search,
+    site_ctx: &Ctx<'_>,
+    t: &mut Timer,
+) -> Result<()> {
+    while let Some(batch) = search.next_batch(site_ctx, t).await? {
         // The pages of a batch are read side by side: each reads the field scores from before the batch, and what it
         // asked is kept once the batch is in.
         let results = join_all(batch.iter().map(|l| {
@@ -1094,7 +1131,34 @@ pub async fn run(
         t.lap(format!("{} more", batch.len()));
         search.absorb_batch(batch, results, args.timing)?;
     }
-    search.conclude(args, client, api_key)
+    Ok(())
+}
+
+/// How many pages the second pass may open on top of the first pass's budget.
+const SECOND_PASS: usize = 3;
+
+/// The second pass (see [`run`]): the site's own search results that are not read yet become leads, scored by Jev like the
+/// others, and the search may open [`SECOND_PASS`] more pages. Returns whether there were any such leads.
+async fn second_pass(
+    args: &Args,
+    client: &Client,
+    start: &Url,
+    search: &mut Search,
+    site_ctx: &Ctx<'_>,
+) -> Result<bool> {
+    let retry = crate::fetch::Retry::for_run(args.no_browser_retry, args.timing);
+    let question = args.ask.as_deref().unwrap_or_default();
+    let mut results = crate::site_search::candidates(client, start, question, true, retry).await;
+    results.retain(|l| !search.visited.contains(&links::key(&l.url)));
+    if results.is_empty() {
+        return Ok(false);
+    }
+    let (scores, _) = links::score(site_ctx, &results, "The page at the URL in `links`", None).await?;
+    for (l, p) in results.into_iter().zip(scores) {
+        search.leads.push(Lead { url: l.url, text: l.text, score: p, p, path: vec![start.clone()] });
+    }
+    search.max += SECOND_PASS;
+    Ok(true)
 }
 
 #[cfg(test)]

@@ -70,7 +70,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         title = h.text.clone();
     }
     let site_links = links.clone();
-    Extracted { title, blocks: join_short(blocks), images, links, site_links, app_shell: false }
+    Extracted { title, blocks: join_short(blocks), structured: Vec::new(), images, links, site_links, app_shell: false }
 }
 
 /// YAML frontmatter: its `title:` line is the title, and the body after the closing `---` is the content. Only the

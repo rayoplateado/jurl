@@ -9,6 +9,7 @@ use url::Url;
 
 mod html;
 mod join;
+pub mod json_ld;
 mod markdown;
 
 pub use html::{html, html_with_placeholders};
@@ -90,6 +91,8 @@ pub struct Link {
 pub struct Extracted {
     pub title: String,
     pub blocks: Vec<Block>,
+    /// The page's JSON-LD values (see [`json_ld`]): --precise answers from them only when its text gives no answer.
+    pub structured: Vec<Block>,
     pub images: Vec<Image>,
     pub links: Vec<Link>,
     /// Every link on the page, menus and footers included: how `--follow` moves around a site.

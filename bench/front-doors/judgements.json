@@ -594,5 +594,25 @@
  "https://airtable.com/|What is the monthly price per user of the cheapest paid plan?|$20/user/month": {
   "verdict": "correct",
   "why": "Airtable: the Team plan at $20/user/month billed annually is the first paid tier after Free."
+ },
+ "https://websummit.com/|What are the dates of the next edition?|Event Web Summit, Lisbon (JSON-LD): startDate 2026-11-09, endDate 2026-11-12.": {
+  "verdict": "correct",
+  "why": "Web Summit's JSON-LD Event: 9-12 November 2026 (Lisbon), the same dates the page gave before."
+ },
+ "https://websummit.com/|In which city is it held?|Event Web Summit, Lisbon (JSON-LD): startDate 2026-11-09, endDate 2026-11-12.": {
+  "verdict": "correct",
+  "why": "Web Summit's JSON-LD Event names Lisbon as the city."
+ },
+ "https://vivatech.com/|What are the dates of the next edition?|Event VivaTech 2027 (JSON-LD): startDate 2027-06-16, endDate 2027-06-19.": {
+  "verdict": "correct",
+  "why": "VivaTech 2027's JSON-LD Event: startDate 2027-06-16, endDate 2027-06-19 (the next edition)."
+ },
+ "https://madrid.impacthub.net/|What is the monthly price of a flexible (hot) desk?|120€/month": {
+  "verdict": "correct",
+  "why": "Impact Hub Madrid's coworking page: \"Starting at 120€/month\" for access by membership (the flexible membership's monthly starting price)."
+ },
+ "https://seaya.vc/|What is their typical first ticket?|€10-40m": {
+  "verdict": "correct",
+  "why": "Seaya Andromeda's page: \"€10-40m Ticket size\" (the value precedes its label, as the page's other figures do)."
  }
 }
