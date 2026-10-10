@@ -1684,6 +1684,37 @@ mod tests {
         assert!(s.found.is_empty() && s.closest.is_none());
     }
 
+    #[tokio::test]
+    async fn a_captcha_on_the_start_page_fails_the_search() {
+        // The start page is refused and the stealth sidecar answers with a CAPTCHA: the start cannot be read, so the search fails
+        // with that error, before any judgement is asked of Jev.
+        let (base, _) = serve_routed(|_| Some(reply("403 Forbidden", "", b"denied")));
+        let captcha = r#"{"outcome":"captcha","status":403,"html":"","text":"","title":"","reason":null,"wall_s":1.0,"robots":"allowed"}"#;
+        let (side, seen) = crate::mock::serve(vec![(200, "", captcha)]);
+        let stealth = crate::stealth::Sidecar::configured(
+            |key| match key {
+                "JURL_STEALTH_URL" => Some(side.clone()),
+                "JURL_STEALTH_TOKEN" => Some("token".to_string()),
+                _ => None,
+            },
+            false,
+            false,
+            false,
+        )
+        .expect("a sidecar that is set up");
+        use clap::Parser;
+        let mut args = Args::parse_from(["jurl", "-q", "what does it cost?", "--follow", "2", "http://127.0.0.1:1/"]);
+        args.stealth = Some(stealth);
+        let start = Url::parse(&format!("{base}/tienda")).expect("a URL");
+        let err = Search::start(&args, &Config::default(), &test_server::client(), "key", &start, &mut Timer::new())
+            .await
+            .err()
+            .expect("the start page's CAPTCHA fails the search");
+        assert!(err.downcast_ref::<crate::stealth::Captcha>().is_some(), "{err:#}");
+        assert_eq!(format!("{err:#}"), format!("{start}: an interactive CAPTCHA, not solved; for human review"));
+        assert_eq!(seen.lock().expect("the request log").len(), 1, "the sidecar was asked once");
+    }
+
     /// The links a site lists for `urls`, in that order, as `site_map` lists them.
     fn listed(urls: &[&str]) -> Vec<Link> {
         urls.iter()
