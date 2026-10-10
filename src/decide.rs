@@ -3,13 +3,18 @@
 
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
+    sync::{
+        Mutex, PoisonError,
+        atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
+    },
     time::Duration,
 };
 
 use anyhow::Result;
 use reqwest::{Client, StatusCode};
 use serde_json::{Map, Value, json};
+
+use crate::fetch::Served;
 
 const JEV_MODEL: &str = "jev-1.13.0";
 
@@ -43,6 +48,9 @@ pub(crate) struct Usage {
     pub(crate) clef_requests: AtomicU64,
     pub(crate) clef_tokens: AtomicU64,
     pub(crate) clef_images: AtomicU64,
+    /// How the page that answered was served, or the start page of a search that missed: the usage's `route`. None when the run
+    /// read no page.
+    pub(crate) served: Mutex<Option<Served>>,
 }
 
 impl Usage {
@@ -57,6 +65,7 @@ impl Usage {
             clef_requests: AtomicU64::new(0),
             clef_tokens: AtomicU64::new(0),
             clef_images: AtomicU64::new(0),
+            served: Mutex::new(None),
         }
     }
 
@@ -71,13 +80,20 @@ impl Usage {
         self.clef_images.fetch_add(images as u64, Relaxed);
     }
 
+    /// Records how the page that answers was served (see `served`).
+    pub(crate) fn record_route(&self, served: Served) {
+        *self.served.lock().unwrap_or_else(PoisonError::into_inner) = Some(served);
+    }
+
     pub(crate) fn json(&self) -> Value {
         let n = |c: &AtomicU64| c.load(Relaxed);
+        let route = self.served.lock().unwrap_or_else(PoisonError::into_inner).map(Served::name);
         json!({
             "pages": n(&self.pages),
             "browser_retry": self.browser_retry.load(Relaxed),
             "plain_refusals": n(&self.plain_refusals),
             "browser_requests": n(&self.browser_requests),
+            "route": route,
             "jev": { "requests": n(&self.jev_requests), "input_tokens": n(&self.jev_tokens) },
             "clef": { "requests": n(&self.clef_requests), "input_tokens": n(&self.clef_tokens), "images": n(&self.clef_images) },
         })
@@ -259,6 +275,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_usage_names_the_route_the_answer_was_served_by() {
+        use crate::fetch::Route;
+        let usage = Usage::new();
+        assert_eq!(usage.json()["route"], Value::Null, "no page read: no route");
+        usage.record_route(Served { route: Route::Stealth, rendered: true });
+        assert_eq!(usage.json()["route"], "stealth+render");
+        usage.record_route(Served { route: Route::Browser, rendered: false });
+        assert_eq!(usage.json()["route"], "browser");
+        usage.record_route(Served { route: Route::Direct, rendered: false });
+        assert_eq!(usage.json()["route"], "direct");
+    }
+
+    #[test]
     fn usage_adds_up_jev_and_clef() {
         let u = Usage::new();
         u.pages.fetch_add(2, Relaxed);
@@ -273,6 +302,7 @@ mod tests {
                 "browser_retry": false,
                 "plain_refusals": 0,
                 "browser_requests": 0,
+                "route": null,
                 "jev": { "requests": 4, "input_tokens": 2000 },
                 "clef": { "requests": 2, "input_tokens": 160, "images": 2 },
             })

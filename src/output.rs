@@ -160,6 +160,7 @@ mod tests {
             "browser_retry": false,
             "plain_refusals": 0,
             "browser_requests": 0,
+            "route": null,
             "jev": { "requests": 4, "input_tokens": 5321 },
             "clef": { "requests": 0, "input_tokens": 0, "images": 0 },
         });

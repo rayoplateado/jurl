@@ -22,7 +22,7 @@ use crate::{
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Kind, Link},
-    fetch::Retry,
+    fetch::{Retry, Served},
     judge::{Ctx, Item, is_block_page},
     links::{self, FieldScores},
     load,
@@ -510,6 +510,8 @@ struct Visit {
     menus: HashSet<String>,
     /// The field scores this page asked Jev for, by link (see [`FieldScores`]): the search keeps them for later pages.
     new_field_scores: FieldScores,
+    /// How the page was served, for the usage's `route`.
+    served: Served,
 }
 
 /// What `-t` prints for each page read: how warm the page was, and how sure it is of an answer.
@@ -569,8 +571,8 @@ async fn visit(
     read: &HashSet<String>,
 ) -> Result<Visit> {
     let mut t = Timer::new();
-    let (url, ex) = load(args, cfg, url, &mut t).await?;
-    judge(args, client, api_key, url, ex, site, known, field_scores, read).await
+    let (url, ex, served) = load(args, cfg, url, &mut t).await?;
+    judge(args, client, api_key, url, ex, site, known, field_scores, read, served).await
 }
 
 /// Is the answer on a page that is loaded, and which of its links lead on? Both questions go to Jev at once. `known` holds
@@ -586,6 +588,7 @@ async fn judge(
     known: &HashSet<String>,
     field_scores: &FieldScores,
     read: &HashSet<String>,
+    served: Served,
 ) -> Result<Visit> {
     // A lead can read as a page read already (a markdown lead whose HTML page the search read): it is not judged again.
     if read.contains(&links::key(&url)) {
@@ -675,7 +678,7 @@ async fn judge(
     if let Some(block) = json_block {
         ex.blocks.push(block);
     }
-    Ok(Visit { url, ex, found, score, warmth, links, menus, new_field_scores })
+    Ok(Visit { url, ex, found, score, warmth, links, menus, new_field_scores, served })
 }
 
 /// A page waiting to be opened, and how jurl would get there.
@@ -768,6 +771,8 @@ struct Search {
     log: Vec<Reading>,
     /// The trail went cold before the budget ran out (see [`Stop::Cold`]).
     cold: bool,
+    /// How the start page was served: the usage's `route` when the search misses (see `conclude`).
+    start_served: Served,
 }
 
 impl Search {
@@ -785,10 +790,11 @@ impl Search {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let site = Site::new(start);
-        let retry = Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
+        let retry =
+            Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies, args.stealth.as_ref());
 
         let (loaded, files) = tokio::join!(load(args, cfg, start, t), site_files(start, &site, retry));
-        let (url, ex) = loaded?;
+        let (url, ex, served) = loaded?;
         let SiteFiles { robots, links: mut map } = files;
         // The hosts the page links to on its own registrable domain (docs.stripe.com from stripe.com): their llms.txt is
         // read too, and their pages are leads like the site's own.
@@ -800,7 +806,7 @@ impl Search {
         let read_before = HashSet::new();
         let (known0, field0) = (HashSet::new(), FieldScores::new());
         let (first, hints) =
-            tokio::join!(judge(args, client, api_key, url, ex, &site, &known0, &field0, &read_before), async {
+            tokio::join!(judge(args, client, api_key, url, ex, &site, &known0, &field0, &read_before, served), async {
                 let (llms, sitemaps) =
                     tokio::join!(linked_llms(start, &linked, retry), linked_sitemaps(start, &linked, retry),);
                 map.extend(llms);
@@ -837,6 +843,7 @@ impl Search {
             closest: None,
             log: Vec::new(),
             cold: false,
+            start_served: served,
         };
         let first_path = vec![first.url.clone()];
         search.absorb(first, start_fit, 1.0, first_path);
@@ -917,7 +924,13 @@ impl Search {
                 .robots
                 .load_for(
                     &best,
-                    Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing, &ctx.args.reach, &ctx.args.cookies),
+                    Retry::for_run(
+                        ctx.args.no_browser_retry,
+                        ctx.args.timing,
+                        &ctx.args.reach,
+                        &ctx.args.cookies,
+                        ctx.args.stealth.as_ref(),
+                    ),
                 )
                 .await;
             if n == 0 {
@@ -995,6 +1008,8 @@ impl Search {
             eprintln!("   {pages} pages · {tokens} tokens");
         }
         self.found.sort_by(|a, b| b.rank.total_cmp(&a.rank));
+        // The usage's route is the page that answers, or the start page when the search misses (see `Usage::record_route`).
+        crate::decide::USAGE.record_route(self.found.first().map_or(self.start_served, |best| best.visit.served));
         let (ranked, missed_by) = match self.found.into_iter().next() {
             Some(best) => (best, None),
             None => match self.closest {
@@ -1141,7 +1156,13 @@ const SECOND_PASS: usize = 3;
 /// The second pass (see [`run`]): the site's own search results that are not read yet become leads, scored by Jev like the
 /// others, and the search may open [`SECOND_PASS`] more pages. Returns whether there were any such leads.
 async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &Ctx<'_>) -> Result<bool> {
-    let retry = crate::fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
+    let retry = crate::fetch::Retry::for_run(
+        args.no_browser_retry,
+        args.timing,
+        &args.reach,
+        &args.cookies,
+        args.stealth.as_ref(),
+    );
     let question = args.ask.as_deref().unwrap_or_default();
     let mut results = crate::site_search::candidates(start, question, true, retry).await;
     results.retain(|l| !search.visited.contains(&links::key(&l.url)));
@@ -1400,6 +1421,7 @@ mod tests {
             timing: false,
             reach: &crate::fetch::test_server::PRIVATE,
             cookies: &crate::fetch::test_server::NO_COOKIES,
+            stealth: None,
         };
         assert!(small_text(&robots_of(&base), off).await.is_some());
         assert_eq!(served.kinds(), [Kind::Plain]);
@@ -1513,6 +1535,7 @@ mod tests {
             links: links.iter().map(|&(l, p)| ScoredLink { url: u(l), text: String::new(), p }).collect(),
             menus: HashSet::new(),
             new_field_scores: FieldScores::new(),
+            served: crate::fetch::Served::default(),
         }
     }
 
@@ -1534,6 +1557,7 @@ mod tests {
             closest: None,
             log: Vec::new(),
             cold: false,
+            start_served: crate::fetch::Served::default(),
         }
     }
 
@@ -1644,6 +1668,51 @@ mod tests {
         assert!(s.leads.is_empty());
         assert!(s.log.is_empty());
         assert!(s.found.is_empty() && s.closest.is_none());
+    }
+
+    #[test]
+    fn a_captcha_on_a_later_page_is_skipped_and_the_search_goes_on() {
+        // A page behind an interactive CAPTCHA is for human review, not a stop: it is skipped like a page that failed to load, and
+        // its links never become leads. Only the start page's CAPTCHA fails a run (see `Search::start`).
+        let mut s = search();
+        let captcha: anyhow::Error = crate::stealth::Captcha("https://x.com/next".into()).into();
+        assert!(!is_api_error(&captcha), "an API error would end the search");
+        s.absorb_batch(vec![lead(0.5)], vec![Err(captcha)], true).expect("the search goes on");
+        assert_eq!(s.pages, 1);
+        assert!(s.leads.is_empty());
+        assert!(s.log.is_empty());
+        assert!(s.found.is_empty() && s.closest.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_captcha_on_the_start_page_fails_the_search() {
+        // The start page is refused and the stealth sidecar answers with a CAPTCHA: the start cannot be read, so the search fails
+        // with that error, before any judgement is asked of Jev.
+        let (base, _) = serve_routed(|_| Some(reply("403 Forbidden", "", b"denied")));
+        let captcha = r#"{"outcome":"captcha","status":403,"html":"","text":"","title":"","reason":null,"wall_s":1.0,"robots":"allowed"}"#;
+        let (side, seen) = crate::mock::serve(vec![(200, "", captcha)]);
+        let stealth = crate::stealth::Sidecar::configured(
+            |key| match key {
+                "JURL_STEALTH_URL" => Some(side.clone()),
+                "JURL_STEALTH_TOKEN" => Some("token".to_string()),
+                _ => None,
+            },
+            false,
+            false,
+            false,
+        )
+        .expect("a sidecar that is set up");
+        use clap::Parser;
+        let mut args = Args::parse_from(["jurl", "-q", "what does it cost?", "--follow", "2", "http://127.0.0.1:1/"]);
+        args.stealth = Some(stealth);
+        let start = Url::parse(&format!("{base}/tienda")).expect("a URL");
+        let err = Search::start(&args, &Config::default(), &test_server::client(), "key", &start, &mut Timer::new())
+            .await
+            .err()
+            .expect("the start page's CAPTCHA fails the search");
+        assert!(err.downcast_ref::<crate::stealth::Captcha>().is_some(), "{err:#}");
+        assert_eq!(format!("{err:#}"), format!("{start}: an interactive CAPTCHA, not solved; for human review"));
+        assert_eq!(seen.lock().expect("the request log").len(), 1, "the sidecar was asked once");
     }
 
     /// The links a site lists for `urls`, in that order, as `site_map` lists them.
@@ -1814,6 +1883,7 @@ mod tests {
             timing: false,
             reach: &reach,
             cookies: &crate::fetch::test_server::NO_COOKIES,
+            stealth: None,
         };
         let links = site_files(&start, &Site::new(&start), retry).await.links;
         let paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();

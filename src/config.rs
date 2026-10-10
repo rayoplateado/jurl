@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 
 /// Keys come from the environment first, then `~/.config/jurl/env`, then `./.env` (simple `KEY=value` lines).
 /// `./.env` supplies only the `DOTENV_KEYS`.
+#[derive(Default)]
 pub(crate) struct Config {
     file: HashMap<String, String>,
 }

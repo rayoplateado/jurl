@@ -305,6 +305,8 @@ A host that a retry showed needs that client is asked there first for the next 1
 
 **Public addresses.** A run that starts at a public address reads only public addresses. Each page it fetches, each redirect it follows and each file it reads (`robots.txt`, sitemaps, `llms.txt`) must be at a public address: jurl checks the address before each request, and a direct connection only goes to a public address, so a name that points at a private one is refused. A link to a loopback, private or link-local address is skipped, and `-t` says so. A run that starts at a private address, such as a local page you ask for, reads as before. `JURL_PUBLIC_ONLY=1` refuses a private start, a proxy and rendering; the cloud runner sets it. `JURL_RENDER_SANDBOXED=1` allows rendering under it, for a host whose network outside jurl confines the browser, as the cloud runner's firewall does (it drops the container's connections to private ranges). The page's own address is still checked first. Known limits: (1) A page rendered in a public run (`--render`, or the browser for a page that is only JavaScript) has its own address checked first, and nothing more: the page's scripts and the requests the browser makes itself are not checked, as they were not for single URLs before this. Under `JURL_RENDER_SANDBOXED=1` the network outside jurl checks them instead. (2) With `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` set, a public run uses the proxy, and the proxy resolves each name itself: jurl resolves each host and checks it before each request, redirects included, but a name that changes its answer between that check and the proxy's own lookup can still reach a private address.
 
+`JURL_STEALTH_URL` and `JURL_STEALTH_TOKEN` turn the stealth sidecar on. The URL is the sidecar's base, such as `http://127.0.0.1:8091`, and the token is its bearer. jurl needs both, and says on stderr under `-t` when the token is missing. `JURL_STEALTH_COUNTRY` (two capital letters, such as `ES`) asks the sidecar to read the page from that country. `JURL_STEALTH_MAX_PAGES` caps the calls a run makes to the sidecar, at 3 by default. The sidecar also gets the first language of `JURL_ACCEPT_LANGUAGE`. `--json` has a `"route"` in `usage`: `direct`, `browser` or `stealth` for the page that answered (or the start page, on a miss), with `+render` when Lightpanda ran its JavaScript.
+
 ### Exit codes
 
 As with grep, a script can tell "not there" from "something broke":
@@ -404,6 +406,7 @@ With [jurl cloud](#jurl-cloud), the URL and your question go to jurl cloud, whic
 ```text
 url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · images
           └─ empty JavaScript app or unfilled template? ─▶ render in Lightpanda
+          └─ refused (401, 403 or 429) after the browser retry, and JURL_STEALTH_URL set? ─▶ stealth sidecar
                           │
             one yes/no question per candidate
               ┌───────────┴───────────┐
@@ -436,6 +439,7 @@ url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · 
   - A call that takes longer than 700 ms is sent again, and whichever copy answers first wins.
   - An image still pending at 2.5 s keeps its text-only score.
 - **Lightpanda isn't bundled.** It's AGPL-3.0 and about 90 MB. jurl downloads a pinned 1.0.0 from Lightpanda's official release, checks its SHA-256 and caches it. If one is already on your `PATH`, jurl uses that. `JURL_LIGHTPANDA` points to a specific binary, and `JURL_NO_DOWNLOAD` stops the download. With both set, as on a host that has Lightpanda preinstalled, that binary must be the pinned 1.0.0 release for this platform: jurl checks its SHA-256 and refuses any other. Lightpanda has no Windows build, so on Windows rendering is unavailable.
+- **Stealth is a sidecar, for a page a host still refuses.** When a host refuses a page with 401, 403 or 429 even after the browser retry, and `JURL_STEALTH_URL` names a local service, jurl asks that service once for the page. The sidecar loads it in Camoufox (MPL-2.0) and returns the rendered HTML, which jurl reads like any page. The sidecar says what it found: content, a CAPTCHA, a block or a challenge. jurl never solves a CAPTCHA. That page is an error and goes to human review. A host whose call fails is not asked again in the same run, and a run makes at most `JURL_STEALTH_MAX_PAGES` calls (3 by default). Under `JURL_PUBLIC_ONLY=1` the sidecar is asked only with `JURL_RENDER_SANDBOXED=1`, because it runs the page's JavaScript. It resolves the host again, so that check is not proof against DNS rebinding.
 
 </details>
 

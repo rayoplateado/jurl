@@ -24,6 +24,7 @@ mod reach;
 mod setup;
 mod site_search;
 mod sitemaps;
+mod stealth;
 mod timing;
 mod update;
 mod vision;
@@ -160,6 +161,8 @@ async fn run(mut args: Args) -> Result<()> {
     }
     prepare(&mut args)?;
     reach::set_reach(&mut args).await?;
+    args.stealth =
+        stealth::Sidecar::configured(|key| cfg.get(key), args.public_only, args.render_sandboxed, args.timing);
     let access = setup::access(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
@@ -259,7 +262,8 @@ async fn read(
         let _ = warm.await;
         return follow::run(args, cfg, client, key, target, t).await;
     }
-    let (url, ex) = load(args, cfg, &target, t).await?;
+    let (url, ex, served) = load(args, cfg, &target, t).await?;
+    decide::USAGE.record_route(served);
     let _ = warm.await;
 
     let ctx = Ctx::new(args, client, key, &url, &ex);
@@ -272,8 +276,21 @@ async fn read(
     }
 }
 
-/// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images.
-pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut Timer) -> Result<(url::Url, Extracted)> {
+/// Whether a fetched page is rendered with Lightpanda afterwards: an app shell or a page with placeholders, unless the run
+/// already rendered it (`--render`) or the stealth sidecar served it. The sidecar's HTML is a browser's DOM after the scripts
+/// ran, and a render would ask again the host that refused the page.
+fn renders_after_fetch(render: bool, route: fetch::Route, shell: bool, placeholders: bool) -> bool {
+    !render && route != fetch::Route::Stealth && (shell || placeholders)
+}
+
+/// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images. Also says how the page was
+/// served, for the usage's `route`.
+pub(crate) async fn load(
+    args: &Args,
+    cfg: &Config,
+    target: &url::Url,
+    t: &mut Timer,
+) -> Result<(url::Url, Extracted, fetch::Served)> {
     let page = if args.render {
         fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
@@ -282,14 +299,21 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
         page
     } else {
         // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
-        let retry = fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
+        let retry = fetch::Retry::for_run(
+            args.no_browser_retry,
+            args.timing,
+            &args.reach,
+            &args.cookies,
+            args.stealth.as_ref(),
+        );
         let page = fetch::fetch(target.as_str(), retry).await?;
         t.lap("fetch");
-        if page.via_browser {
+        if page.via_browser() {
             decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         page
     };
+    let mut served = fetch::Served { route: page.route, rendered: args.render };
     // --precise may answer with the page's JSON-LD values (see `extract::json_ld`), read from the HTML that was extracted
     // (the rendered one, when the page is rendered); they are added once the render decision is made.
     let mut json_ld_html = (args.precise && !page.is_markdown).then(|| page.body.clone());
@@ -306,7 +330,7 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
     // (a long text is no proof that the script ran): render it instead of giving up.
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
     let shell = ex.app_shell && text < APP_SHELL_TEXT;
-    if !args.render && (shell || placeholders) {
+    if renders_after_fetch(args.render, page.route, shell, placeholders) {
         if let Err(e) = fetch::render_allowed(&page.url, &args.reach, args.public_only, args.render_sandboxed).await {
             // An app shell has nothing to read without its render. A page with placeholders is readable as it is.
             if shell {
@@ -322,6 +346,7 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
                     match fetch::render(&bin, &page.url).await {
                         Ok(rendered) => {
                             ex = extract::html(&rendered.body, &rendered.url);
+                            served.rendered = true;
                             json_ld_html = args.precise.then(|| rendered.body.clone());
                             t.lap("render");
                         }
@@ -337,5 +362,20 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
     if let Some(html) = &json_ld_html {
         extract::json_ld::add_to(&mut ex, html);
     }
-    Ok((page.url, ex))
+    Ok((page.url, ex, served))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_page_the_stealth_sidecar_served_is_not_rendered_again() {
+        use fetch::Route;
+        assert!(renders_after_fetch(false, Route::Direct, true, false));
+        assert!(renders_after_fetch(false, Route::Browser, false, true));
+        assert!(!renders_after_fetch(false, Route::Stealth, true, true), "the sidecar's DOM is already rendered");
+        assert!(!renders_after_fetch(true, Route::Direct, true, true), "--render rendered it already");
+        assert!(!renders_after_fetch(false, Route::Direct, false, false));
+    }
 }
