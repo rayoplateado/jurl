@@ -54,6 +54,8 @@ pub async fn candidates(client: &Client, start: &Url, question: &str, precise: b
     }
     found
         .into_iter()
+        // A result at an address the run may not read is not a candidate (see `reach.rs`).
+        .filter(|(url, _)| crate::reach::admit(url, retry.reach).is_ok())
         .enumerate()
         .map(|(i, (url, text))| Link { i, url, text, context: String::new(), marginal: false })
         .collect()
@@ -211,5 +213,54 @@ mod tests {
             fill("https://example.org/search?s={searchTerms}", "searchTerms", "How much is a day pass?"),
             "https://example.org/search?s=How+much+is+a+day+pass%3F"
         );
+    }
+
+    /// The loopback test server's start page with `head` in it, and what the server was asked.
+    fn site_with_head(head: &'static str) -> (Url, crate::fetch::test_server::Served) {
+        let (base, served) = crate::fetch::test_server::serve_routed(move |request| {
+            let path = request.split_whitespace().nth(1).unwrap_or_default();
+            Some(if path == "/" {
+                crate::fetch::test_server::reply("200 OK", "Content-Type: text/html\r\n", head.as_bytes())
+            } else {
+                crate::fetch::test_server::reply("404 Not Found", "", b"")
+            })
+        });
+        (Url::parse(&format!("{base}/")).expect("a URL"), served)
+    }
+
+    /// The reach of a public run from the loopback test server, which is its own start address.
+    fn public_run() -> crate::reach::Reach {
+        crate::reach::Reach::Public {
+            allowed: std::collections::HashSet::from([std::net::IpAddr::from([127, 0, 0, 1])]),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_search_description_at_a_private_address_is_not_asked_under_a_public_run() {
+        let (start, served) = site_with_head(
+            r#"<html><head><link rel="search" type="application/opensearchdescription+xml" href="http://127.0.0.2:1/opensearch.xml"></head><body>Home</body></html>"#,
+        );
+        let reach = public_run();
+        let memo = crate::fetch::Memo::default();
+        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach };
+        let found = candidates(&crate::fetch::test_server::client(), &start, "pricing", true, retry).await;
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(served.count(), 1, "only the start page is asked");
+    }
+
+    #[tokio::test]
+    async fn a_search_action_at_a_private_address_gives_no_candidate_under_a_public_run() {
+        let head = r#"<html><head><script type="application/ld+json">{"@type":"WebSite","potentialAction":{"@type":"SearchAction","target":"http://127.0.0.2:1/search?q={search_term_string}","query-input":"required name=search_term_string"}}</script></head><body>Home</body></html>"#;
+        let (start, _served) = site_with_head(head);
+        let reach = public_run();
+        let memo = crate::fetch::Memo::default();
+        let public = Retry { on: true, memo: &memo, timing: false, reach: &reach };
+        let found = candidates(&crate::fetch::test_server::client(), &start, "pricing", true, public).await;
+        assert!(found.is_empty(), "the public run lists no result at 127.0.0.2: {found:?}");
+        // The same site under a private run lists its result, so the empty list above is the guard's doing.
+        let private = Retry { on: true, memo: &memo, timing: false, reach: &crate::fetch::test_server::PRIVATE };
+        let found = candidates(&crate::fetch::test_server::client(), &start, "pricing", true, private).await;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].url.as_str(), "http://127.0.0.2:1/search?q=pricing");
     }
 }
