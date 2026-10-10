@@ -239,7 +239,8 @@ fn option_scores(probs: &HashMap<String, f64>, prefix: char, n: usize) -> Vec<f6
 }
 
 /// The answer on its own line, then the block it's in and a link to it; JSON says how sure, and below the threshold
-/// has it as `closest` instead of `answer`. `path` is how --follow got here.
+/// has it as `closest` instead of `answer`. It also says the quoted block's `kind`, and its `level` and `lang` when the
+/// block has them, encoded as the block arrays encode them. `path` is how --follow got here.
 pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url::Url]>) -> Rendered {
     let q = ctx.args.ask.as_deref().unwrap_or_default();
     let threshold = ctx.args.threshold_for(true);
@@ -257,8 +258,16 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
         "p": p,
         "quote": block.text,
         "block": block.i,
+        "kind": block.kind,
         "link": link,
     });
+    // As in the block arrays (`Block` skips a missing level or language): left out when the block has none, not null.
+    if let Some(level) = block.level {
+        doc["level"] = json!(level);
+    }
+    if let Some(lang) = &block.lang {
+        doc["lang"] = json!(lang);
+    }
     if let Some(path) = path {
         doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
     }
@@ -268,7 +277,8 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decide::Answers;
+    use crate::{cli::Args, decide::Answers};
+    use clap::Parser;
 
     /// A span of `block` covering `range`, with no label.
     fn span(block: usize, range: Range<usize>) -> precise::Span {
@@ -388,5 +398,65 @@ mod tests {
             span_choice("Which one?", 'o', &["a", "b"], false),
             json!({ "type": "choice", "instructions": "Which one?", "criteria": { "o0": "a", "o1": "b" } }),
         );
+    }
+
+    /// What a precise answer prints for `block` with `range` of it as the answer: a run's own `Ctx`, no network.
+    fn precise_json(block: &Block, range: Range<usize>, p: f64) -> Value {
+        let args = Args::parse_from(["jurl", "--precise", "--json", "-q", "Which one?", "example.com"]);
+        let client = reqwest::Client::new();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let ex = Extracted { title: "Pricing".into(), blocks: vec![block.clone()], ..Default::default() };
+        let ctx = Ctx::new(&args, &client, "", &url, &ex);
+        render_precise(&ctx, &ex, &Pick { block: 0, range, p }, None).json
+    }
+
+    /// The `kind`, `level` and `lang` keys of a JSON object, `None` where a key is absent. A precise answer's fields for
+    /// its block must be the block arrays' fields for that block.
+    fn block_fields(v: &Value) -> [Option<&Value>; 3] {
+        ["kind", "level", "lang"].map(|k| v.get(k))
+    }
+
+    #[test]
+    fn a_precise_heading_says_its_kind_and_level_and_no_language() {
+        let heading = Block { level: Some(2), ..Block::new(0, Kind::Heading, "Pro plan".into()) };
+        let v = precise_json(&heading, 0..8, 0.93);
+        assert_eq!(v["answer"], "Pro plan");
+        assert_eq!(v["kind"], "heading");
+        assert_eq!(v["level"], 2);
+        assert!(v.get("lang").is_none());
+        assert_eq!(block_fields(&v), block_fields(&serde_json::to_value(&heading).unwrap()));
+    }
+
+    #[test]
+    fn a_precise_code_block_says_its_kind_and_language_and_no_level() {
+        let code = Block { lang: Some("sh".into()), ..Block::new(0, Kind::Code, "cargo install jurl".into()) };
+        let v = precise_json(&code, 0..18, 0.93);
+        assert_eq!(v["answer"], "cargo install jurl");
+        assert_eq!(v["kind"], "code");
+        assert_eq!(v["lang"], "sh");
+        assert!(v.get("level").is_none());
+        assert_eq!(block_fields(&v), block_fields(&serde_json::to_value(&code).unwrap()));
+    }
+
+    #[test]
+    fn a_precise_paragraph_says_its_kind_and_neither_level_nor_language() {
+        let para = Block::new(0, Kind::Para, "Pro plan: $8 a month".into());
+        let v = precise_json(&para, 10..12, 0.93);
+        assert_eq!(v["answer"], "$8");
+        assert_eq!(v["kind"], "para");
+        assert!(v.get("level").is_none() && v.get("lang").is_none());
+        assert_eq!(block_fields(&v), block_fields(&serde_json::to_value(&para).unwrap()));
+    }
+
+    #[test]
+    fn a_precise_closest_below_the_threshold_still_says_its_block() {
+        // No answer: the span is only the closest, so `answer` is null, and the block it's in is still named.
+        let heading = Block { level: Some(2), ..Block::new(0, Kind::Heading, "Pro plan".into()) };
+        let v = precise_json(&heading, 0..8, 0.2);
+        assert_eq!(v["answer"], Value::Null);
+        assert_eq!(v["closest"], "Pro plan");
+        assert_eq!(v["kind"], "heading");
+        assert_eq!(v["level"], 2);
+        assert!(v.get("lang").is_none());
     }
 }

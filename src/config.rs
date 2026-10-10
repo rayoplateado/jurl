@@ -14,7 +14,8 @@ pub(crate) struct Config {
 }
 
 /// The keys `./.env` may supply. A project's `.env` is not the user's: it must not choose the programs jurl runs
-/// (`JURL_LIGHTPANDA`).
+/// (`JURL_LIGHTPANDA`), the servers a key is sent to (`JURL_JEV_URL`, `JURL_CLOUD_URL`), or the jurl cloud account the
+/// reads go to (`JURL_CLOUD_KEY`).
 const DOTENV_KEYS: &[&str] = &["TYPESAFE_API_KEY", "JURL_JEV_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_TOKEN"];
 
 impl Config {
@@ -32,24 +33,53 @@ impl Config {
     }
 
     pub(crate) fn get(&self, key: &str) -> Option<String> {
-        env::var(key).ok().filter(|v| !v.is_empty()).or_else(|| self.file.get(key).cloned())
+        Self::from_env(key).or_else(|| self.saved(key))
+    }
+
+    /// `key` from the environment, if it's set and not empty.
+    pub(crate) fn from_env(key: &str) -> Option<String> {
+        env::var(key).ok().filter(|v| !v.is_empty())
+    }
+
+    /// `key` as saved in `~/.config/jurl/env` (or in `./.env`, for the keys it may supply), not from the environment.
+    pub(crate) fn saved(&self, key: &str) -> Option<String> {
+        self.file.get(key).cloned()
     }
 
     /// Set `key` in `~/.config/jurl/env`, keeping every other line. The file is private (0600).
     pub(crate) fn save(&mut self, key: &str, value: &str) -> Result<PathBuf> {
         let path = Self::path().context("no config directory ($HOME is not set)")?;
         let old = fs::read_to_string(&path).unwrap_or_default();
-        let mut lines: Vec<String> = old
-            .lines()
-            .filter(|l| l.trim().trim_start_matches("export ").split_once('=').is_none_or(|(k, _)| k.trim() != key))
-            .map(String::from)
-            .collect();
+        let mut lines = drop_keys(&old, &[key]);
         lines.push(format!("{key}={value}"));
         fs::create_dir_all(path.parent().unwrap())?;
         write_private(&path, &(lines.join("\n") + "\n"))?;
         self.file.insert(key.to_string(), value.to_string());
         Ok(path)
     }
+
+    /// Remove `keys` from `~/.config/jurl/env`, keeping every other line. With no file, there is nothing to remove.
+    pub(crate) fn remove(&mut self, keys: &[&str]) -> Result<()> {
+        let Some(path) = Self::path() else { return Ok(()) };
+        let Ok(old) = fs::read_to_string(&path) else { return Ok(()) };
+        let lines = drop_keys(&old, keys);
+        let text = if lines.is_empty() { String::new() } else { lines.join("\n") + "\n" };
+        write_private(&path, &text)?;
+        for key in keys {
+            self.file.remove(*key);
+        }
+        Ok(())
+    }
+}
+
+/// The lines of a config file that don't set one of `keys`, read the way `parse` reads them.
+fn drop_keys(text: &str, keys: &[&str]) -> Vec<String> {
+    text.lines()
+        .filter(|l| {
+            l.trim().trim_start_matches("export ").split_once('=').is_none_or(|(k, _)| !keys.contains(&k.trim()))
+        })
+        .map(String::from)
+        .collect()
 }
 
 /// `KEY=value` lines, with `export`, quotes and `#` comments handled. Any other line is skipped.
@@ -138,5 +168,24 @@ mod tests {
         let file = merge("# a comment\nexport TYPESAFE_API_KEY=\"quoted\"\n\nno equals sign\n", "");
         assert_eq!(file.len(), 1);
         assert_eq!(file["TYPESAFE_API_KEY"], "quoted");
+    }
+
+    #[test]
+    fn a_project_env_never_chooses_where_a_key_goes() {
+        let file =
+            merge("", "JURL_CLOUD_URL=https://evil.example\nJURL_JEV_URL=https://evil.example\nJURL_CLOUD_KEY=k");
+        assert!(!file.contains_key("JURL_CLOUD_URL"));
+        assert!(!file.contains_key("JURL_JEV_URL"));
+        assert!(!file.contains_key("JURL_CLOUD_KEY"));
+    }
+
+    #[test]
+    fn dropping_keys_keeps_every_other_line() {
+        let text = "export JURL_CLOUD_KEY=old\n# a note\nTYPESAFE_API_KEY=k\nno equals sign\nJURL_CLOUD_URL=http://x";
+        assert_eq!(
+            drop_keys(text, &["JURL_CLOUD_KEY", "JURL_CLOUD_URL"]),
+            ["# a note", "TYPESAFE_API_KEY=k", "no equals sign"]
+        );
+        assert!(drop_keys("", &["X"]).is_empty());
     }
 }
