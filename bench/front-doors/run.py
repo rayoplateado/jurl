@@ -17,7 +17,8 @@ ap.add_argument("--jurl", default=os.environ.get("JURL", "jurl"))
 ap.add_argument("--port", type=int, default=18200, help="where jev_proxy.py listens")
 ap.add_argument("--parallel", type=int, default=4, help="rows at once (at most 4)")
 ap.add_argument("--timeout", type=int, default=900, help="seconds per cell")
-ap.add_argument("--accept-language", help="JURL_ACCEPT_LANGUAGE for this round, when the binary reads it")
+ap.add_argument("--accept-language", help="JURL_ACCEPT_LANGUAGE for this round (default: unset, no header)")
+ap.add_argument("--only", default="", help="comma-separated cells as their file names give them, e.g. S1-0-0,R5-2-1")
 ap.add_argument("--force", action="store_true", help="rerun cells that already have a result")
 a = ap.parse_args()
 a.parallel = max(1, min(a.parallel, 4))
@@ -35,11 +36,14 @@ def proxy(path):
 def cells():
     sheets = json.loads((HERE / "sheets.json").read_text(encoding="utf-8"))["sheets"]
     wanted = [s for s in a.sheets.split(",") if s]
+    only = {c for c in a.only.split(",") if c}
     for sheet in sheets:
         if wanted and sheet["id"] not in wanted:
             continue
         for ri, row in enumerate(sheet["rows"]):
             for qi, question in enumerate(sheet["questions"]):
+                if only and f"{sheet['id']}-{ri}-{qi}" not in only:
+                    continue
                 yield sheet, ri, row, qi, question
 
 
@@ -53,6 +57,7 @@ def run_cell(sheet, ri, row, qi, question):
         return "budget"
     env = {k: v for k, v in os.environ.items() if k not in ("TYPESAFE_API_KEY", "JURL_JEV_KEY")}
     env["JURL_JEV_URL"] = f"{PROXY}/{tag}/v1/systemone"
+    env.pop("JURL_ACCEPT_LANGUAGE", None)  # a round without --accept-language sends no header, whatever the shell has
     if a.accept_language:
         env["JURL_ACCEPT_LANGUAGE"] = a.accept_language
     argv = [a.jurl, "-t", "--json", "--precise", "--follow", "5", "-q", question, row["front"]]
@@ -84,7 +89,7 @@ def run_cell(sheet, ri, row, qi, question):
         "requests": {"hits": counts["hits"], "misses": counts["misses"], "errors": counts["errors"]},
         "error": errors[-1][len("jurl: "):] if errors else None,
         "budget_stop": "budget cap reached" in err or "budget cap reached" in out,
-        "accept_language": a.accept_language or "(default)",
+        "accept_language": a.accept_language or "(none)",
         "stdout": out, "stderr": err,
     }
     with lock:

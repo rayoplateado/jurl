@@ -490,5 +490,13 @@
  "vercel.com|What is the monthly price of the cheapest paid plan?|$20/mo": {
   "verdict": "correct",
   "why": "Table: \"Hobby $0/mo ... Pro $20/mo\": Pro is the cheapest paid plan."
+ },
+ "https://esade.edu/|Can you take the full-time MBA online?|This is a full-time program, hence, as a student, and with the exception of internships, you will be expected to dedicate yourself full-time to your studies": {
+  "verdict": "wrong",
+  "why": "The quote is about the time commitment (\"dedicate yourself full-time\"), not the format. The page's format statement (on campus; students need not stay on campus after their credits) is not the pick, and the quote gives no online or in-person answer."
+ },
+ "stripe.com|What is the primary rate limit for authenticated requests?|100 peticiones por segundo": {
+  "verdict": "correct",
+  "why": "The Spanish docs page (docs.stripe.com/rate-limits, 'Límites de velocidad') states \"100 peticiones por segundo\" (the text fragment on the page): the same primary limit as the English page's \"100 requests per second\"."
  }
 }
