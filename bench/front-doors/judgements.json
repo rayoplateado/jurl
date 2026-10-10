@@ -498,5 +498,101 @@
  "stripe.com|What is the primary rate limit for authenticated requests?|100 peticiones por segundo": {
   "verdict": "correct",
   "why": "The Spanish docs page (docs.stripe.com/rate-limits, 'Límites de velocidad') states \"100 peticiones por segundo\" (the text fragment on the page): the same primary limit as the English page's \"100 requests per second\"."
+ },
+ "https://www.betahaus.com/|What is the monthly price of a hot desk?|115€": {
+  "verdict": "wrong",
+  "why": "The quote is betahaus's Kreuzberg (Berlin) price, 115 EUR per month excl. VAT; not a Barcelona coworking."
+ },
+ "https://www.betahaus.com/|Can you buy a day pass?|✔": {
+  "verdict": "wrong",
+  "why": "The answer is a check mark, not a price; the page shows a 1-day pass at 35 EUR excl. VAT at Kreuzberg (Berlin)."
+ },
+ "https://www.seedcamp.com/|When is the application deadline?|Applications close midnight BST, September 28th": {
+  "verdict": "wrong",
+  "why": "A deadline of a Mini Seedcamp Prague programme (September 28th, no year), not the accelerator's application deadline."
+ },
+ "https://www.techstars.com/|How much equity does the programme take?|Total equity Techstars receives is 5% common plus the future value of the $200K MFN Safe": {
+  "verdict": "correct",
+  "why": "Techstars' investment terms: \"Total equity Techstars receives is 5% common\", plus the future value of the Safe."
+ },
+ "https://www.techstars.com/|When is the application deadline?|You can find all of our accelerator programs with open applications here and deadlines on each respective program page": {
+  "verdict": "wrong",
+  "why": "A pointer to the programme pages, not a deadline."
+ },
+ "https://www.startupbootcamp.org/|When is the application deadline?|August 2024": {
+  "verdict": "wrong",
+  "why": "Application close for aivolution-ii, August 2024: a past programme (stale)."
+ },
+ "https://www.rockstart.com/|When is the application deadline?|Apply now before October 6, 2023": {
+  "verdict": "wrong",
+  "why": "\"Apply now before October 6, 2023\" comes from a 2023 blog post: stale."
+ },
+ "https://www.elcorteingles.es/|¿Cuántos días tengo para devolver un pedido?|30 días naturales": {
+  "verdict": "correct",
+  "why": "El Corte Ingles help page: \"Tienes 30 dias naturales desde la recepcion de tu pedido para realizar una devolucion o un cambio.\""
+ },
+ "https://www.elcorteingles.es/|¿Cuánto cuesta el envío?|5,90 €": {
+  "verdict": "correct",
+  "why": "\"Envio a domicilio: 5,90 EUR.\" (standard home delivery fee)."
+ },
+ "https://www.pccomponentes.com/|¿Cuánto cuesta el envío?|los gastos de envío son gratis": {
+  "verdict": "wrong",
+  "why": "Shipping is free only for orders of 50 EUR or more; the answer drops that condition and gives no fee below it."
+ },
+ "https://www.mediamarkt.es/es|¿Cuántos días tengo para devolver un pedido?|7": {
+  "verdict": "wrong",
+  "why": "The 7 days are the device buy-back (vendermovil) terms, not MediaMarkt's returns policy."
+ },
+ "https://www.mediamarkt.es/es|¿Cuánto cuesta el envío?|En paquetería esta modalidad es GRATIS para pedidos superiores a 49€*, y desde 2,99€ para pedidos de importes inferiores": {
+  "verdict": "correct",
+  "why": "Parcel delivery: free for orders over 49 EUR, from 2,99 EUR below that."
+ },
+ "https://www.ikea.com/es/es/|¿Cuántos días tengo para devolver un pedido?|365 días": {
+  "verdict": "correct",
+  "why": "IKEA: \"te damos 365 dias para devolver cualquier producto\" (365 days to return any product)."
+ },
+ "https://www.ikea.com/es/es/|¿Cuánto cuesta el envío?|Si eres del club IKEA Family o de la Red IKEA para Empresas y tu pedido es superior a 50€, lo recibes en tu casa o negocio por 0,90€. Si el pedido es igual o inferior a 50€, te lo enviamos por 2,90€. Precio normal: 4,90€": {
+  "verdict": "correct",
+  "why": "IKEA delivery rates: 0,90 EUR for club members above 50 EUR, 2,90 EUR at or below 50 EUR, normal price 4,90 EUR."
+ },
+ "https://money2020europe.com/|What are the dates of the next edition?|14-16 September 2026": {
+  "verdict": "wrong",
+  "why": "\"14-16 September 2026\" is Money20/20's Riyadh event; Europe's next edition is 2027 in Amsterdam."
+ },
+ "https://money2020europe.com/|How much is a general admission ticket?|$2,695": {
+  "verdict": "correct",
+  "why": "Money20/20 Europe 2027 Standard Pass (the general pass): current price $2,695 (original $3,895)."
+ },
+ "https://codemotion.com/|What are the dates of the next edition?|28-29 OCTOBER 2026": {
+  "verdict": "correct",
+  "why": "Codemotion Milan (the brand's flagship city): 28-29 October 2026, the next edition named on its pages (other cities not given)."
+ },
+ "https://codemotion.com/|How much is a general admission ticket?|€199 +vat": {
+  "verdict": "correct",
+  "why": "Codemotion Madrid page: Individual ticket EUR 199 +VAT (current price), Group 3+ EUR 169."
+ },
+ "https://devoxx.com/|What are the dates of the next edition?|4 Nov 2026": {
+  "verdict": "wrong",
+  "why": "\"4 Nov 2026\" is Voxxed Casablanca, not Devoxx."
+ },
+ "https://trello.com/|What is the monthly price per user of the cheapest paid plan?|$6": {
+  "verdict": "correct",
+  "why": "Trello: \"Per user/month ... ($6 billed monthly)\" for the cheapest paid plan."
+ },
+ "https://miro.com/|What is the monthly price per user of the cheapest paid plan?|$8/month per member": {
+  "verdict": "correct",
+  "why": "Miro: \"$8/month per member, billed yearly\" (the cheapest paid tier's monthly price per member)."
+ },
+ "https://www.hubspot.com/|What is the monthly price per user of the cheapest paid plan?|€7/mo/seat": {
+  "verdict": "correct",
+  "why": "HubSpot Starter: \"EUR 7/mo/seat\", shown as the current price (with a limited-time 65% off label)."
+ },
+ "https://calendly.com/|What is the monthly price per user of the cheapest paid plan?|$10 /seat/mo": {
+  "verdict": "wrong",
+  "why": "\"$10 /seat/mo\" is the Notetaker & Callie add-on, not the cheapest plan."
+ },
+ "https://airtable.com/|What is the monthly price per user of the cheapest paid plan?|$20/user/month": {
+  "verdict": "correct",
+  "why": "Airtable: the Team plan at $20/user/month billed annually is the first paid tier after Free."
  }
 }
