@@ -3294,18 +3294,22 @@ mod tests {
 
     #[tokio::test]
     async fn a_body_that_stalls_after_its_headers_is_not_unreached() {
-        // The host answers: its headers come, and then its body stops. That host answered, whatever the rest of its reply does.
-        use std::io::Write;
+        // The host answers: its headers come, and then its body stops past the request's timeout, which is a body error. The
+        // headers get two seconds, so a busy runner cannot time out before the reply starts.
+        use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
         let addr = listener.local_addr().expect("the loopback address");
         std::thread::spawn(move || {
             let Ok((mut conn, _)) = listener.accept() else { return };
+            // The request is read first, as a server reads it: a reply sent before the request is written is cancelled by the client.
+            let mut request = [0u8; 4096];
+            let _ = conn.read(&mut request);
             let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n<p>Hel");
-            std::thread::sleep(Duration::from_secs(2));
+            std::thread::sleep(Duration::from_secs(4));
         });
         let url = format!("http://{addr}/page");
         let start = Url::parse(&url).expect("a URL");
-        let (mut res, _) = send_get(plain_for(&PRIVATE), &url, retry_off(), &[], Some(Duration::from_millis(300)))
+        let (mut res, _) = send_get(plain_for(&PRIVATE), &url, retry_off(), &[], Some(Duration::from_secs(2)))
             .await
             .expect("the headers come");
         let err = read_capped(&mut res, PAGE_MAX).await.expect_err("the body stalls");
@@ -3315,11 +3319,13 @@ mod tests {
     #[tokio::test]
     async fn a_tls_handshake_that_fails_is_unreached() {
         // A server that is not TLS answers the handshake with plain text, so the handshake fails before any request.
-        use std::io::Write;
+        use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
         let addr = listener.local_addr().expect("the loopback address");
         std::thread::spawn(move || {
             let Ok((mut conn, _)) = listener.accept() else { return };
+            let mut hello = [0u8; 4096];
+            let _ = conn.read(&mut hello);
             let _ = conn.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         });
         let url = format!("https://{addr}/page");
