@@ -166,33 +166,6 @@ Failures by class (r2a): wrong_answer 19, not_reached (carried) 14, not_on_site 
 
 Failures by class (r2a2): wrong_answer 16, not_reached (carried) 14, not_on_site (carried) 6, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 2.
 
-**Round 2a5: navigation-like blocks are no precise answer (flagged, warmth kept), no step 5**
-
-| sheet | cells | correct | wrong | not found | mean pages | mean tokens used | billed tokens | billed $ |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| R1 | 12 | 7 | 0 | 5 | 4.2 | 76,133 | 0 | 0.0000 |
-| R2 | 18 | 5 | 2 | 11 | 4.2 | 52,753 | 0 | 0.0000 |
-| R3 | 8 | 2 | 3 | 3 | 2.5 | 40,201 | 0 | 0.0000 |
-| R4 | 15 | 8 | 3 | 4 | 3.3 | 60,162 | 0 | 0.0000 |
-| R5 | 12 | 3 | 4 | 2 (+3 not run) | 4.3 | 66,783 | 0 | 0.0000 |
-| R6 | 10 | 10 | 0 | 0 | 3.0 | 85,313 | 0 | 0.0000 |
-| R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 0 | 0.0000 |
-| S1 | 5 | 2 | 1 | 2 | 5.0 | 104,491 | 21,585 | 0.0009 |
-| S2 | 8 | 5 | 1 | 2 | 3.5 | 80,540 | 0 | 0.0000 |
-| S3 | 12 | 10 | 2 | 0 | 4.0 | 77,033 | 0 | 0.0000 |
-| B1 | 1 | 0 | 0 | 1 | 5.0 | 97,097 | 97,097 | 0.0041 |
-| B2 | 1 | 0 | 0 | 0 | 5.0 | 83,326 | 83,326 | 0.0035 |
-| B3 | 1 | 0 | 1 | 0 | 5.0 | 107,880 | 107,880 | 0.0045 |
-| B4 | 1 | 0 | 0 | 1 | 2.0 | 84,686 | 84,686 | 0.0036 |
-| B5 | 1 | 0 | 0 | 0 (+1 not run) | 0.0 | 0 | 0 | 0.0000 |
-| B6 | 1 | 1 | 0 | 0 | 3.0 | 68,281 | 68,281 | 0.0029 |
-| B7 | 1 | 1 | 0 | 0 | 5.0 | 110,477 | 110,477 | 0.0046 |
-| K1 | 1 | 0 | 0 | 1 | 5.0 | 92,935 | 88,515 | 0.0037 |
-| K2 | 1 | 0 | 0 | 1 | 5.0 | 93,411 | 93,411 | 0.0039 |
-| **all** | 119 | 64 | 17 | 33 (+4 not run) | 3.7 | 71,098 | 755,258 | 0.0317 |
-
-Failures by class (r2a5): wrong_answer 17, not_reached (carried) 14, not_on_site (carried) 6, unclassified 4, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 2.
-
 **Round 2a3: as 2a5 with step 5 and the banner role**
 
 | sheet | cells | correct | wrong | not found | mean pages | mean tokens used | billed tokens | billed $ |
@@ -228,6 +201,24 @@ Failures by class (r2a3): wrong_answer 15, not_reached (carried) 12, not_on_site
 | **all** | 110 | 64 | 15 | 28 (+3 not run) | 3.8 | 73,781 | 75,549 | 0.0032 |
 
 Failures by class (r2a4): wrong_answer 15, not_reached (carried) 7, not_on_site (carried) 7, not_on_site 5, js_only (carried) 4, missed_on_read (carried) 2, blocked (carried) 2, not_reached 1.
+
+**Round 2a5: navigation-like blocks are no precise answer (flagged, warmth kept), no step 5**
+
+| sheet | cells | correct | wrong | not found | mean pages | mean tokens used | billed tokens | billed $ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| R1 | 12 | 7 | 0 | 5 | 4.2 | 76,133 | 0 | 0.0000 |
+| R2 | 18 | 5 | 2 | 11 | 4.2 | 52,753 | 0 | 0.0000 |
+| R3 | 8 | 2 | 3 | 3 | 2.5 | 40,201 | 0 | 0.0000 |
+| R4 | 15 | 8 | 3 | 4 | 3.3 | 60,162 | 0 | 0.0000 |
+| R5 | 12 | 3 | 4 | 2 (+3 not run) | 4.3 | 66,783 | 0 | 0.0000 |
+| R6 | 10 | 10 | 0 | 0 | 3.0 | 85,313 | 0 | 0.0000 |
+| R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 0 | 0.0000 |
+| S1 | 5 | 2 | 1 | 2 | 5.0 | 104,491 | 21,585 | 0.0009 |
+| S2 | 8 | 5 | 1 | 2 | 3.5 | 80,540 | 0 | 0.0000 |
+| S3 | 12 | 10 | 2 | 0 | 4.0 | 77,033 | 0 | 0.0000 |
+| **all** | 110 | 62 | 16 | 29 (+3 not run) | 3.7 | 70,205 | 21,585 | 0.0009 |
+
+Failures by class (r2a5): wrong_answer 16, not_on_site (carried) 11, not_reached (carried) 10, js_only (carried) 4, missed_on_read (carried) 2, blocked (carried) 2.
 
 ## Final round, cell by cell
 

@@ -12,7 +12,7 @@ sys.argv = sys.argv_saved
 J = json.loads((HERE / "judgements.json").read_text(encoding="utf-8"))
 NF = json.loads((HERE / "notfound.json").read_text(encoding="utf-8"))
 ROUNDS = ["baseline", "step1", "step2", "step3", "step4", "step5"]
-ROUND2 = ["r2a", "r2a2", "r2a5", "r2a3", "r2a4"]  # round 2, in the order they were run (r2a4 is the final)
+ROUND2 = ["r2a", "r2a2", "r2a3", "r2a4", "r2a5"]  # round 2, in the order they were run (r2a4 is the final)
 TITLE = {
     "baseline": "Baseline: #50 + #51 as merged (no change of ours)",
     "step1": "Step 1: robots.txt `Sitemap:` lines; a sitemap index read newest-first by `<lastmod>`",
