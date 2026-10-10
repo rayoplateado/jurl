@@ -614,5 +614,61 @@
  "https://seaya.vc/|What is their typical first ticket?|€10-40m": {
   "verdict": "correct",
   "why": "Seaya Andromeda's page: \"€10-40m Ticket size\" (the value precedes its label, as the page's other figures do)."
+ },
+ "https://madrid.impacthub.net/|What is the monthly price of a flexible (hot) desk?|Jornada Completa 220€ Contratar online Mañana 150€ Contratar online Tarde 120€ Contratar online Respira 150€ Contratar online *Precios sin iva": {
+  "verdict": "wrong",
+  "why": "A list of four day-session prices (Jornada Completa 220€, Mañana 150€, Tarde 120€, Respira 150€) with no unit: not stated as a monthly hot desk price."
+ },
+ "https://websummit.com/|What are the dates of the next edition?|startDate 2026-11-09, endDate 2026-11-12": {
+  "verdict": "correct",
+  "why": "Web Summit's JSON-LD Event: startDate 2026-11-09, endDate 2026-11-12 (the same 2026 dates)."
+ },
+ "https://vivatech.com/|What are the dates of the next edition?|startDate 2027-06-16, endDate 2027-06-19": {
+  "verdict": "correct",
+  "why": "VivaTech 2027's JSON-LD Event: startDate 2027-06-16, endDate 2027-06-19 (the next edition)."
+ },
+ "https://madrid.impacthub.net/|What is the monthly price of a flexible (hot) desk?|120€": {
+  "verdict": "wrong",
+  "why": "\"Afternoon 120€\" is one session's price, not a monthly hot desk price."
+ },
+ "https://madrid.impacthub.net/|Can you buy a day pass?|Ven cuando quieras: sin reservas, sin compromisos. Compra tu pase diario o tu bono de 10 días online. ¡No necesitas reserva previa": {
+  "verdict": "correct",
+  "why": "Impact Hub: \"Compra tu pase diario o tu bono de 10 días online\" (you can buy a day pass online)."
+ },
+ "https://www.iese.edu/|What is the price of the flagship MBA or bootcamp?|Offer (JSON-LD, Master in Business Administration (MBA)): price 117000 EUR.": {
+  "verdict": "correct",
+  "why": "IESE's JSON-LD Offer for the MBA: price 117000 EUR (the same MBA fee)."
+ },
+ "https://mrwonderful.com/|How many days do you have to return an item?|15 días naturales": {
+  "verdict": "correct",
+  "why": "Mr Wonderful's FAQ: \"El USUARIO dispone de 15 días naturales para la devolución\"."
+ },
+ "https://utopicus.es/|Is it open 24/7?|24/7": {
+  "verdict": "correct",
+  "why": "Utopicus: \"Puesto Hot Desk ... acceso 24/7\" (the hot desk is accessible 24/7)."
+ },
+ "https://www.4yfn.com/|What are the dates of the next edition?|2 to March 5": {
+  "verdict": "wrong",
+  "why": "The 2 to 5 March 2026 dates are a past edition (a Renfe discount page); the next edition is 2027."
+ },
+ "asana.com|What is the monthly price of the cheapest paid plan?|$13.49 per user": {
+  "verdict": "correct",
+  "why": "Asana: \"Asana Starter costs $10.99 per user per month when billed annually and $13.49 per user per month when billed monthly.\""
+ },
+ "https://www.betahaus.com/|Can you buy a day pass?|Offer (JSON-LD, Day Pass at betahaus | Kreuzberg): price 35.0 EUR.": {
+  "verdict": "wrong",
+  "why": "The day pass shown is betahaus Kreuzberg (Berlin), 35 EUR excl. VAT; not a Barcelona coworking."
+ },
+ "https://www.rockstart.com/|How much equity does the programme take?|6%": {
+  "verdict": "correct",
+  "why": "Rockstart's programme: \"100k USD a cambio del 6% de tu empresa\" (6% equity for USD 100k)."
+ },
+ "https://www.gitex-europe.com/|What are the dates of the next edition?|Event GITEX AI EUROPE 2026 (JSON-LD): startDate 2026-06-30, endDate 2026-07-01.": {
+  "verdict": "wrong",
+  "why": "GITEX AI EUROPE 2026 (30 June to 1 July 2026) had already ended; the question asks for the next edition."
+ },
+ "https://www.gitex-europe.com/|How much is a general admission ticket?|Offer Visitor Pass (JSON-LD, GITEX AI EUROPE 2026): price 30 EUR.": {
+  "verdict": "wrong",
+  "why": "The visitor pass (30 EUR) is for GITEX AI EUROPE 2026, a past edition."
  }
 }
