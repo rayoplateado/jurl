@@ -16,10 +16,10 @@ use crate::{
 };
 
 /// Blocks printed when `--max` doesn't say: 12, or 5 with `-q`.
-const DEFAULT_BLOCKS: usize = 12;
-const DEFAULT_ASK_BLOCKS: usize = 5;
+pub(crate) const DEFAULT_BLOCKS: usize = 12;
+pub(crate) const DEFAULT_ASK_BLOCKS: usize = 5;
 /// Code blocks printed by `--code` when `--max` doesn't say.
-const DEFAULT_CODE_BLOCKS: usize = 8;
+pub(crate) const DEFAULT_CODE_BLOCKS: usize = 8;
 
 /// Default mode and --code: pick blocks, print them in page order.
 pub(crate) async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {

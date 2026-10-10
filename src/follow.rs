@@ -785,7 +785,7 @@ impl Search {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let site = Site::new(start);
-        let retry = Retry::for_run(args.no_browser_retry, args.timing);
+        let retry = Retry::for_run(args.no_browser_retry, args.timing, &args.reach);
 
         let (loaded, files) = tokio::join!(load(args, cfg, client, start, t), site_files(client, start, &site, retry));
         let (url, ex) = loaded?;
@@ -917,7 +917,11 @@ impl Search {
             let best: Vec<Url> = self.leads.iter().take(SHORTLIST).map(|l| l.url.clone()).collect();
             let n = self
                 .robots
-                .load_for(ctx.client, &best, Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing))
+                .load_for(
+                    ctx.client,
+                    &best,
+                    Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing, &ctx.args.reach),
+                )
                 .await;
             if n == 0 {
                 break;
@@ -1081,7 +1085,7 @@ async fn site_hints(
 
 /// The path as the "found after reading" line prints it: each URL without its http:// or https:// scheme, joined by
 /// arrows.
-fn trail(path: &[Url]) -> String {
+pub(crate) fn trail(path: &[Url]) -> String {
     path.iter()
         .map(|u| {
             let s = u.as_str();
@@ -1146,7 +1150,7 @@ async fn second_pass(
     search: &mut Search,
     site_ctx: &Ctx<'_>,
 ) -> Result<bool> {
-    let retry = crate::fetch::Retry::for_run(args.no_browser_retry, args.timing);
+    let retry = crate::fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach);
     let question = args.ask.as_deref().unwrap_or_default();
     let mut results = crate::site_search::candidates(client, start, question, true, retry).await;
     results.retain(|l| !search.visited.contains(&links::key(&l.url)));
@@ -1404,7 +1408,8 @@ mod tests {
             serve_replies(vec![Some(reply("200 OK", "Content-Type: text/plain\r\n", b"User-agent: *\n"))]);
         let memo = Memo::default();
         assert!(memo.learn_url(&Url::parse(&base).unwrap(), std::time::Instant::now()));
-        let off = crate::fetch::Retry { on: false, memo: &memo, timing: false };
+        let off =
+            crate::fetch::Retry { on: false, memo: &memo, timing: false, reach: &crate::fetch::test_server::PRIVATE };
         assert!(small_text(&test_server::client(), &robots_of(&base), off).await.is_some());
         assert_eq!(served.kinds(), [Kind::Plain]);
     }
@@ -1798,6 +1803,25 @@ mod tests {
         let mut paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
         paths.sort();
         assert_eq!(paths, ["/news/a.html", "/news/b.html"]);
+    }
+
+    #[tokio::test]
+    async fn a_public_run_reads_its_own_sitemap_and_no_file_at_a_private_address() {
+        // The start is the loopback server, admitted as the run's own address; robots.txt names a sitemap on another
+        // loopback address, which the public run never asks for.
+        let (start, _served) = site_at(vec![
+            ("/robots.txt", "User-agent: *\nSitemap: http://127.0.0.2:1/feeds/pages.xml\n"),
+            ("/sitemap.xml", "<urlset><url><loc>http://{host}/news/b.html</loc></url></urlset>"),
+        ]);
+        let reach = crate::reach::Reach::Public {
+            allowed: std::collections::HashSet::from([std::net::IpAddr::from([127, 0, 0, 1])]),
+        };
+        let memo = Memo::default();
+        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach };
+        let links = site_files(&test_server::client(), &start, &Site::new(&start), retry).await.links;
+        let paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
+        assert_eq!(paths, ["/news/b.html"]);
+        assert!(links.iter().all(|l| l.url.host_str() != Some("127.0.0.2")));
     }
 
     #[tokio::test]

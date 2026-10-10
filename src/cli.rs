@@ -12,8 +12,8 @@ const DEFAULT_THRESHOLD: f64 = 0.5;
 #[derive(Parser)]
 #[command(version)]
 pub(crate) struct Args {
-    /// The page to read, `init` to set up your API keys, `update` to install the latest jurl, or `mcp` to serve
-    /// jurl's tools to an AI agent (MCP over stdio)
+    /// The page to read, `init` to set up your API keys, `login`, `logout` or `status` for jurl cloud, `update` to
+    /// install the latest jurl, or `mcp` to serve jurl's tools to an AI agent (MCP over stdio)
     pub(crate) url: String,
     /// Keep what helps answer this question instead of a general summary
     #[arg(short = 'q', long)]
@@ -38,7 +38,7 @@ pub(crate) struct Args {
     #[arg(short, long)]
     pub(crate) precise: bool,
     /// With -q: when the page doesn't answer, follow its links within the same site, most promising first,
-    /// reading up to this many pages in all [default: 5]
+    /// reading up to this many pages in all [default: 5]. A search from a public address reads only public addresses
     #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]
     pub(crate) follow: Option<usize>,
     /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text, or unfilled template placeholders)
@@ -47,6 +47,9 @@ pub(crate) struct Args {
     /// Don't ask a page that answers 403 or 503 again with a browser's TLS fingerprint (JURL_NO_BROWSER_RETRY does the same)
     #[arg(long)]
     pub(crate) no_browser_retry: bool,
+    /// What the run may read, set from the start URL once it is known (see `reach.rs`). Not a flag.
+    #[arg(skip)]
+    pub(crate) reach: crate::reach::Reach,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,
@@ -91,6 +94,16 @@ mod tests {
         for arg in Args::command().get_arguments() {
             assert!(arg.get_help().is_some(), "--{} has no help text", arg.get_id());
         }
+    }
+
+    #[test]
+    fn a_flag_without_a_url_is_still_clap_s_usage_error() {
+        // Only `jurl` alone starts the setup or the help (main.rs). A flag without a URL is still an error.
+        for argv in [vec!["jurl"], vec!["jurl", "-q", "why?"], vec!["jurl", "--json"]] {
+            let err = Args::try_parse_from(argv.clone()).err();
+            assert_eq!(err.map(|e| e.kind()), Some(clap::error::ErrorKind::MissingRequiredArgument), "{argv:?}");
+        }
+        assert!(Args::try_parse_from(["jurl", "-q", "why?", "x.com"]).is_ok());
     }
 
     #[test]
