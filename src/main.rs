@@ -161,6 +161,8 @@ async fn run(mut args: Args) -> Result<()> {
     }
     prepare(&mut args)?;
     reach::set_reach(&mut args).await?;
+    args.stealth =
+        stealth::Sidecar::configured(|key| cfg.get(key), args.public_only, args.render_sandboxed, args.timing);
     let access = setup::access(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
@@ -283,10 +285,16 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
         page
     } else {
         // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
-        let retry = fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
+        let retry = fetch::Retry::for_run(
+            args.no_browser_retry,
+            args.timing,
+            &args.reach,
+            &args.cookies,
+            args.stealth.as_ref(),
+        );
         let page = fetch::fetch(target.as_str(), retry).await?;
         t.lap("fetch");
-        if page.via_browser {
+        if page.via_browser() {
             decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         page

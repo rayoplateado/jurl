@@ -25,7 +25,10 @@ pub async fn candidates(start: &Url, question: &str, precise: bool, retry: Retry
     if !precise || question.trim().is_empty() {
         return Vec::new();
     }
-    let Ok(page) = fetch::fetch(start.as_str(), retry).await else { return Vec::new() };
+    // The start page is read again here for the site's declarations, and the stealth sidecar is not asked for that second read:
+    // `load` has asked it already, and its budget is for the pages a search reads.
+    let plain = Retry { stealth: None, ..retry };
+    let Ok(page) = fetch::fetch(start.as_str(), plain).await else { return Vec::new() };
     let html = Html::parse_document(&page.body);
     let mut found: Vec<(Url, String)> = Vec::new();
     let api = wp_root(&html, start)
@@ -245,6 +248,7 @@ mod tests {
             timing: false,
             reach: &reach,
             cookies: &crate::fetch::test_server::NO_COOKIES,
+            stealth: None,
         };
         let found = candidates(&start, "pricing", true, retry).await;
         assert!(found.is_empty(), "{found:?}");
@@ -263,6 +267,7 @@ mod tests {
             timing: false,
             reach: &reach,
             cookies: &crate::fetch::test_server::NO_COOKIES,
+            stealth: None,
         };
         let found = candidates(&start, "pricing", true, public).await;
         assert!(found.is_empty(), "the public run lists no result at 127.0.0.2: {found:?}");
@@ -273,6 +278,7 @@ mod tests {
             timing: false,
             reach: &crate::fetch::test_server::PRIVATE,
             cookies: &crate::fetch::test_server::NO_COOKIES,
+            stealth: None,
         };
         let found = candidates(&start, "pricing", true, private).await;
         assert_eq!(found.len(), 1, "{found:?}");

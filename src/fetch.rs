@@ -18,14 +18,34 @@ use serde_json::Value;
 use tokio::process::Command;
 use url::Url;
 
-use crate::reach::{self, NotPublic, Reach};
+use crate::{
+    reach::{self, NotPublic, Reach},
+    stealth::{self, Sidecar},
+};
 
 pub struct Page {
     pub url: Url,
     pub body: String,
     pub is_markdown: bool,
-    /// Read with the browser client: after a retry, or because the host was already on it.
-    pub via_browser: bool,
+    /// The rung of the read ladder the page was read on.
+    pub route: Route,
+}
+
+impl Page {
+    /// Whether the page was read with the browser client: after a retry, or because the host was already on it.
+    pub(crate) fn via_browser(&self) -> bool {
+        self.route == Route::Browser
+    }
+}
+
+/// The rung of the read ladder a page was read on (see the README): the plain client, the browser client's retry, or the
+/// stealth sidecar. The usage's `route` names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Route {
+    #[default]
+    Direct,
+    Browser,
+    Stealth,
 }
 
 /// The largest page read: a body past this is an error, not read on.
@@ -91,7 +111,8 @@ impl Memo {
 }
 
 /// What a fetch may do about bot protection: whether the browser-fingerprint retry is on for the run, the memo of hosts that
-/// need the browser client, and whether a host switching to the browser client is said on stderr (`-t`).
+/// need the browser client, whether a host switching to the browser client is said on stderr (`-t`), and the run's stealth
+/// sidecar for rung 5.
 #[derive(Clone, Copy)]
 pub(crate) struct Retry<'a> {
     pub(crate) on: bool,
@@ -101,16 +122,24 @@ pub(crate) struct Retry<'a> {
     pub(crate) reach: &'a Reach,
     /// The run's cookies (see [`Jar`]): each request carries the ones its address is due, and stores the ones its reply sets. One store per run, shared by both clients, so a host the retry moved to the browser client keeps them.
     pub(crate) cookies: &'a Jar,
+    /// The run's stealth sidecar, when it is set up (see `stealth.rs`). Asked only for a page a host refuses, last of all.
+    pub(crate) stealth: Option<&'a Sidecar>,
 }
 
 static MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
 
 impl<'a> Retry<'a> {
-    /// The retry for a run: on unless the run opts out with `--no-browser-retry` or `JURL_NO_BROWSER_RETRY`. The reach and
-    /// the cookies are the run's own.
-    pub(crate) fn for_run(flag: bool, timing: bool, reach: &'a Reach, cookies: &'a Jar) -> Self {
+    /// The retry for a run: on unless the run opts out with `--no-browser-retry` or `JURL_NO_BROWSER_RETRY`. The reach, the
+    /// cookies and the stealth sidecar are the run's own.
+    pub(crate) fn for_run(
+        flag: bool,
+        timing: bool,
+        reach: &'a Reach,
+        cookies: &'a Jar,
+        stealth: Option<&'a Sidecar>,
+    ) -> Self {
         let env_set = std::env::var_os("JURL_NO_BROWSER_RETRY").is_some();
-        Retry { on: browser_retry_allowed(flag, env_set), memo: &MEMO, timing, reach, cookies }
+        Retry { on: browser_retry_allowed(flag, env_set), memo: &MEMO, timing, reach, cookies, stealth }
     }
 }
 
@@ -144,7 +173,8 @@ pub(crate) fn host_key(url: &Url) -> Option<String> {
 
 /// The page at `url`. When the normal client is refused and the retry is on, the same URL is asked once more by the
 /// browser client, whose TLS and HTTP/2 fingerprint some bot protection accepts where it refuses the normal client. A host
-/// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried.
+/// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried. A page still
+/// refused with 401, 403 or 429 is last asked of the stealth sidecar, when the run has one (see `refused_page`).
 pub(crate) async fn fetch(url: &str, retry: Retry<'_>) -> Result<Page> {
     fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
 }
@@ -176,10 +206,10 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
         reach::admit(u, retry.reach)?;
     }
     if parsed.as_ref().is_some_and(|u| retry.sticky(u, now)) {
-        // This host needed the browser client within STICKY_TTL: ask only that. A refusal from it is the answer.
+        // This host needed the browser client within STICKY_TTL: ask only that. Its refusal is the page's refusal.
         return match get_browser(url, max, retry).await? {
-            Reply::Page { page, .. } => Ok(Page { via_browser: true, ..page }),
-            Reply::Refused(refused) => Err(refused.error(url, Some(VIA_BROWSER))),
+            Reply::Page { page, .. } => Ok(Page { route: Route::Browser, ..page }),
+            Reply::Refused(refused) => refused_page(url, refused, Some(VIA_BROWSER), max, retry).await,
         };
     }
     let refused = match get(plain_for(retry.reach), url, max, retry).await? {
@@ -187,14 +217,14 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
         Reply::Refused(refused) => refused,
     };
     if !retry.on || !retried(refused.status, refused.retry_after.is_some()) {
-        return Err(refused.error(url, None));
+        return refused_page(url, refused, None, max, retry).await;
     }
     let res = match browser_send(url, retry).await {
         Ok(res) => res,
         // The guard's refusal is the answer, not the plain refusal.
         Err(e) if e.downcast_ref::<NotPublic>().is_some() => return Err(e),
-        // The browser client got no reply at all: the plain refusal stands.
-        Err(_) => return Err(refused.error(url, None)),
+        // The browser client got no reply at all: the plain refusal stands, and the page is still refused.
+        Err(_) => return refused_page(url, refused, None, max, retry).await,
     };
     // A success from the browser client means it got past the bot check: the host is on the client from now on.
     if let Some(parsed) = &parsed
@@ -204,15 +234,30 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
     }
     // Once the browser client has a reply, that reply is the answer: a page too large to read is an error, not a fallback.
     match browser_reply(res, url, max).await? {
-        Reply::Page { page, .. } => Ok(Page { via_browser: true, ..page }),
-        Reply::Refused(again) => Err(again.error(url, Some(VIA_BROWSER_TOO))),
+        Reply::Page { page, .. } => Ok(Page { route: Route::Browser, ..page }),
+        Reply::Refused(again) => refused_page(url, again, Some(VIA_BROWSER_TOO), max, retry).await,
     }
+}
+
+/// The last step for a page that a host refused, once rungs 1–2 are done: rung 5, the stealth sidecar, or else the refusal as
+/// the error. The fallback proxy (rung 3) will slot in before this step: refused → proxy → sidecar. Only 401, 403 and 429 are
+/// asked of the sidecar (see [`stealth::asked_for`]), and a run with no sidecar never asks.
+async fn refused_page(url: &str, refused: Refusal, via: Option<&str>, max: usize, retry: Retry<'_>) -> Result<Page> {
+    if let Some(sidecar) = retry.stealth
+        && stealth::asked_for(refused.status)
+        && let Ok(target) = Url::parse(url)
+        && let Some(body) = sidecar.read(&target, retry.reach, max, retry.timing).await?
+    {
+        return Ok(Page { url: target, body, is_markdown: false, route: Route::Stealth });
+    }
+    Err(refused.error(url, via))
 }
 
 /// A small text file (robots.txt, llms.txt, a sitemap) at `url`, or None. It follows the retry rule for pages, with the same
 /// memo: a host on the browser client is read from there alone; otherwise the plain client is asked first, and a refusal the
 /// rule retries (a 403, or a 503 without a Retry-After) is asked once more of the browser client, whose success teaches the
-/// host. Its body is decoded as a page is; which bodies count as the site's file is for the caller to say.
+/// host. Its body is decoded as a page is; which bodies count as the site's file is for the caller to say. It never asks the
+/// stealth sidecar: rung 5 is for pages, and these files are not pages.
 pub(crate) async fn fetch_small(
     url: &Url,
     max: usize,
@@ -653,7 +698,7 @@ pub(crate) async fn render_allowed(url: &Url, reach: &Reach, public_only: bool, 
 fn to_page(url: Url, content_type: &str, bytes: &[u8]) -> Page {
     let body = decode(content_type, bytes);
     let is_markdown = served_markdown(content_type, &body);
-    Page { url, body, is_markdown, via_browser: false }
+    Page { url, body, is_markdown, route: Route::Direct }
 }
 
 /// The body of `res`, or None once it is larger than `max` bytes. The Content-Length is checked first, but the bytes
@@ -871,7 +916,7 @@ pub async fn render(bin: &Path, url: &Url) -> Result<Page> {
         let error = v["error"].as_str().unwrap_or("no output");
         bail!("lightpanda rendered nothing for {url} ({error})");
     }
-    Ok(Page { url: url.clone(), body: body.to_string(), is_markdown: false, via_browser: false })
+    Ok(Page { url: url.clone(), body: body.to_string(), is_markdown: false, route: Route::Direct })
 }
 
 #[cfg(test)]
@@ -1083,7 +1128,7 @@ mod tests {
         let now = Instant::now();
         let page = fetch_capped(&url, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(page.body, "<p>Hello, page.</p>");
-        assert!(page.via_browser);
+        assert!(page.via_browser());
         assert!(memo.on_browser(&host_of(&url), now), "the host is learned");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
     }
@@ -1097,7 +1142,7 @@ mod tests {
         let memo = Memo::default();
         let page =
             fetch_capped(&url, PAGE_MAX, retry_on(&memo), Instant::now()).await.unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(page.via_browser);
+        assert!(page.via_browser());
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
     }
 
@@ -1238,7 +1283,7 @@ mod tests {
         assert!(memo.on_browser(&host_of(&url), now));
         let second = fetch_capped(&url, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(second.body, "<p>Two.</p>");
-        assert!(second.via_browser);
+        assert!(second.via_browser());
         // The second request never went to the plain client.
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser, Kind::Browser]);
     }
@@ -1269,7 +1314,7 @@ mod tests {
         let now = Instant::now();
         fetch_capped(&sticky, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
         let page = fetch_capped(&other, PAGE_MAX, retry_on(&memo), now).await.unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(!page.via_browser);
+        assert!(!page.via_browser());
         assert_eq!(other_served.kinds(), [Kind::Plain]);
     }
 
@@ -1293,9 +1338,9 @@ mod tests {
         assert!(memo.on_browser(&host, learned_at), "learned by the first retry");
         let within =
             fetch_capped(&url, PAGE_MAX, retry_on(&memo), just_before).await.unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(within.via_browser, "still on the browser client just before the TTL");
+        assert!(within.via_browser(), "still on the browser client just before the TTL");
         let expired = fetch_capped(&url, PAGE_MAX, retry_on(&memo), after).await.unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(expired.via_browser);
+        assert!(expired.via_browser());
         assert!(memo.on_browser(&host, after), "after the TTL the host is tried plain again, and learned again");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser, Kind::Browser, Kind::Plain, Kind::Browser]);
     }
@@ -1307,7 +1352,8 @@ mod tests {
         let now = Instant::now();
         // The host is on the browser client, as a retry would have left it; the run has opted out.
         assert!(memo.learn_url(&Url::parse(&url).unwrap(), now));
-        let retry = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES };
+        let retry =
+            Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None };
         let err = fetch_capped(&url, PAGE_MAX, retry, now).await.err().expect("refused");
         assert!(format!("{err:#}").ends_with("returned HTTP 403 Forbidden"), "{err:#}");
         assert_eq!(served.kinds(), [Kind::Plain]);
@@ -1375,7 +1421,7 @@ mod tests {
         let now = Instant::now();
         // The host is on the memo, but the run has opted out: the memo is not read, and the file is not retried.
         assert!(memo.learn_url(&Url::parse(&base).unwrap(), now));
-        let off = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES };
+        let off = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None };
         assert_eq!(fetch_small(&file_at(&base, "/robots.txt"), PAGE_MAX, WAIT, off, now).await, None);
         assert_eq!(served.kinds(), [Kind::Plain]);
     }
@@ -1458,7 +1504,7 @@ mod tests {
             let retry = fetch(&site.url, retry_on(&memo)).await;
             let retry_ms = started.elapsed().as_millis();
             let retry = match &retry {
-                Ok(page) => json!({ "ok": true, "bytes": page.body.len(), "via_browser": page.via_browser }),
+                Ok(page) => json!({ "ok": true, "bytes": page.body.len(), "via_browser": page.via_browser() }),
                 Err(e) => json!({ "ok": false, "error": format!("{e:#}") }),
             };
             let row = json!({
@@ -1563,7 +1609,7 @@ mod tests {
     async fn a_public_run_refuses_a_literal_private_address_before_asking_it() {
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES };
+        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
         for url in ["http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/", "http://[::ffff:127.0.0.2]/"] {
             let err = fetch_capped(url, PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
             assert_eq!(format!("{err:#}"), "not a public address", "{url}");
@@ -1582,7 +1628,7 @@ mod tests {
         });
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES };
+        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
         let page = fetch_capped(&format!("{base}/page"), PAGE_MAX, retry, Instant::now())
             .await
             .unwrap_or_else(|e| panic!("{e:#}"));
@@ -1625,7 +1671,8 @@ mod tests {
         let image = Url::parse(&format!("{base}/photo.png")).expect("a URL");
         let memo = Memo::default();
         let now = Instant::now();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES };
+        let retry =
+            Retry { on: true, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None };
         let bytes = image_bytes(&image, &image, retry, PAGE_MAX).await.unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(bytes, b"PNG");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
@@ -1662,7 +1709,7 @@ mod tests {
         let named = base.replacen("127.0.0.1", "localhost", 1);
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES };
+        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
         let err = fetch_capped(&format!("{named}/x"), PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
         assert_eq!(format!("{err:#}"), "not a public address", "{err:#}");
     }
@@ -1681,7 +1728,7 @@ mod tests {
         });
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES };
+        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
         let err = fetch_capped(&format!("{base}/start"), PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
         assert_eq!(format!("{err:#}"), "not a public address", "{err:#}");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
@@ -1691,7 +1738,7 @@ mod tests {
     async fn a_public_run_reads_no_small_file_at_a_private_address() {
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES };
+        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
         let private = Url::parse("http://127.0.0.2:1/robots.txt").unwrap();
         assert_eq!(fetch_small(&private, PAGE_MAX, WAIT, retry, Instant::now()).await, None);
     }
@@ -1811,7 +1858,7 @@ mod tests {
     /// Reads `url` with `reach`, the run's cookies being `jar`.
     async fn read_with(url: &str, reach: &Reach, jar: &Jar) -> Result<Page> {
         let memo = Memo::default();
-        let retry = Retry { on: false, memo: &memo, timing: false, reach, cookies: jar };
+        let retry = Retry { on: false, memo: &memo, timing: false, reach, cookies: jar, stealth: None };
         fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
     }
 
@@ -1863,7 +1910,7 @@ mod tests {
         });
         let memo = Memo::default();
         let jar = Jar::default();
-        let retry = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &jar };
+        let retry = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &jar, stealth: None };
         fetch(&format!("{base}/set"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
         match get_browser(&format!("{base}/browser"), PAGE_MAX, retry).await.unwrap_or_else(|e| panic!("{e:#}")) {
             Reply::Page { page, .. } => assert_eq!(page.body, "<p>Browser saw it</p>"),
@@ -1895,7 +1942,7 @@ mod tests {
         let localhost = base.replacen("127.0.0.1", "localhost", 1);
         let memo = Memo::default();
         let jar = Jar::default();
-        let retry = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &jar };
+        let retry = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &jar, stealth: None };
         fetch(&format!("{base}/set"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
         for (url, expected) in [
             (format!("{base}/private/page"), "sent"),
@@ -2054,19 +2101,19 @@ pub(crate) mod test_server {
 
     /// The retry on, with `memo` as the run's memo.
     pub(crate) fn retry_on(memo: &Memo) -> Retry<'_> {
-        Retry { on: true, memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES }
+        Retry { on: true, memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None }
     }
 
     /// The retry off, for a run that reads with `reach`: no memo is ever read or written.
     pub(crate) fn retry_at(reach: &Reach) -> Retry<'_> {
         static NO_MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
-        Retry { on: false, memo: &NO_MEMO, timing: false, reach, cookies: &NO_COOKIES }
+        Retry { on: false, memo: &NO_MEMO, timing: false, reach, cookies: &NO_COOKIES, stealth: None }
     }
 
     /// The retry off: no memo is ever read or written.
     pub(crate) fn retry_off() -> Retry<'static> {
         static NO_MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
-        Retry { on: false, memo: &NO_MEMO, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES }
+        Retry { on: false, memo: &NO_MEMO, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None }
     }
 
     /// Reads a request up to its blank line, so the client has sent all of it before the reply comes. Returns the head.

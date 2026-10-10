@@ -76,8 +76,7 @@ pub(crate) struct Sidecar {
     sandboxed: bool,
     /// How many calls the run may make: `JURL_STEALTH_MAX_PAGES`.
     max_pages: usize,
-    /// How long a call may take: [`TIMEOUT`], except in the tests.
-    timeout: Duration,
+    /// Its calls go through this client, built with [`TIMEOUT`].
     client: Client,
     /// The hosts whose call failed in this run, which are not asked again. Only the memo's sidecar facet is used.
     memo: Memo,
@@ -127,7 +126,6 @@ impl Sidecar {
             public_only,
             sandboxed,
             max_pages,
-            timeout: TIMEOUT,
             client,
             memo: Memo::default(),
             calls: AtomicUsize::new(0),
@@ -350,5 +348,416 @@ mod tests {
     fn a_captcha_names_the_page_and_says_it_is_not_solved() {
         let err = Captcha("https://shop.example/p".into());
         assert_eq!(err.to_string(), "https://shop.example/p: an interactive CAPTCHA, not solved; for human review");
+    }
+
+    // The rest run the sidecar against local servers: a page server that refuses, and a mock sidecar that answers in order. A
+    // mock that holds more replies than a test should use shows a call that should not have been made: the page would succeed.
+
+    use std::{
+        collections::HashSet,
+        net::{IpAddr, TcpListener},
+        sync::Arc,
+        thread,
+        time::Instant,
+    };
+
+    use crate::{
+        fetch::{
+            Memo, Retry, test_server::NO_COOKIES, test_server::PRIVATE, test_server::reply, test_server::serve_routed,
+        },
+        mock,
+    };
+
+    const SECRET_TOKEN: &str = "s3cret-token";
+
+    const CONTENT: &str = r#"{"outcome":"content","status":200,"html":"<html><body><p>Precio: 5 €</p></body></html>","text":"Precio: 5 €","title":"Tienda","reason":null,"wall_s":3.1,"robots":"allowed"}"#;
+    const CAPTCHA_ANSWER: &str = r#"{"outcome":"captcha","status":403,"html":"","text":"","title":"","reason":"geo.captcha-delivery.com","wall_s":4.0,"robots":"allowed"}"#;
+    const BLOCKED: &str = r#"{"outcome":"blocked","status":403,"html":"","text":"","title":"","reason":"datadome wall","wall_s":2.0,"robots":"allowed"}"#;
+    const CHALLENGE: &str = r#"{"outcome":"challenge","status":503,"html":"","text":"","title":"","reason":"js challenge","wall_s":8.0,"robots":"allowed"}"#;
+    const ERROR: &str = r#"{"outcome":"error","status":null,"html":"","text":"","title":"","reason":"navigation timeout","wall_s":45.0,"robots":"allowed"}"#;
+    const EMPTY_CONTENT: &str = r#"{"outcome":"content","status":200,"html":"  ","text":"","title":"","reason":null,"wall_s":2.0,"robots":"allowed"}"#;
+    const BUSY: &str = r#"{"error":"busy"}"#;
+
+    /// A sidecar at `base`, as a run sets one up, with its client's timeout and budget as given.
+    fn sidecar_with(base: &str, timeout: Duration, max_pages: usize) -> Sidecar {
+        Sidecar {
+            base: base.to_string(),
+            token: SECRET_TOKEN.to_string(),
+            lang: None,
+            country: None,
+            public_only: false,
+            sandboxed: false,
+            max_pages,
+            client: Client::builder().no_proxy().timeout(timeout).build().expect("a client"),
+            memo: Memo::default(),
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn sidecar_at(base: &str) -> Sidecar {
+        sidecar_with(base, TIMEOUT, MAX_PAGES)
+    }
+
+    /// The retry of a test run: the browser retry on, the run's reach, and `stealth` as its sidecar.
+    fn retry_for<'a>(memo: &'a Memo, reach: &'a Reach, stealth: Option<&'a Sidecar>) -> Retry<'a> {
+        Retry { on: true, memo, timing: false, reach, cookies: &NO_COOKIES, stealth }
+    }
+
+    /// A reach that reads loopback, as a run from a public address reads only public ones and the start's own.
+    fn public_run() -> Reach {
+        Reach::Public { allowed: HashSet::from([IpAddr::from([127, 0, 0, 1])]) }
+    }
+
+    /// A header the request sent, by its name in any case.
+    fn header(seen: &mock::Seen, name: &str) -> Option<String> {
+        seen.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone())
+    }
+
+    /// A site that refuses every request with `status`, and its base URL.
+    fn refusing(status: &'static str) -> String {
+        serve_routed(move |_| Some(reply(status, "", b"denied"))).0
+    }
+
+    /// The error text of a refused page.
+    fn refusal_of(url: &str) -> String {
+        format!("{url} returned HTTP 403 Forbidden (also with a browser's TLS fingerprint)")
+    }
+
+    #[tokio::test]
+    async fn a_page_refused_with_403_is_read_from_the_sidecar_as_html() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        let url = format!("{base}/precio");
+        let page =
+            fetch::fetch(&url, retry_for(&memo, &PRIVATE, Some(&sidecar))).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, fetch::Route::Stealth);
+        assert!(page.body.contains("Precio: 5"), "{}", page.body);
+        assert!(!page.is_markdown, "the sidecar's HTML is read as HTML");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!((seen[0].method.as_str(), seen[0].path.as_str()), ("POST", "/render"));
+        assert_eq!(header(&seen[0], "authorization").as_deref(), Some("Bearer s3cret-token"));
+        let body: Value = serde_json::from_str(&seen[0].body).expect("a JSON request");
+        assert_eq!(body["url"], url.as_str());
+    }
+
+    #[tokio::test]
+    async fn a_401_and_a_429_are_asked_of_the_sidecar_too() {
+        let (base, _) = serve_routed(|head| {
+            let path = head.split_whitespace().nth(1).unwrap_or_default();
+            Some(match path {
+                "/login" => reply("401 Unauthorized", "", b"sign in"),
+                _ => reply("429 Too Many Requests", "", b"slow down"),
+            })
+        });
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT), (200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        for path in ["/login", "/busy-day"] {
+            let page = fetch::fetch(&format!("{base}{path}"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+                .await
+                .unwrap_or_else(|e| panic!("{path}: {e:#}"));
+            assert_eq!(page.route, fetch::Route::Stealth, "{path}");
+        }
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_404_or_a_500_is_not_asked_of_the_sidecar() {
+        let (base, _) = serve_routed(|head| {
+            let path = head.split_whitespace().nth(1).unwrap_or_default();
+            Some(match path {
+                "/gone" => reply("404 Not Found", "", b""),
+                _ => reply("500 Internal Server Error", "", b""),
+            })
+        });
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        for (path, status) in [("/gone", "404"), ("/broken", "500")] {
+            let err = fetch::fetch(&format!("{base}{path}"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+                .await
+                .err()
+                .expect("refused");
+            assert!(format!("{err:#}").contains(&format!("returned HTTP {status}")), "{err:#}");
+        }
+        assert!(seen.lock().unwrap().is_empty(), "neither status is an anti-bot wall");
+    }
+
+    #[tokio::test]
+    async fn a_captcha_is_an_error_that_names_the_page_and_is_not_solved() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", CAPTCHA_ANSWER), (200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        let url = format!("{base}/tienda");
+        let err =
+            fetch::fetch(&url, retry_for(&memo, &PRIVATE, Some(&sidecar))).await.err().expect("a CAPTCHA is an error");
+        assert_eq!(format!("{err:#}"), format!("{url}: an interactive CAPTCHA, not solved; for human review"));
+        assert!(err.downcast_ref::<Captcha>().is_some());
+        // The host is not asked again: the next page of it is refused, and the sidecar's content stays unread.
+        let err = fetch::fetch(&format!("{base}/otra"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .err()
+            .expect("refused");
+        assert!(format!("{err:#}").starts_with(&format!("{base}/otra returned HTTP 403")), "{err:#}");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_that_cannot_read_the_page_leaves_the_refusal_standing() {
+        let (side, seen) = mock::serve(vec![(200, "", BLOCKED), (200, "", CHALLENGE), (200, "", ERROR)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        for _ in 0..3 {
+            // A host of its own for each page, so each one is asked.
+            let base = refusing("403 Forbidden");
+            let url = format!("{base}/p");
+            let err = fetch::fetch(&url, retry_for(&memo, &PRIVATE, Some(&sidecar))).await.err().expect("refused");
+            assert_eq!(format!("{err:#}"), refusal_of(&url));
+        }
+        assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn sidecar_content_with_no_html_is_a_failure_for_the_host() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", EMPTY_CONTENT), (200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        let url = format!("{base}/a");
+        let err = fetch::fetch(&url, retry_for(&memo, &PRIVATE, Some(&sidecar))).await.err().expect("refused");
+        assert_eq!(format!("{err:#}"), refusal_of(&url));
+        let err = fetch::fetch(&format!("{base}/b"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .err()
+            .expect("refused");
+        assert!(format!("{err:#}").contains("returned HTTP 403"), "{err:#}");
+        assert_eq!(seen.lock().unwrap().len(), 1, "the host failed, so it is not asked again");
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_call_that_times_out_leaves_the_refusal_and_is_not_asked_again() {
+        // A sidecar that answers after the test's timeout, and counts the calls it gets.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let side = format!("http://{}", listener.local_addr().expect("the loopback address"));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        thread::spawn(move || {
+            for conn in listener.incoming().flatten() {
+                counted.fetch_add(1, Relaxed);
+                thread::sleep(Duration::from_secs(3));
+                drop(conn);
+            }
+        });
+        let sidecar = sidecar_with(&side, Duration::from_millis(300), MAX_PAGES);
+        let memo = Memo::default();
+        let base = refusing("403 Forbidden");
+        let err = fetch::fetch(&format!("{base}/a"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .err()
+            .expect("refused");
+        assert!(format!("{err:#}").contains("returned HTTP 403 Forbidden"), "{err:#}");
+        let err = fetch::fetch(&format!("{base}/b"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .err()
+            .expect("refused");
+        assert!(format!("{err:#}").contains("returned HTTP 403 Forbidden"), "{err:#}");
+        assert_eq!(calls.load(Relaxed), 1, "a timeout is a failure, and the host is not asked again");
+    }
+
+    #[tokio::test]
+    async fn a_host_whose_sidecar_call_failed_is_not_asked_again_in_the_run() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", BLOCKED), (200, "", CONTENT), (200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        for path in ["/a", "/b", "/c"] {
+            let url = format!("{base}{path}");
+            let err = fetch::fetch(&url, retry_for(&memo, &PRIVATE, Some(&sidecar))).await.err().expect("refused");
+            assert_eq!(format!("{err:#}"), refusal_of(&url));
+        }
+        assert_eq!(seen.lock().unwrap().len(), 1, "asked once for the host, then not again");
+    }
+
+    #[tokio::test]
+    async fn a_new_run_asks_again_because_the_memo_is_the_runs_own() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", BLOCKED), (200, "", CONTENT)]);
+        let memo = Memo::default();
+        let first = sidecar_at(&side);
+        let _ = fetch::fetch(&format!("{base}/a"), retry_for(&memo, &PRIVATE, Some(&first))).await.err();
+        let second = sidecar_at(&side);
+        let page = fetch::fetch(&format!("{base}/b"), retry_for(&Memo::default(), &PRIVATE, Some(&second)))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, fetch::Route::Stealth);
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_budget_caps_the_calls_a_run_makes() {
+        let (base_a, base_b) = (refusing("403 Forbidden"), refusing("403 Forbidden"));
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT), (200, "", CONTENT)]);
+        let sidecar = sidecar_with(&side, TIMEOUT, 1);
+        let memo = Memo::default();
+        let first = fetch::fetch(&format!("{base_a}/p"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(first.route, fetch::Route::Stealth);
+        let url = format!("{base_b}/p");
+        let err = fetch::fetch(&url, retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .err()
+            .expect("refused: the budget is spent");
+        assert_eq!(format!("{err:#}"), refusal_of(&url));
+        assert_eq!(seen.lock().unwrap().len(), 1, "the second host is not asked");
+    }
+
+    #[tokio::test]
+    async fn a_busy_sidecar_is_not_memoized_but_its_call_counts() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(503, "", BUSY), (200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        let url = format!("{base}/a");
+        let err = fetch::fetch(&url, retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .err()
+            .expect("busy: the refusal stands");
+        assert_eq!(format!("{err:#}"), refusal_of(&url));
+        let page = fetch::fetch(&format!("{base}/b"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, fetch::Route::Stealth, "asked again, and read");
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_public_only_run_without_the_sandbox_does_not_ask_the_sidecar() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT)]);
+        let mut sidecar = sidecar_at(&side);
+        sidecar.public_only = true;
+        let reach = public_run();
+        let memo = Memo::default();
+        let url = format!("{base}/p");
+        let err = fetch::fetch(&url, retry_for(&memo, &reach, Some(&sidecar))).await.err().expect("refused");
+        assert_eq!(format!("{err:#}"), refusal_of(&url));
+        assert!(seen.lock().unwrap().is_empty(), "the sidecar runs the page's JavaScript unchecked");
+    }
+
+    #[tokio::test]
+    async fn a_public_only_run_with_the_sandbox_asks_the_sidecar_after_the_page_is_checked() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT)]);
+        let mut sidecar = sidecar_at(&side);
+        sidecar.public_only = true;
+        sidecar.sandboxed = true;
+        let reach = public_run();
+        let memo = Memo::default();
+        let page = fetch::fetch(&format!("{base}/p"), retry_for(&memo, &reach, Some(&sidecar)))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, fetch::Route::Stealth);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_request_carries_the_language_and_country_the_run_names() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT), (200, "", CONTENT)]);
+        let mut named = sidecar_at(&side);
+        named.lang = Some("es-ES".into());
+        named.country = Some("ES".into());
+        let memo = Memo::default();
+        fetch::fetch(&format!("{base}/a"), retry_for(&memo, &PRIVATE, Some(&named)))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        let bare = sidecar_at(&side);
+        fetch::fetch(&format!("{base}/b"), retry_for(&Memo::default(), &PRIVATE, Some(&bare)))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        let seen = seen.lock().unwrap();
+        let with: Value = serde_json::from_str(&seen[0].body).expect("JSON");
+        assert_eq!((with["lang"].as_str(), with["country"].as_str()), (Some("es-ES"), Some("ES")));
+        let without: Value = serde_json::from_str(&seen[1].body).expect("JSON");
+        assert!(without.get("lang").is_none() && without.get("country").is_none(), "{without}");
+    }
+
+    #[tokio::test]
+    async fn robots_and_sitemaps_never_reach_the_sidecar() {
+        let base = refusing("403 Forbidden");
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        let url = Url::parse(&format!("{base}/robots.txt")).expect("a URL");
+        let text = fetch::fetch_small(
+            &url,
+            1 << 20,
+            Duration::from_secs(5),
+            retry_for(&memo, &PRIVATE, Some(&sidecar)),
+            Instant::now(),
+        )
+        .await;
+        assert!(text.is_none());
+        assert!(seen.lock().unwrap().is_empty(), "small files are not pages");
+    }
+
+    #[tokio::test]
+    async fn a_token_never_appears_in_an_error() {
+        // A sidecar nobody listens on: the call gets no reply at all.
+        let closed = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+            format!("http://{}", listener.local_addr().expect("the loopback address"))
+        };
+        let base = refusing("403 Forbidden");
+        let memo = Memo::default();
+        let err = fetch::fetch(&format!("{base}/p"), retry_for(&memo, &PRIVATE, Some(&sidecar_at(&closed))))
+            .await
+            .err()
+            .expect("refused");
+        assert!(!format!("{err:#}").contains(SECRET_TOKEN), "{err:#}");
+        // A sidecar that names the token in its reason: the reason is shown without it.
+        let (side, _) =
+            mock::serve(vec![(200, "", r#"{"outcome":"blocked","html":"","reason":"rejected s3cret-token"}"#)]);
+        let sidecar = sidecar_at(&side);
+        let err = fetch::fetch(&format!("{base}/q"), retry_for(&Memo::default(), &PRIVATE, Some(&sidecar)))
+            .await
+            .err()
+            .expect("refused");
+        assert!(!format!("{err:#}").contains(SECRET_TOKEN), "{err:#}");
+        assert_eq!(sidecar.shown("rejected s3cret-token"), "rejected [token]");
+    }
+
+    #[tokio::test]
+    async fn a_host_on_the_browser_client_whose_browser_refuses_is_asked_of_the_sidecar() {
+        // Plain requests are refused. The first browser request is read, and the browser client refuses after that.
+        let browser_requests = Arc::new(AtomicUsize::new(0));
+        let counted = browser_requests.clone();
+        let (base, _) = serve_routed(move |head| {
+            if !head.contains("Chrome/") {
+                return Some(reply("403 Forbidden", "", b"denied"));
+            }
+            if counted.fetch_add(1, Relaxed) == 0 {
+                Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Primera pagina</p>"))
+            } else {
+                Some(reply("403 Forbidden", "", b"denied"))
+            }
+        });
+        let (side, seen) = mock::serve(vec![(200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let memo = Memo::default();
+        let first = fetch::fetch(&format!("{base}/a"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(first.route, fetch::Route::Browser);
+        let second = fetch::fetch(&format!("{base}/b"), retry_for(&memo, &PRIVATE, Some(&sidecar)))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(second.route, fetch::Route::Stealth, "the sticky host's refusal is the sidecar's to read");
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 }

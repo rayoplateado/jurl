@@ -99,7 +99,13 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     // One HTTP/1 connection per Clef call: multiplexing them all over a single HTTP/2
     // connection measured ~2x slower at the tail.
     let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
-    let retry = fetch::Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing, &ctx.args.reach, &ctx.args.cookies);
+    let retry = fetch::Retry::for_run(
+        ctx.args.no_browser_retry,
+        ctx.args.timing,
+        &ctx.args.reach,
+        &ctx.args.cookies,
+        ctx.args.stealth.as_ref(),
+    );
     let req = clef_keys.as_ref().map(|keys| LookRequest {
         retry,
         page: ctx.url,

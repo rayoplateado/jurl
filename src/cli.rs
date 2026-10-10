@@ -60,6 +60,10 @@ pub(crate) struct Args {
     /// (see `fetch.rs`). Not a flag.
     #[arg(skip)]
     pub(crate) cookies: reqwest::cookie::Jar,
+    /// The stealth sidecar this run is set up with (see `stealth.rs`), when `JURL_STEALTH_URL` and its token are both set. Its
+    /// memo and its budget are this run's own. Not a flag.
+    #[arg(skip)]
+    pub(crate) stealth: Option<crate::stealth::Sidecar>,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,

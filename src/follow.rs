@@ -785,7 +785,8 @@ impl Search {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let site = Site::new(start);
-        let retry = Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
+        let retry =
+            Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies, args.stealth.as_ref());
 
         let (loaded, files) = tokio::join!(load(args, cfg, start, t), site_files(start, &site, retry));
         let (url, ex) = loaded?;
@@ -917,7 +918,13 @@ impl Search {
                 .robots
                 .load_for(
                     &best,
-                    Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing, &ctx.args.reach, &ctx.args.cookies),
+                    Retry::for_run(
+                        ctx.args.no_browser_retry,
+                        ctx.args.timing,
+                        &ctx.args.reach,
+                        &ctx.args.cookies,
+                        ctx.args.stealth.as_ref(),
+                    ),
                 )
                 .await;
             if n == 0 {
@@ -1141,7 +1148,13 @@ const SECOND_PASS: usize = 3;
 /// The second pass (see [`run`]): the site's own search results that are not read yet become leads, scored by Jev like the
 /// others, and the search may open [`SECOND_PASS`] more pages. Returns whether there were any such leads.
 async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &Ctx<'_>) -> Result<bool> {
-    let retry = crate::fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
+    let retry = crate::fetch::Retry::for_run(
+        args.no_browser_retry,
+        args.timing,
+        &args.reach,
+        &args.cookies,
+        args.stealth.as_ref(),
+    );
     let question = args.ask.as_deref().unwrap_or_default();
     let mut results = crate::site_search::candidates(start, question, true, retry).await;
     results.retain(|l| !search.visited.contains(&links::key(&l.url)));
@@ -1400,6 +1413,7 @@ mod tests {
             timing: false,
             reach: &crate::fetch::test_server::PRIVATE,
             cookies: &crate::fetch::test_server::NO_COOKIES,
+            stealth: None,
         };
         assert!(small_text(&robots_of(&base), off).await.is_some());
         assert_eq!(served.kinds(), [Kind::Plain]);
@@ -1814,6 +1828,7 @@ mod tests {
             timing: false,
             reach: &reach,
             cookies: &crate::fetch::test_server::NO_COOKIES,
+            stealth: None,
         };
         let links = site_files(&start, &Site::new(&start), retry).await.links;
         let paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
