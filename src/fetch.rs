@@ -2360,6 +2360,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_proxied_request_sends_the_decoded_credential_as_basic_auth() {
+        use base64::Engine;
+        let (site, _) = serve_routed(|_| Some(reply("200 OK", "", b"direct")));
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        // The runner percent-encodes the credential in the URL: reqwest decodes it again for the proxy's basic auth.
+        let fallback = Fallback::with(Some(&proxy_url_with(&proxy, "jurl%40user", "p%40ss")), true);
+        let memo = Memo::default();
+        fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback)).await.unwrap_or_else(|e| panic!("{e:#}"));
+        let expected = base64::engine::general_purpose::STANDARD.encode("jurl@user:p@ss");
+        let head = proxy_served.heads().remove(0);
+        let auth =
+            head.lines().find(|line| line.to_ascii_lowercase().starts_with("proxy-authorization:")).unwrap_or_default();
+        assert!(auth.ends_with(&format!("Basic {expected}")), "{head}");
+    }
+
+    #[tokio::test]
     async fn a_proxy_host_resolves_as_the_system_resolves_it_and_any_other_name_is_checked() {
         let (base, _served) =
             serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Proxy host</p>")));

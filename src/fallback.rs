@@ -188,9 +188,9 @@ impl Fallback {
     }
 }
 
-/// `text` with the proxy's URL taken out, and its credential taken out in the forms an error can show it: its userinfo as the URL
-/// spells it and as it decodes, each with its `@` and without it. A bare user or password is not replaced: a short one would
-/// mangle unrelated text, and no message from reqwest shows one alone.
+/// `text` with the proxy's URL taken out, and its credential taken out in the forms an error can show it: the userinfo as the
+/// URL spells it and as it decodes, as `user:password@` and as `user:password`. With no password, only `user@`. A bare user or
+/// password is not replaced: a short one would mangle unrelated text, and no message from reqwest shows one alone.
 pub(crate) fn scrub_with(proxy_url: &str, text: &str) -> String {
     let mut out = text.replace(proxy_url, REDACTED);
     let Ok(parsed) = Url::parse(proxy_url) else { return out };
@@ -217,13 +217,17 @@ fn percent_decoded(raw: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        let escape = bytes.get(i + 1..i + 3).and_then(|hex| std::str::from_utf8(hex).ok());
-        match escape.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
-            Some(byte) if bytes[i] == b'%' => {
+        let escaped = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
                 out.push(byte);
                 i += 3;
             }
-            _ => {
+            None => {
                 out.push(bytes[i]);
                 i += 1;
             }
