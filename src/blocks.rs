@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, precise_pick, render_precise},
+    answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, precise_pick, render_precise},
     decide::choice,
     extract::{self, Block, Extracted, Kind},
     judge::{Ctx, Item, STATE_TEXT_CHARS},
@@ -39,7 +39,7 @@ pub(crate) async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Resu
     if args.precise {
         let keep = top(&scores, PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS);
         if keep.is_empty() {
-            return Err(not_found(format!("nothing in {} answers that", ctx.url)));
+            return structured_or(ctx, ex, t, not_found(format!("nothing in {} answers that", ctx.url))).await;
         }
         let pick = precise_pick(ctx, ex, &keep, t).await?;
         let rendered = render_precise(ctx, ex, &pick, None);
@@ -47,12 +47,45 @@ pub(crate) async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Resu
             let answer = &ex.blocks[pick.block].text[pick.range.clone()];
             let message =
                 format!("no part of {} is exactly the answer (closest: \"{answer}\", p={:.2})", ctx.url, pick.p);
-            return Err(missed(message, rendered));
+            return structured_or(ctx, ex, t, missed(message, rendered)).await;
         }
         return Ok(rendered);
     }
     let keep = top(&scores, args.threshold(), args.limit(default_max));
     render_blocks(ctx, ex, &scores, &keep, kind, None)
+}
+
+/// --precise, when the page's text gives no answer: the page's JSON-LD values (see `extract::json_ld`) are judged on their
+/// own, and the best one answers if Jev is sure of it. It comes back as the block to append to the page, numbered as the
+/// page's next block, with a pick over its whole text. A value is only looked at when the text has none, so the text's
+/// own answer is never replaced by one. Jev failing is not an answer from the values: none is given.
+pub(crate) async fn structured_pick(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<Option<(Block, Pick)>> {
+    if !ctx.args.precise || ex.structured.is_empty() {
+        return Ok(None);
+    }
+    let alone = Extracted { blocks: ex.structured.clone(), ..Default::default() };
+    let Ok((scores, _)) = score_blocks(ctx, &alone, t).await else { return Ok(None) };
+    let best = scores.iter().enumerate().filter_map(|(i, s)| s.map(|p| (i, p))).max_by(|a, b| a.1.total_cmp(&b.1));
+    let Some((i, p)) = best else { return Ok(None) };
+    if p < ctx.args.threshold_for(true) {
+        return Ok(None);
+    }
+    let mut block = alone.blocks[i].clone();
+    block.i = ex.blocks.len();
+    let pick = Pick { block: ex.blocks.len(), range: 0..block.text.len(), p };
+    Ok(Some((block, pick)))
+}
+
+/// `structured_pick` for a single page: the answer is rendered from the values themselves, else `otherwise` stands.
+async fn structured_or(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer, otherwise: anyhow::Error) -> Result<Rendered> {
+    match structured_pick(ctx, ex, t).await? {
+        Some((block, pick)) => {
+            let alone = Extracted { blocks: vec![block], ..Default::default() };
+            let pick = Pick { block: 0, ..pick };
+            Ok(render_precise(ctx, &alone, &pick, None))
+        }
+        None => Err(otherwise),
+    }
 }
 
 /// Jev's probability for each block (None for headings and blocks too short to judge alone), and the page's kind.

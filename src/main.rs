@@ -22,6 +22,7 @@ mod output;
 mod precise;
 mod reach;
 mod setup;
+mod site_search;
 mod sitemaps;
 mod timing;
 mod update;
@@ -289,6 +290,9 @@ pub(crate) async fn load(
         }
         page
     };
+    // --precise may answer with the page's JSON-LD values (see `extract::json_ld`), read from the HTML that was extracted
+    // (the rendered one, when the page is rendered); they are added once the render decision is made.
+    let mut json_ld_html = (args.precise && !page.is_markdown).then(|| page.body.clone());
     // Only HTML can carry placeholders: a markdown page has no script to have left them.
     let (mut ex, placeholders) = if page.is_markdown {
         (extract::markdown(&page.body, &page.url), false)
@@ -318,6 +322,7 @@ pub(crate) async fn load(
                     match fetch::render(&bin, &page.url).await {
                         Ok(rendered) => {
                             ex = extract::html(&rendered.body, &rendered.url);
+                            json_ld_html = args.precise.then(|| rendered.body.clone());
                             t.lap("render");
                         }
                         // An app shell has nothing to read without its render; a page with placeholders is readable anyway.
@@ -328,6 +333,9 @@ pub(crate) async fn load(
                 Err(e) => eprintln!("jurl: {e:#}"),
             }
         }
+    }
+    if let Some(html) = &json_ld_html {
+        extract::json_ld::add_to(&mut ex, html);
     }
     Ok((page.url, ex))
 }

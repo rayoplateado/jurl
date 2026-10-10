@@ -388,16 +388,16 @@
   "why": "Under \"Are you a founder?\" the page offers \"Submit Deck\", the way to send a pitch."
  },
  "https://www.southsummit.io/|How much is a general ticket?|299€": {
-  "verdict": "wrong",
-  "why": "299 EUR is the Startup Pass in the FAQ, not the general ticket."
+  "verdict": "correct",
+  "why": "South Summit's ticket list: \"Madrid Ecosystem – 299€, Startup Pass – 399€, Executive Pass – 949€ and Investor Pass – 1.399€\". The Ecosystem pass is the general (not startup or investor) ticket, so 299€ is the general admission price."
  },
  "https://www.southsummit.io/|How much is a general ticket?|R$ 499": {
   "verdict": "wrong",
   "why": "\"R$ 499\" is the ticket of the Brazil event, in reais, not the general ticket of the Madrid event."
  },
  "https://www.southsummit.io/|How much is the general admission ticket (not startup or investor passes)?|299€": {
-  "verdict": "wrong",
-  "why": "The sharper question still gets the startup pass (299 EUR, Madrid Ecosystem line): not the general admission (b)."
+  "verdict": "correct",
+  "why": "South Summit's ticket list: \"Madrid Ecosystem – 299€, Startup Pass – 399€, Executive Pass – 949€ and Investor Pass – 1.399€\". The Ecosystem pass is the general (not startup or investor) ticket, so 299€ is the general admission price."
  },
  "https://www.southsummit.io/|In which city is it held?|MADRID": {
   "verdict": "wrong",
@@ -498,5 +498,233 @@
  "stripe.com|What is the primary rate limit for authenticated requests?|100 peticiones por segundo": {
   "verdict": "correct",
   "why": "The Spanish docs page (docs.stripe.com/rate-limits, 'Límites de velocidad') states \"100 peticiones por segundo\" (the text fragment on the page): the same primary limit as the English page's \"100 requests per second\"."
+ },
+ "https://www.betahaus.com/|What is the monthly price of a hot desk?|115€": {
+  "verdict": "wrong",
+  "why": "The quote is betahaus's Kreuzberg (Berlin) price, 115 EUR per month excl. VAT; not a Barcelona coworking."
+ },
+ "https://www.betahaus.com/|Can you buy a day pass?|✔": {
+  "verdict": "wrong",
+  "why": "The answer is a check mark, not a price; the page shows a 1-day pass at 35 EUR excl. VAT at Kreuzberg (Berlin)."
+ },
+ "https://www.seedcamp.com/|When is the application deadline?|Applications close midnight BST, September 28th": {
+  "verdict": "wrong",
+  "why": "A deadline of a Mini Seedcamp Prague programme (September 28th, no year), not the accelerator's application deadline."
+ },
+ "https://www.techstars.com/|How much equity does the programme take?|Total equity Techstars receives is 5% common plus the future value of the $200K MFN Safe": {
+  "verdict": "correct",
+  "why": "Techstars' investment terms: \"Total equity Techstars receives is 5% common\", plus the future value of the Safe."
+ },
+ "https://www.techstars.com/|When is the application deadline?|You can find all of our accelerator programs with open applications here and deadlines on each respective program page": {
+  "verdict": "wrong",
+  "why": "A pointer to the programme pages, not a deadline."
+ },
+ "https://www.startupbootcamp.org/|When is the application deadline?|August 2024": {
+  "verdict": "wrong",
+  "why": "Application close for aivolution-ii, August 2024: a past programme (stale)."
+ },
+ "https://www.rockstart.com/|When is the application deadline?|Apply now before October 6, 2023": {
+  "verdict": "wrong",
+  "why": "\"Apply now before October 6, 2023\" comes from a 2023 blog post: stale."
+ },
+ "https://www.elcorteingles.es/|¿Cuántos días tengo para devolver un pedido?|30 días naturales": {
+  "verdict": "correct",
+  "why": "El Corte Ingles help page: \"Tienes 30 dias naturales desde la recepcion de tu pedido para realizar una devolucion o un cambio.\""
+ },
+ "https://www.elcorteingles.es/|¿Cuánto cuesta el envío?|5,90 €": {
+  "verdict": "correct",
+  "why": "\"Envio a domicilio: 5,90 EUR.\" (standard home delivery fee)."
+ },
+ "https://www.pccomponentes.com/|¿Cuánto cuesta el envío?|los gastos de envío son gratis": {
+  "verdict": "wrong",
+  "why": "Shipping is free only for orders of 50 EUR or more; the answer drops that condition and gives no fee below it."
+ },
+ "https://www.mediamarkt.es/es|¿Cuántos días tengo para devolver un pedido?|7": {
+  "verdict": "wrong",
+  "why": "The 7 days are the device buy-back (vendermovil) terms, not MediaMarkt's returns policy."
+ },
+ "https://www.mediamarkt.es/es|¿Cuánto cuesta el envío?|En paquetería esta modalidad es GRATIS para pedidos superiores a 49€*, y desde 2,99€ para pedidos de importes inferiores": {
+  "verdict": "correct",
+  "why": "Parcel delivery: free for orders over 49 EUR, from 2,99 EUR below that."
+ },
+ "https://www.ikea.com/es/es/|¿Cuántos días tengo para devolver un pedido?|365 días": {
+  "verdict": "correct",
+  "why": "IKEA: \"te damos 365 dias para devolver cualquier producto\" (365 days to return any product)."
+ },
+ "https://www.ikea.com/es/es/|¿Cuánto cuesta el envío?|Si eres del club IKEA Family o de la Red IKEA para Empresas y tu pedido es superior a 50€, lo recibes en tu casa o negocio por 0,90€. Si el pedido es igual o inferior a 50€, te lo enviamos por 2,90€. Precio normal: 4,90€": {
+  "verdict": "correct",
+  "why": "IKEA delivery rates: 0,90 EUR for club members above 50 EUR, 2,90 EUR at or below 50 EUR, normal price 4,90 EUR."
+ },
+ "https://money2020europe.com/|What are the dates of the next edition?|14-16 September 2026": {
+  "verdict": "wrong",
+  "why": "\"14-16 September 2026\" is Money20/20's Riyadh event; Europe's next edition is 2027 in Amsterdam."
+ },
+ "https://money2020europe.com/|How much is a general admission ticket?|$2,695": {
+  "verdict": "correct",
+  "why": "Money20/20 Europe 2027 Standard Pass (the general pass): current price $2,695 (original $3,895)."
+ },
+ "https://codemotion.com/|What are the dates of the next edition?|28-29 OCTOBER 2026": {
+  "verdict": "correct",
+  "why": "Codemotion Milan (the brand's flagship city): 28-29 October 2026, the next edition named on its pages (other cities not given)."
+ },
+ "https://codemotion.com/|How much is a general admission ticket?|€199 +vat": {
+  "verdict": "correct",
+  "why": "Codemotion Madrid page: Individual ticket EUR 199 +VAT (current price), Group 3+ EUR 169."
+ },
+ "https://devoxx.com/|What are the dates of the next edition?|4 Nov 2026": {
+  "verdict": "wrong",
+  "why": "\"4 Nov 2026\" is Voxxed Casablanca, not Devoxx."
+ },
+ "https://trello.com/|What is the monthly price per user of the cheapest paid plan?|$6": {
+  "verdict": "correct",
+  "why": "Trello: \"Per user/month ... ($6 billed monthly)\" for the cheapest paid plan."
+ },
+ "https://miro.com/|What is the monthly price per user of the cheapest paid plan?|$8/month per member": {
+  "verdict": "correct",
+  "why": "Miro: \"$8/month per member, billed yearly\" (the cheapest paid tier's monthly price per member)."
+ },
+ "https://www.hubspot.com/|What is the monthly price per user of the cheapest paid plan?|€7/mo/seat": {
+  "verdict": "correct",
+  "why": "HubSpot Starter: \"EUR 7/mo/seat\", shown as the current price (with a limited-time 65% off label)."
+ },
+ "https://calendly.com/|What is the monthly price per user of the cheapest paid plan?|$10 /seat/mo": {
+  "verdict": "wrong",
+  "why": "\"$10 /seat/mo\" is the Notetaker & Callie add-on, not the cheapest plan."
+ },
+ "https://airtable.com/|What is the monthly price per user of the cheapest paid plan?|$20/user/month": {
+  "verdict": "correct",
+  "why": "Airtable: the Team plan at $20/user/month billed annually is the first paid tier after Free."
+ },
+ "https://websummit.com/|What are the dates of the next edition?|Event Web Summit, Lisbon (JSON-LD): startDate 2026-11-09, endDate 2026-11-12.": {
+  "verdict": "correct",
+  "why": "Web Summit's JSON-LD Event: 9-12 November 2026 (Lisbon), the same dates the page gave before."
+ },
+ "https://websummit.com/|In which city is it held?|Event Web Summit, Lisbon (JSON-LD): startDate 2026-11-09, endDate 2026-11-12.": {
+  "verdict": "correct",
+  "why": "Web Summit's JSON-LD Event names Lisbon as the city."
+ },
+ "https://vivatech.com/|What are the dates of the next edition?|Event VivaTech 2027 (JSON-LD): startDate 2027-06-16, endDate 2027-06-19.": {
+  "verdict": "correct",
+  "why": "VivaTech 2027's JSON-LD Event: startDate 2027-06-16, endDate 2027-06-19 (the next edition)."
+ },
+ "https://madrid.impacthub.net/|What is the monthly price of a flexible (hot) desk?|120€/month": {
+  "verdict": "correct",
+  "why": "Impact Hub Madrid's coworking page: \"Starting at 120€/month\" for access by membership (the flexible membership's monthly starting price)."
+ },
+ "https://seaya.vc/|What is their typical first ticket?|€10-40m": {
+  "verdict": "correct",
+  "why": "Seaya Andromeda's page: \"€10-40m Ticket size\" (the value precedes its label, as the page's other figures do)."
+ },
+ "https://madrid.impacthub.net/|What is the monthly price of a flexible (hot) desk?|Jornada Completa 220€ Contratar online Mañana 150€ Contratar online Tarde 120€ Contratar online Respira 150€ Contratar online *Precios sin iva": {
+  "verdict": "wrong",
+  "why": "A list of four day-session prices (Jornada Completa 220€, Mañana 150€, Tarde 120€, Respira 150€) with no unit: not stated as a monthly hot desk price."
+ },
+ "https://websummit.com/|What are the dates of the next edition?|startDate 2026-11-09, endDate 2026-11-12": {
+  "verdict": "correct",
+  "why": "Web Summit's JSON-LD Event: startDate 2026-11-09, endDate 2026-11-12 (the same 2026 dates)."
+ },
+ "https://vivatech.com/|What are the dates of the next edition?|startDate 2027-06-16, endDate 2027-06-19": {
+  "verdict": "correct",
+  "why": "VivaTech 2027's JSON-LD Event: startDate 2027-06-16, endDate 2027-06-19 (the next edition)."
+ },
+ "https://madrid.impacthub.net/|What is the monthly price of a flexible (hot) desk?|120€": {
+  "verdict": "wrong",
+  "why": "A single session tariff with no unit (\"Afternoon 120€\"), not the monthly price of a flexible desk. Compare \"Starting at 120€/month\" (correct): the unit is stated there."
+ },
+ "https://madrid.impacthub.net/|Can you buy a day pass?|Ven cuando quieras: sin reservas, sin compromisos. Compra tu pase diario o tu bono de 10 días online. ¡No necesitas reserva previa": {
+  "verdict": "correct",
+  "why": "Impact Hub: \"Compra tu pase diario o tu bono de 10 días online\" (you can buy a day pass online)."
+ },
+ "https://www.iese.edu/|What is the price of the flagship MBA or bootcamp?|Offer (JSON-LD, Master in Business Administration (MBA)): price 117000 EUR.": {
+  "verdict": "correct",
+  "why": "IESE's JSON-LD Offer for the MBA: price 117000 EUR (the same MBA fee)."
+ },
+ "https://mrwonderful.com/|How many days do you have to return an item?|15 días naturales": {
+  "verdict": "correct",
+  "why": "Mr Wonderful's FAQ: \"El USUARIO dispone de 15 días naturales para la devolución\"."
+ },
+ "https://utopicus.es/|Is it open 24/7?|24/7": {
+  "verdict": "correct",
+  "why": "Utopicus: \"Puesto Hot Desk ... acceso 24/7\" (the hot desk is accessible 24/7)."
+ },
+ "https://www.4yfn.com/|What are the dates of the next edition?|2 to March 5": {
+  "verdict": "wrong",
+  "why": "The 2 to 5 March 2026 dates are a past edition (a Renfe discount page); the next edition is 2027."
+ },
+ "asana.com|What is the monthly price of the cheapest paid plan?|$13.49 per user": {
+  "verdict": "correct",
+  "why": "Asana: \"Asana Starter costs $10.99 per user per month when billed annually and $13.49 per user per month when billed monthly.\""
+ },
+ "https://www.betahaus.com/|Can you buy a day pass?|Offer (JSON-LD, Day Pass at betahaus | Kreuzberg): price 35.0 EUR.": {
+  "verdict": "wrong",
+  "why": "The day pass shown is betahaus Kreuzberg (Berlin), 35 EUR excl. VAT; not a Barcelona coworking."
+ },
+ "https://www.rockstart.com/|How much equity does the programme take?|6%": {
+  "verdict": "correct",
+  "why": "Rockstart's programme: \"100k USD a cambio del 6% de tu empresa\" (6% equity for USD 100k)."
+ },
+ "https://www.gitex-europe.com/|What are the dates of the next edition?|Event GITEX AI EUROPE 2026 (JSON-LD): startDate 2026-06-30, endDate 2026-07-01.": {
+  "verdict": "wrong",
+  "why": "GITEX AI EUROPE 2026 (30 June to 1 July 2026) had already ended; the question asks for the next edition."
+ },
+ "https://www.gitex-europe.com/|How much is a general admission ticket?|Offer Visitor Pass (JSON-LD, GITEX AI EUROPE 2026): price 30 EUR.": {
+  "verdict": "wrong",
+  "why": "The visitor pass (30 EUR) is for GITEX AI EUROPE 2026, a past edition."
+ },
+ "https://www.4yfn.com/|What are the dates of the next edition?|**1- 4 March 2027**": {
+  "verdict": "correct",
+  "why": "4YFN27, the next edition: \"Taking place in Barcelona from 1- 4 March 2027\"."
+ },
+ "vercel.com|What is the monthly price of the cheapest paid plan?|$20/month": {
+  "verdict": "correct",
+  "why": "The Pro plan's \"$20/month Pro platform fee\" is the cheapest paid plan (Hobby is free)."
+ },
+ "vercel.com|Do they have a SOC 2 Type II report?|Vercel holds a SOC 2 Type 2 attestation for Security, Confidentiality, and Availability": {
+  "verdict": "correct",
+  "why": "\"Vercel holds a SOC 2 Type 2 attestation for Security, Confidentiality, and Availability\": yes, with the report named."
+ },
+ "vercel.com|Can customers choose where their data is stored?|Global Delivery": {
+  "verdict": "wrong",
+  "why": "\"Global Delivery\" is an item in the page's product list, not an answer about where data is stored."
+ },
+ "vercel.com|Can customers choose where their data is stored?|the region where the run starts by default, or any target region you choose": {
+  "verdict": "wrong",
+  "why": "A Workflows changelog: where one product keeps its run state, not where customers' data is stored."
+ },
+ "supabase.com|Do they have a SOC 2 Type II report?|Update (2023-05-22): Supabase is now SOC2 Type 2 compliant. Read more about security at Supabase in our [Security Center](https://supabase.com/security)": {
+  "verdict": "correct",
+  "why": "\"Supabase is now SOC2 Type 2 compliant\" (update dated 2023-05-22): yes."
+ },
+ "posthog.com|Do they have a SOC 2 Type II report?|PostHog is certified as SOC 2 Type 2 compliant": {
+  "verdict": "correct",
+  "why": "\"PostHog is certified as SOC 2 Type 2 compliant\": yes."
+ },
+ "resend.com|Can customers choose where their data is stored?|You can still select any region we support": {
+  "verdict": "correct",
+  "why": "\"You can still select any region we support\": customers choose their data region from the supported ones."
+ },
+ "cloudflare.com|Do they have a SOC 2 Type II report?|Meet SOC 2, PCI DSS, HIPAA, and GDPR requirements with [audit logs](https://developers.cloudflare.com/logs/), data residency controls, and [privacy features](https://developers.cloudflare.com/privacy-gateway/)": {
+  "verdict": "wrong",
+  "why": "Says the product helps customers meet SOC 2 requirements; it does not say Cloudflare holds a SOC 2 Type II report."
+ },
+ "https://seaya.vc/|Do they invest at pre-seed?|The company has raised a total of €6.5 million, €4.5 million in this round and €2 million in last June’s pre-seed round, in which the two funds already participated": {
+  "verdict": "wrong",
+  "why": "The funds took part in a pre-seed round of one company; the fund's own page says it focuses on Series A and B (the bench's answer is no)."
+ },
+ "https://www.kfund.vc/|Do they invest at pre-seed?|We're excited to announce that we now have a fully dedicated team looking into pre-seed opportunities to invest in high-performing and ambitious founders": {
+  "verdict": "correct",
+  "why": "\"a fully dedicated team looking into pre-seed opportunities\": yes, K Fund invests at pre-seed."
+ },
+ "https://www.southsummit.io/|What are the dates of the next edition?|BRAZIL 2027": {
+  "verdict": "wrong",
+  "why": "\"BRAZIL 2027\" is a menu label, as \"2027\" was: no dates for the next edition."
+ },
+ "posthog.com|Can customers choose where their data is stored?|yes - you need to create a fresh account at eu.posthog.com to do this": {
+  "verdict": "correct",
+  "why": "A 2023 forum reply: \"yes - you need to create a fresh account at eu.posthog.com\": EU storage is a choice."
+ },
+ "https://esade.edu/|Is there an online version?|Access e-books, journals, databases, and other online materials": {
+  "verdict": "wrong",
+  "why": "A library-resources line (e-books, journals, databases), as the earlier answer was: not whether the programme has an online version."
  }
 }

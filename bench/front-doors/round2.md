@@ -104,7 +104,7 @@ The three re-runs (`final-none`, `risk-none`) move no verdict: S1 Stripe q0 corr
 
 ### Changed-reach not-found cells (round 2a4 against step 4)
 
-Five not-found cells read different pages in round 2a4, and the final round has the same not-found cells: Talent Garden (hot desk price and day pass: seven and ten pages read; no desk price or day pass in them, `not_on_site`), Lexington (hot desk price: six pages read; the prices are for private offices, `not_on_site`), IE (flagship MBA price: nine pages read; no fee in them, `not_on_site`), and Shopify (`not_reached`, as above). The other not-found classes are carried from the round they were first lost in (RESULTS.md marks them), unverified beyond jurl's own traces.
+Five not-found cells read different pages in round 2a4, and the final round has the same not-found cells: Talent Garden (hot desk price and day pass: five pages read in each of r2a4 and the final round, per the result files; no desk price or day pass in them, `not_on_site`), Lexington (hot desk price: six pages read; the prices are for private offices, `not_on_site`), IE (flagship MBA price: nine pages read; no fee in them, `not_on_site`), and Shopify (`not_reached`, as above). The other not-found classes are carried from the round they were first lost in (RESULTS.md marks them), unverified beyond jurl's own traces.
 
 ### Cost, CI and size
 

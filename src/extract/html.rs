@@ -40,6 +40,7 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
     Extracted {
         title: collapse(&page_title(doc)),
         blocks: join_short(walk(doc, root, in_body)),
+        structured: Vec::new(),
         images: collect_images(doc, root, in_body, base),
         links: collect_links(root, in_body, base),
         site_links: collect_site_links(doc, base),

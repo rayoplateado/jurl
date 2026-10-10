@@ -12,7 +12,8 @@ import argparse, concurrent.futures as cf, json, os, pathlib, re, subprocess, sy
 HERE = pathlib.Path(__file__).resolve().parent
 ap = argparse.ArgumentParser()
 ap.add_argument("round", help="the round's name: its results go to results/ROUND/")
-ap.add_argument("--sheets", default="", help="comma-separated sheet ids (default: every sheet)")
+ap.add_argument("--sheets", default="", help="comma-separated sheet ids (default: every sheet of the sheets file)")
+ap.add_argument("--sheets-file", default="sheets.json", help="the sheets file, next to this script (sheets.json or holdout.json)")
 ap.add_argument("--jurl", default=os.environ.get("JURL", "jurl"))
 ap.add_argument("--port", type=int, default=18200, help="where jev_proxy.py listens")
 ap.add_argument("--parallel", type=int, default=4, help="rows at once (at most 4)")
@@ -34,7 +35,7 @@ def proxy(path):
 
 
 def cells():
-    sheets = json.loads((HERE / "sheets.json").read_text(encoding="utf-8"))["sheets"]
+    sheets = json.loads((HERE / a.sheets_file).read_text(encoding="utf-8"))["sheets"]
     wanted = [s for s in a.sheets.split(",") if s]
     only = {c for c in a.only.split(",") if c}
     for sheet in sheets:

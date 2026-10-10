@@ -1,0 +1,153 @@
+{
+ "sheets": [
+  {
+   "id": "H1",
+   "lang": "en",
+   "rows": [
+    {
+     "name": "Impact Hub Barcelona",
+     "front": "https://barcelona.impacthub.net/"
+    },
+    {
+     "name": "Coworking Barcelona",
+     "front": "https://coworkingbarcelona.com/"
+    },
+    {
+     "name": "Regus Spain",
+     "front": "https://www.regus.es/"
+    },
+    {
+     "name": "Spaces",
+     "front": "https://www.spaces.com/"
+    },
+    {
+     "name": "betahaus",
+     "front": "https://www.betahaus.com/"
+    }
+   ],
+   "questions": [
+    "What is the monthly price of a hot desk?",
+    "Can you buy a day pass?"
+   ]
+  },
+  {
+   "id": "H2",
+   "lang": "en",
+   "rows": [
+    {
+     "name": "Seedcamp",
+     "front": "https://www.seedcamp.com/"
+    },
+    {
+     "name": "Antler",
+     "front": "https://www.antler.co/"
+    },
+    {
+     "name": "Techstars",
+     "front": "https://www.techstars.com/"
+    },
+    {
+     "name": "Startupbootcamp",
+     "front": "https://www.startupbootcamp.org/"
+    },
+    {
+     "name": "Rockstart",
+     "front": "https://www.rockstart.com/"
+    }
+   ],
+   "questions": [
+    "How much equity does the programme take?",
+    "When is the application deadline?"
+   ]
+  },
+  {
+   "id": "H3",
+   "lang": "es",
+   "rows": [
+    {
+     "name": "Zalando",
+     "front": "https://www.zalando.es/"
+    },
+    {
+     "name": "El Corte Inglés",
+     "front": "https://www.elcorteingles.es/"
+    },
+    {
+     "name": "PcComponentes",
+     "front": "https://www.pccomponentes.com/"
+    },
+    {
+     "name": "MediaMarkt",
+     "front": "https://www.mediamarkt.es/es"
+    },
+    {
+     "name": "IKEA España",
+     "front": "https://www.ikea.com/es/es/"
+    }
+   ],
+   "questions": [
+    "¿Cuántos días tengo para devolver un pedido?",
+    "¿Cuánto cuesta el envío?"
+   ]
+  },
+  {
+   "id": "H4",
+   "lang": "en",
+   "rows": [
+    {
+     "name": "MWC Barcelona",
+     "front": "https://www.mwcbarcelona.com/"
+    },
+    {
+     "name": "Money20/20 Europe",
+     "front": "https://money2020europe.com/"
+    },
+    {
+     "name": "Codemotion",
+     "front": "https://codemotion.com/"
+    },
+    {
+     "name": "GITEX Europe",
+     "front": "https://www.gitex-europe.com/"
+    },
+    {
+     "name": "Devoxx",
+     "front": "https://devoxx.com/"
+    }
+   ],
+   "questions": [
+    "What are the dates of the next edition?",
+    "How much is a general admission ticket?"
+   ]
+  },
+  {
+   "id": "H5",
+   "lang": "en",
+   "rows": [
+    {
+     "name": "Trello",
+     "front": "https://trello.com/"
+    },
+    {
+     "name": "Miro",
+     "front": "https://miro.com/"
+    },
+    {
+     "name": "HubSpot",
+     "front": "https://www.hubspot.com/"
+    },
+    {
+     "name": "Calendly",
+     "front": "https://calendly.com/"
+    },
+    {
+     "name": "Airtable",
+     "front": "https://airtable.com/"
+    }
+   ],
+   "questions": [
+    "What is the monthly price per user of the cheapest paid plan?"
+   ]
+  }
+ ]
+}

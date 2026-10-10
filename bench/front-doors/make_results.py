@@ -87,5 +87,8 @@ out.append("")
 hand = HERE / "round2.md"
 if hand.exists():
     out.append(hand.read_text(encoding="utf-8"))
+hand3 = HERE / "round3.md"
+if hand3.exists():
+    out.append(hand3.read_text(encoding="utf-8"))
 (HERE / "RESULTS.md").write_text("\n".join(out) + "\n", encoding="utf-8")
 print("RESULTS.md written:", sum(len(x) for x in out), "chars")
