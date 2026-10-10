@@ -188,7 +188,16 @@ impl Sidecar {
     /// Takes one of the run's calls, if one is left. Checked and counted in one step, so pages read at once cannot both take
     /// the last call.
     fn reserve(&self) -> bool {
-        self.calls.fetch_update(Relaxed, Relaxed, |n| (n < self.max_pages).then_some(n + 1)).is_ok()
+        let mut seen = self.calls.load(Relaxed);
+        loop {
+            if seen >= self.max_pages {
+                return false;
+            }
+            match self.calls.compare_exchange_weak(seen, seen + 1, Relaxed, Relaxed) {
+                Ok(_) => return true,
+                Err(now) => seen = now,
+            }
+        }
     }
 
     /// Records that the sidecar's call for `host` failed: it is not asked for that host again in this run.
