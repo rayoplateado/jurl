@@ -460,7 +460,7 @@ async fn get(client: &Client, url: &str, max: usize, retry: Retry<'_>) -> Result
     let ct = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
     let links: Vec<String> =
         res.headers().get_all(header::LINK).iter().filter_map(|v| v.to_str().ok()).map(String::from).collect();
-    let Some(bytes) = read_capped(&mut res, max).await? else {
+    let Some(bytes) = read_capped(&mut res, max).await.map_err(|e| retry.fallback.scrubbed(via_proxy, e))? else {
         bail!("{url}: page larger than {}", size_label(max));
     };
     retry.fallback.count(via_proxy, bytes.len());
@@ -635,7 +635,10 @@ pub(crate) async fn send_get(
         let res = match request.send().await {
             Ok(res) => res,
             Err(e) if reach::refused(&e) => return Err(NotPublic.into()),
-            Err(e) => return Err(anyhow::Error::new(e).context(format!("fetching {target}"))),
+            Err(e) => {
+                let err = anyhow::Error::new(e).context(format!("fetching {target}"));
+                return Err(retry.fallback.scrubbed(via_proxy, err));
+            }
         };
         retry.cookies.set_cookies(&mut res.headers().get_all(header::SET_COOKIE).iter(), &target);
         let location = res.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).map(str::to_string);
@@ -745,8 +748,10 @@ pub(crate) async fn image_bytes(page: &Url, url: &Url, retry: Retry<'_>, max: us
     }
     let (mut res, via_proxy) = send_get(plain_for(retry.reach), url.as_str(), retry, &headers, None).await?;
     if res.status().is_success() {
-        let bytes =
-            read_capped(&mut res, max).await?.ok_or_else(|| anyhow!("{url}: image larger than {}", size_label(max)))?;
+        let bytes = read_capped(&mut res, max)
+            .await
+            .map_err(|e| retry.fallback.scrubbed(via_proxy, e))?
+            .ok_or_else(|| anyhow!("{url}: image larger than {}", size_label(max)))?;
         retry.fallback.count(via_proxy, bytes.len());
         return Ok(bytes);
     }
@@ -997,7 +1002,7 @@ async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url
 /// Waits for the network to settle and for real visible text to appear, capped at 8s:
 /// SPAs keep background traffic going and often paint content after the network calms down.
 /// A host on the fallback proxy is rendered through it: Lightpanda is given the proxy, and every request of the render goes
-/// through it, the page's scripts and images included (see the README).
+/// through it, the page's scripts and images included (see the README). An error of such a render is scrubbed of the proxy.
 pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> {
     let proxy = fallback.lightpanda_args(url);
     let proxied = !proxy.is_empty();
@@ -1005,10 +1010,18 @@ pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> 
         // A render is billed by the proxy whatever it returns, so it is counted as it starts.
         fallback.count_render();
     }
+    let body = dom_of(bin, url, &proxy).await.map_err(|e| fallback.scrubbed(proxied, e))?;
+    // The render's own requests (its scripts, its images) are not counted: only the DOM it returned is.
+    fallback.count(proxied, body.len());
+    Ok(Page { url: url.clone(), body, is_markdown: false, route: if proxied { Route::Proxy } else { Route::Direct } })
+}
+
+/// The DOM Lightpanda returns for `url`, run with the arguments `proxy` (none for a direct render).
+async fn dom_of(bin: &Path, url: &Url, proxy: &[String]) -> Result<String> {
     let run = Command::new(bin)
         .args(["fetch", "--json", "--dump", "html", "--wait-until", "networkalmostidle", "--wait-ms", "8000"])
         .args(["--wait-script", "document.body && (document.body.innerText || '').trim().length > 1500"])
-        .args(&proxy)
+        .args(proxy)
         .arg(url.as_str())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -1037,14 +1050,7 @@ pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> 
         let error = v["error"].as_str().unwrap_or("no output");
         bail!("lightpanda rendered nothing for {url} ({error})");
     }
-    // The render's own requests (its scripts, its images) are not counted: only the DOM it returned is.
-    fallback.count(proxied, body.len());
-    Ok(Page {
-        url: url.clone(),
-        body: body.to_string(),
-        is_markdown: false,
-        route: if proxied { Route::Proxy } else { Route::Direct },
-    })
+    Ok(body.to_string())
 }
 
 #[cfg(test)]
@@ -2281,6 +2287,74 @@ mod tests {
         assert_eq!(json["bytes"]["proxy"], serde_json::json!(args.fallback.bytes(true)));
         assert_eq!(json["bytes"]["direct"], 0);
         assert_eq!(json["proxied_hosts"], serde_json::json!([name_of(&site)]));
+    }
+
+    /// The proxy's URL for the test server at `base`, with the given credential in it.
+    fn proxy_url_with(base: &str, user: &str, pass: &str) -> String {
+        base.replacen("http://", &format!("http://{user}:{pass}@"), 1)
+    }
+
+    #[tokio::test]
+    async fn a_proxy_that_hangs_up_is_an_error_that_shows_neither_the_credential_nor_the_user() {
+        let (site, site_served) = serve_routed(|_| Some(reply("200 OK", "", b"direct")));
+        let (proxy, proxy_served) = serve_routed(|_| None);
+        let fallback = Fallback::with(Some(&proxy_url_with(&proxy, "jurlcred", "s3cret-pw")), true);
+        let memo = Memo::default();
+        let err = fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .err()
+            .expect("a proxy that hangs up is an error");
+        let text = format!("{err:#}");
+        assert!(!text.contains("s3cret-pw") && !text.contains("jurlcred"), "{text}");
+        assert!(text.contains("fetching"), "the request is still named: {text}");
+        assert_eq!(proxy_served.count(), 1);
+        assert_eq!(site_served.count(), 0, "the site is not asked directly");
+    }
+
+    #[tokio::test]
+    async fn a_407_from_the_proxy_is_a_refusal_through_the_proxy_with_no_credential() {
+        let (site, _) = serve_routed(|_| Some(reply("200 OK", "", b"direct")));
+        let (proxy, _) = serve_routed(|_| {
+            Some(reply("407 Proxy Authentication Required", "Proxy-Authenticate: Basic realm=\"proxy\"\r\n", b""))
+        });
+        let fallback = Fallback::with(Some(&proxy_url_with(&proxy, "jurlcred", "s3cret-pw")), true);
+        let memo = Memo::default();
+        let err = fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .err()
+            .expect("a 407 is an error");
+        let text = format!("{err:#}");
+        assert!(text.contains("HTTP 407") && text.contains("through the proxy"), "{text}");
+        assert!(!text.contains("s3cret-pw") && !text.contains("jurlcred"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_direct_transport_error_keeps_its_type() {
+        let (site, _) = serve_routed(|_| None);
+        let memo = Memo::default();
+        let err = fetch(&format!("{site}/page"), retry_on(&memo)).await.err().expect("the site hangs up");
+        assert!(err.downcast_ref::<reqwest::Error>().is_some(), "{err:#}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_render_through_the_proxy_whose_error_shows_its_arguments_shows_no_credential() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("jurl-render-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a test directory");
+        let bin = dir.join("lightpanda");
+        // A stand-in Lightpanda that fails and says its arguments, as the browser's own error might.
+        std::fs::write(&bin, "#!/bin/sh\nprintf '{\"http_status\":0,\"content\":\"\",\"error\":\"%s\"}' \"$*\"\n")
+            .expect("the stand-in");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        let fallback = Fallback::with(Some("http://jurlcred:s3cret-pw@proxy.test:8080"), true);
+        let url = Url::parse("http://93.184.216.34/precio").expect("a URL");
+        let err = render(&bin, &url, &fallback).await.err().expect("the stand-in fails");
+        let text = format!("{err:#}");
+        assert!(!text.contains("s3cret-pw") && !text.contains("jurlcred"), "{text}");
+        assert!(text.contains("proxy"), "the proxy is named by its place-holder: {text}");
+        assert_eq!(fallback.renders(), 1, "the render was counted as it started");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

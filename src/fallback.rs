@@ -2,7 +2,8 @@
 //! with HTTP 401, 403 or 429 (or from its first request under `JURL_PROXY_FIRST=1`).
 //!
 //! The credential is `JURL_FALLBACK_PROXY=http://user:pass@host:port`. jurl does not print it: a `-t` line names the host only,
-//! and Lightpanda is the one other process that is given the URL, in its arguments (see [`Fallback::lightpanda_args`]). Under
+//! and an error from a request through the proxy has the URL and credential taken out of it (see [`Fallback::scrubbed`]).
+//! Lightpanda is the one other process that is given the URL, in its arguments (see [`Fallback::lightpanda_args`]). Under
 //! `JURL_PUBLIC_ONLY=1` the proxy is allowed, unlike `HTTP(S)_PROXY`: each target is checked public before its request (see
 //! `reach::check`), but the proxy resolves the name itself, so that check is not rebinding-proof (see the README).
 
@@ -18,7 +19,10 @@ use anyhow::{Result, anyhow, bail};
 use reqwest::{Client, StatusCode, redirect::Policy};
 use url::Url;
 
-use crate::fetch::host_key;
+use crate::{fetch::host_key, reach};
+
+/// What a credential becomes in an error or a trace.
+const REDACTED: &str = "proxy";
 
 /// The proxy a run reads through: its URL, and the one client that goes through it.
 struct Proxy {
@@ -105,6 +109,18 @@ impl Fallback {
         self.proxy.as_ref().map(|proxy| &proxy.client)
     }
 
+    /// The error of a request, scrubbed of the proxy's URL and credential when the request went through the proxy (see
+    /// [`scrub_with`]). A direct request's error is returned as it is, and so is the guard's refusal, which names no address and
+    /// is looked for by its type.
+    pub(crate) fn scrubbed(&self, via_proxy: bool, err: anyhow::Error) -> anyhow::Error {
+        match &self.proxy {
+            Some(proxy) if via_proxy && !reach::refused(err.as_ref()) => {
+                anyhow!(scrub_with(&proxy.url, &format!("{err:#}")))
+            }
+            _ => err,
+        }
+    }
+
     /// Puts `url`'s host on the proxy for the rest of the run, for `why` (the refusal that switched it, or `JURL_PROXY_FIRST`).
     /// Returns whether the host was not on the proxy already. The first host put there is said on stderr under `timing`.
     pub(crate) fn put_on_proxy(&self, url: &Url, why: &str, timing: bool) -> bool {
@@ -170,6 +186,50 @@ impl Fallback {
         })
         .expect("a valid test proxy")
     }
+}
+
+/// `text` with the proxy's URL taken out, and its credential taken out in the forms an error can show it: its userinfo as the URL
+/// spells it and as it decodes, each with its `@` and without it. A bare user or password is not replaced: a short one would
+/// mangle unrelated text, and no message from reqwest shows one alone.
+pub(crate) fn scrub_with(proxy_url: &str, text: &str) -> String {
+    let mut out = text.replace(proxy_url, REDACTED);
+    let Ok(parsed) = Url::parse(proxy_url) else { return out };
+    let raw = (parsed.username().to_string(), parsed.password().unwrap_or_default().to_string());
+    let decoded = (percent_decoded(&raw.0), percent_decoded(&raw.1));
+    let mut forms = Vec::new();
+    for (user, pass) in [raw, decoded] {
+        if pass.is_empty() {
+            forms.push(format!("{user}@"));
+        } else {
+            forms.push(format!("{user}:{pass}@"));
+            forms.push(format!("{user}:{pass}"));
+        }
+    }
+    for form in forms.iter().filter(|form| form.len() > 1) {
+        out = out.replace(form.as_str(), REDACTED);
+    }
+    out
+}
+
+/// `raw` with its `%XX` escapes decoded, as reqwest decodes a proxy's credential. A `+` stays a `+`.
+fn percent_decoded(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escape = bytes.get(i + 1..i + 3).and_then(|hex| std::str::from_utf8(hex).ok());
+        match escape.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+            Some(byte) if bytes[i] == b'%' => {
+                out.push(byte);
+                i += 3;
+            }
+            _ => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Whether `JURL_PROXY_FIRST=1`: every host starts on the proxy. Without it the proxy is a fallback after a refusal.
@@ -247,6 +307,30 @@ mod tests {
         assert!(!refused_enough(StatusCode::NOT_FOUND));
         assert!(!refused_enough(StatusCode::SERVICE_UNAVAILABLE));
         assert!(!refused_enough(StatusCode::OK));
+    }
+
+    #[test]
+    fn the_proxy_url_and_its_userinfo_are_scrubbed_raw_and_decoded_but_no_bare_user() {
+        let proxy = "http://jurl%40user:p%40ss@proxy.test:8080";
+        let text = "connect to http://jurl%40user:p%40ss@proxy.test:8080 failed; jurl@user:p@ss@proxy.test, jurl%40user:p%40ss, \
+                    and a user agent";
+        let clean = scrub_with(proxy, text);
+        for secret in ["jurl%40user", "p%40ss", "jurl@user", "p@ss"] {
+            assert!(!clean.contains(secret), "{secret} in {clean}");
+        }
+        assert!(clean.contains("a user agent"), "a bare word is not mangled: {clean}");
+        assert!(clean.contains("proxy.test"), "the host is not a credential: {clean}");
+    }
+
+    #[test]
+    fn a_direct_error_is_kept_as_it_is_and_a_refusal_through_the_proxy_is_not_scrubbed() {
+        let fb = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
+        let direct = fb.scrubbed(false, anyhow!("via http://user:s3cret@proxy.test:8080"));
+        assert!(format!("{direct:#}").contains("s3cret"), "a direct error is not the proxy's to scrub");
+        let refused = fb.scrubbed(true, reach::NotPublic.into());
+        assert!(refused.downcast_ref::<reach::NotPublic>().is_some(), "the guard's refusal keeps its type");
+        let proxied = fb.scrubbed(true, anyhow!("via http://user:s3cret@proxy.test:8080"));
+        assert!(!format!("{proxied:#}").contains("s3cret"), "{proxied:#}");
     }
 
     #[test]
