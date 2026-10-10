@@ -180,8 +180,17 @@ pub(crate) async fn decide(start: &Url, required: bool) -> Result<Reach> {
 /// Sets `args`' reach from its start URL and `JURL_PUBLIC_ONLY`, once per run, after `prepare` has given the URL its scheme.
 /// A start that is not a URL keeps the private reach, and the run fails where it always has.
 pub(crate) async fn set_reach(args: &mut crate::cli::Args) -> Result<()> {
-    let Ok(start) = Url::parse(&args.url) else { return Ok(()) };
-    let required = required_by_env(std::env::var("JURL_PUBLIC_ONLY").ok().as_deref());
+    set_reach_with(args, required_by_env(std::env::var("JURL_PUBLIC_ONLY").ok().as_deref())).await
+}
+
+/// [`set_reach`] with `required` given: a start that is not a URL is not public, so it is an error when public-only is required.
+async fn set_reach_with(args: &mut crate::cli::Args, required: bool) -> Result<()> {
+    let Ok(start) = Url::parse(&args.url) else {
+        if required {
+            bail!("{}: not a URL, and JURL_PUBLIC_ONLY=1 allows only public addresses", args.url);
+        }
+        return Ok(());
+    };
     args.reach = decide(&start, required).await?;
     Ok(())
 }
@@ -461,6 +470,25 @@ mod tests {
         assert!(!required_by_env(Some("0")));
         assert!(!required_by_env(Some("yes")));
         assert!(!required_by_env(None));
+    }
+
+    #[tokio::test]
+    async fn the_run_reach_is_set_from_the_start_url_and_public_only_fails_closed() {
+        use clap::Parser;
+        let parse = |url: &str| crate::cli::Args::try_parse_from(["jurl", url]).expect("args");
+        let mut private = parse("http://127.0.0.1:8080/");
+        assert!(set_reach_with(&mut private, true).await.is_err(), "a private start is refused when required");
+        let mut private = parse("http://127.0.0.1:8080/");
+        set_reach_with(&mut private, false).await.expect("a private run");
+        assert_eq!(private.reach, Reach::Private);
+        let mut public = parse("http://93.184.216.34/");
+        set_reach_with(&mut public, true).await.expect("a public run");
+        assert!(matches!(public.reach, Reach::Public { .. }));
+        let mut broken = parse("http://93.184.216.34/");
+        broken.url = "https://exa mple.com".to_string();
+        assert!(set_reach_with(&mut broken, true).await.is_err(), "a start that is not a URL is not public");
+        broken.reach = Reach::Private;
+        set_reach_with(&mut broken, false).await.expect("without the requirement it is left to the fetch");
     }
 
     #[tokio::test]
