@@ -56,7 +56,7 @@ curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-in
 
 <sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source: `cargo install --git https://github.com/rayoplateado/jurl`</sub>
 
-Then run it. The first time, jurl asks for a [TypeSafe API key](https://console.typesafe.ai), checks it and saves it. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
+Then run `jurl`. With nothing set up, it asks how you want to read pages: with your own [TypeSafe API key](https://console.typesafe.ai), which it checks and saves, or with a [jurl cloud](#jurl-cloud) account. Reading a page first asks the same question. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
 
 To use `--vision` and `--find`, run `jurl init` and add a Cloudflare Workers AI token. To get a newer jurl, run `jurl update`: it updates the same way you installed it (Homebrew, the installer or cargo).
 
@@ -255,7 +255,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`) 
 
 Ask your agent for the cheapest paid plan on linear.app and it calls `answer` with `{"url": "linear.app", "question": "What is the monthly price of the cheapest paid plan?", "follow": true}`. It gets back `$10 per user/month`, the block, the link, and `Found by following https://linear.app/ → https://linear.app/pricing`.
 
-The tools run the same code as the CLI, with the same keys (`jurl init` or the environment variables). A miss is a normal result that starts with `Not found:`, as exit code 1 is. A failure (a page that can't be read, a bad key, no credits) is a tool error, as exit code 2 is.
+The tools run the same code as the CLI, with the same keys or jurl cloud sign-in (`jurl init`, `jurl login`, or the environment variables). A miss is a normal result that starts with `Not found:`, as exit code 1 is. A failure (a page that can't be read, a bad key, no credits) is a tool error, as exit code 2 is.
 
 ## Reference
 
@@ -275,11 +275,14 @@ The tools run the same code as the CLI, with the same keys (`jurl init` or the e
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
 | `--json` | Machine-readable output, with every probability and the run's `usage` |
 | `-t, --timing` | Where the time went, on stderr |
-| `jurl init` | Set or replace your API keys |
+| `jurl init` | Set or replace your API keys, or sign in to jurl cloud |
+| `jurl login` | Sign this computer in to [jurl cloud](#jurl-cloud) |
+| `jurl logout` | Sign out of jurl cloud, and revoke the key there |
+| `jurl status` | Which account reads go to, and jurl cloud's usage |
 | `jurl update` | Install the latest jurl, the same way this one was installed |
 | `jurl mcp` | Serve jurl's tools to an AI agent over MCP (see [above](#use-it-from-an-agent-mcp)) |
 
-Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`. A `.env` in the current directory is read too, for those API keys only.
+Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`. A `.env` in the current directory is read too, for those API keys only. A jurl cloud sign-in is saved there as `JURL_CLOUD_KEY` (and `JURL_CLOUD_URL` when it isn't the default); it never comes from a `.env`.
 
 `--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. If Clef looks at none of the images, jurl says so on stderr and the result is from text alone. Images over 15 MB aren't read. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
 
@@ -327,18 +330,56 @@ Ten documentation pages, one question each ([bench/](bench) has the tasks, the s
 
 Best in each row in bold. WebFetch hands the agent the fewest tokens because it rewrites what it reads: half the code it hands back isn't on the page, and each call has a small model ($1 per million tokens) read the whole page. Exa is the fastest, but missed both answers that were code. Tavily cut the code out of its extracts. Measured on 2026-10-07; jurl again on 2026-10-08.
 
+## jurl cloud
+
+Don't want to manage API keys? `jurl login` signs this computer in to jurl cloud, and jurl's servers do the reading. The flags and the exit codes stay the same, and the text matches a local run's except for the page's kind line (`· docs (0.84)`), which the server doesn't send, so it isn't printed. A `--precise` answer's block prints with the kind, heading level and code language the server sends, as a local run prints it, and `--json` carries them too. A block whose kind the server doesn't send prints as plain text.
+
+```console
+$ jurl login
+To sign in to jurl cloud, open https://cloud.jurl.dev/device and enter this code:
+
+    ABCD-EFGH
+
+Waiting for it to be entered (it expires in 15 minutes). Ctrl-C cancels.
+Saved the key "laptop" to ~/.config/jurl/env
+Signed in as ray@acme.com to Acme. Console: https://cloud.jurl.dev
+```
+
+It opens that page in your browser when it can, and the sign-in finishes once the code is entered there.
+
+```console
+$ jurl status
+jurl cloud · Acme · 1,240 page reads used · 18 days left
+key "laptop"
+```
+
+`jurl status` says which account reads go to, and for jurl cloud, what the period has used. `jurl logout` signs this computer out and revokes its key on jurl cloud.
+
+A run reads with jurl cloud or with your own keys, by the first of these that applies:
+
+1. `JURL_CLOUD_KEY` in the environment: jurl cloud.
+2. `TYPESAFE_API_KEY` or `JURL_JEV_URL` in the environment: your own keys. Set one for a single run to read with your own keys while you're signed in.
+3. A sign-in saved by `jurl login`: jurl cloud.
+4. Otherwise: your own keys.
+
+jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `-r`, and `--code` with `--precise`. `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
+
+`JURL_CLOUD_URL` points jurl at another jurl cloud, such as a self-hosted one: `JURL_CLOUD_URL=http://127.0.0.1:3211 jurl login` saves it. A key only goes over https, or to this computer.
+
 ## Your keys, your data
 
-jurl has no server and no account of its own. It talks to the model APIs directly with **your** keys:
+With your own keys, jurl has no server and no account of its own. It talks to the model APIs directly with **your** keys:
 
 - **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result says what its run used, a `--precise` miss included: `"usage": {"pages": 3, "jev": {"requests": 6, "input_tokens": 41250}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); a request counts once it has answered.
 - **What leaves your machine:** the text of the page goes to TypeSafe. With `--vision` or `--find`, the images go to Cloudflare too. Keep that in mind for internal or private pages.
 - **What jurl can't read:** it sends no cookies, so pages behind a login are out of reach.
 
+With [jurl cloud](#jurl-cloud), the URL and your question go to jurl cloud, which reads the page on its servers with the same models. It keeps a private log of each read for your organization, with the retention your organization sets. It also keeps an anonymous, de-identified record of reads of public pages (no account, user or key), used to improve jurl. Your organization can opt out of that record.
+
 ## Update and uninstall
 
 - **Update:** `brew upgrade jurl`, or run the install script again.
-- **Uninstall:** `brew uninstall jurl`, or delete `~/.local/bin/jurl`. To remove everything, also delete `~/.config/jurl` (keys) and `~/Library/Caches/jurl` or `~/.cache/jurl` (the browser).
+- **Uninstall:** `brew uninstall jurl`, or delete `~/.local/bin/jurl`. To remove everything, run `jurl logout` first if you use jurl cloud (it revokes the key), then delete `~/.config/jurl` (keys) and `~/Library/Caches/jurl` or `~/.cache/jurl` (the browser).
 
 <details>
 <summary><b>How it works</b></summary>
@@ -405,7 +446,10 @@ cargo build --release && ./target/release/jurl -t <url>
 | `src/extract/mod.rs` · `src/extract/html.rs` · `src/extract/markdown.rs` · `src/extract/join.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
-| `src/setup.rs` · `src/config.rs` | First-run key prompt, `jurl init`, key storage |
+| `src/setup.rs` · `src/config.rs` | First-run setup (own keys or jurl cloud), `jurl init`, key storage |
+| `src/cloud.rs` | jurl cloud: which account a run reads with, the read, the usage |
+| `src/account.rs` | `jurl login`, `logout` and `status`: the sign-in in the browser, and signing out |
+| `src/mock.rs` | Tests only: a local server that answers as jurl cloud does |
 | `src/update.rs` | `jurl update` |
 | `src/mcp.rs` | `jurl mcp`: the tools, their schemas, JSON-RPC over stdio |
 
