@@ -162,7 +162,7 @@ async fn fetch_capped(client: &Client, url: &str, max: usize, retry: Retry<'_>, 
             Reply::Refused(refused) => Err(refused.error(url, Some(VIA_BROWSER))),
         };
     }
-    let refused = match get(client, url, max).await? {
+    let refused = match get(client, url, max, retry.reach).await? {
         Reply::Page { page, .. } => return Ok(page),
         Reply::Refused(refused) => refused,
     };
@@ -206,13 +206,16 @@ pub(crate) async fn fetch_small(
     }
     let client = plain_for(retry.reach, client);
     if retry.sticky(url, now) {
-        crate::decide::USAGE.browser_requests.fetch_add(1, Relaxed);
-        let res = browser_for(retry.reach).ok()?.get(url.as_str()).timeout(timeout).send().await.ok()?;
+        let res = match send_browser_get(url, retry.reach, Some(timeout)).await {
+            Ok(res) => res,
+            Err(e) if e.downcast_ref::<NotPublic>().is_some() => return small_refused(url, retry.timing),
+            Err(_) => return None,
+        };
         return small_from_browser(res, max).await;
     }
-    let mut res = match client.get(url.as_str()).timeout(timeout).send().await {
+    let mut res = match send_get(client, url.as_str(), retry.reach, None, Some(timeout)).await {
         Ok(res) => res,
-        Err(e) if reach::refused(&e) => return small_refused(url, retry.timing),
+        Err(e) if e.downcast_ref::<NotPublic>().is_some() => return small_refused(url, retry.timing),
         Err(_) => return None,
     };
     let status = res.status();
@@ -227,8 +230,11 @@ pub(crate) async fn fetch_small(
     if !retry.on || !retried(status, retry_after) {
         return None;
     }
-    crate::decide::USAGE.browser_requests.fetch_add(1, Relaxed);
-    let res = browser_for(retry.reach).ok()?.get(url.as_str()).timeout(timeout).send().await.ok()?;
+    let res = match send_browser_get(url, retry.reach, Some(timeout)).await {
+        Ok(res) => res,
+        Err(e) if e.downcast_ref::<NotPublic>().is_some() => return small_refused(url, retry.timing),
+        Err(_) => return None,
+    };
     if res.status().is_success() {
         retry.learn(url, now);
     }
@@ -293,13 +299,8 @@ fn retry_after_text(value: &header::HeaderValue) -> String {
 }
 
 /// One GET of `url` with the normal client.
-async fn get(client: &Client, url: &str, max: usize) -> Result<Reply> {
-    let mut res = match client.get(url).header(header::ACCEPT, "text/markdown, text/html;q=0.9, */*;q=0.5").send().await
-    {
-        Ok(res) => res,
-        Err(e) if reach::refused(&e) => return Err(NotPublic.into()),
-        Err(e) => return Err(anyhow::Error::new(e).context(format!("fetching {url}"))),
-    };
+async fn get(client: &Client, url: &str, max: usize, reach: &Reach) -> Result<Reply> {
+    let mut res = send_get(client, url, reach, Some("text/markdown, text/html;q=0.9, */*;q=0.5"), None).await?;
     let status = res.status();
     if !status.is_success() {
         crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
@@ -317,7 +318,7 @@ async fn get(client: &Client, url: &str, max: usize) -> Result<Reply> {
     // The body is read as its markdown, but the page a person reads is the HTML page it is the alternate of.
     if page.is_markdown {
         let md = page.url.clone();
-        page.url = html_twin(client, &md, &links).await.unwrap_or(md);
+        page.url = html_twin(client, reach, &md, &links).await.unwrap_or(md);
     }
     Ok(Reply::Page { status, page })
 }
@@ -330,12 +331,8 @@ async fn get_browser(url: &str, max: usize, reach: &Reach) -> Result<Reply> {
 
 /// The browser client's request for `url`, sent. An error here means no reply came; the guard's refusal is its own error.
 async fn browser_send(url: &str, reach: &Reach) -> Result<wreq::Response> {
-    crate::decide::USAGE.browser_requests.fetch_add(1, Relaxed);
-    match browser_for(reach)?.get(url).send().await {
-        Ok(res) => Ok(res),
-        Err(e) if reach::refused(&e) => Err(NotPublic.into()),
-        Err(e) => Err(anyhow::Error::new(e).context(format!("fetching {url} with a browser's fingerprint"))),
-    }
+    let target = Url::parse(url).map_err(|e| anyhow!("{url}: {e}"))?;
+    send_browser_get(&target, reach, None).await
 }
 
 /// The browser client's reply to `url`: the page, or the refusal. A reply that cannot be read is an error.
@@ -375,16 +372,27 @@ static BROWSER: LazyLock<std::result::Result<wreq::Client, String>> = LazyLock::
     builder.build().map_err(|e| format!("building the browser client: {e}"))
 });
 
-/// The browser client of a public run: the same, with every redirect checked and every connection checked by the resolver.
-/// No proxy either: a proxy resolves the page's name itself, out of the guard's sight.
+/// The browser client of a public run: the same, with no redirects of its own (see [`send_browser_get`]) and every connection
+/// checked by the resolver. It uses the environment's proxy, if any, as the normal client does: then each target is checked
+/// before its request.
 static GUARDED_BROWSER: LazyLock<std::result::Result<wreq::Client, String>> = LazyLock::new(|| {
-    browser_builder()
-        .redirect(wreq::redirect::Policy::custom(reach::browser_redirect))
-        .dns_resolver(reach::GlobalOnly)
-        .no_proxy()
+    guarded_browser_builder(reach::proxy_hosts(env_var))
         .build()
         .map_err(|e| format!("building the guarded browser client: {e}"))
 });
+
+fn guarded_browser_builder(exempt: Vec<String>) -> wreq::ClientBuilder {
+    let builder =
+        browser_builder().redirect(wreq::redirect::Policy::none()).dns_resolver(reach::GlobalOnly::new(exempt));
+    // The tests' loopback servers are reached directly, as the normal client reaches them; a proxy test adds its own.
+    #[cfg(test)]
+    let builder = builder.no_proxy();
+    builder
+}
+
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
 
 /// The browser client a request of a run with `reach` goes through.
 fn browser_for(reach: &Reach) -> Result<wreq::Client> {
@@ -395,16 +403,20 @@ fn browser_for(reach: &Reach) -> Result<wreq::Client> {
     shared.as_ref().cloned().map_err(|e| anyhow!("{e}"))
 }
 
-/// The plain client of a public run: jurl's own settings, with every connection checked by the resolver, every redirect
-/// checked, and no proxy (see [`GUARDED_BROWSER`]).
+/// The plain client of a public run: jurl's own settings, with no redirects of its own (see [`send_get`]) and every connection
+/// checked by the resolver. It uses the environment's proxy, if any: then each target is checked before its request.
 static GUARDED_PLAIN: LazyLock<Client> = LazyLock::new(|| {
-    crate::client_builder()
-        .redirect(reqwest::redirect::Policy::custom(reach::redirect))
-        .dns_resolver(reach::GlobalOnly)
-        .no_proxy()
-        .build()
-        .expect("the guarded client builds from fixed settings")
+    guarded_plain_builder(reach::proxy_hosts(env_var)).build().expect("the guarded client builds from fixed settings")
 });
+
+fn guarded_plain_builder(exempt: Vec<String>) -> reqwest::ClientBuilder {
+    let builder = crate::client_builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(reach::GlobalOnly::new(exempt));
+    #[cfg(test)]
+    let builder = builder.no_proxy();
+    builder
+}
 
 /// The client a page request of a run with `reach` goes through: under a public run the guarded one, otherwise `client`.
 pub(crate) fn plain_for<'c>(reach: &Reach, client: &'c Client) -> &'c Client {
@@ -412,6 +424,89 @@ pub(crate) fn plain_for<'c>(reach: &Reach, client: &'c Client) -> &'c Client {
         Reach::Private => client,
         Reach::Public { .. } => &GUARDED_PLAIN,
     }
+}
+
+/// The address a redirect answer names, when it is one a client follows (301, 302, 303, 307, 308) and it names one.
+fn redirect_target(status: u16, location: Option<&str>, from: &Url) -> Option<Url> {
+    match status {
+        301 | 302 | 303 | 307 | 308 => from.join(location?).ok(),
+        _ => None,
+    }
+}
+
+/// One GET of `url` with the plain client `client`, under `reach`. Under a public run each address is checked before its request
+/// (see [`reach::check`]), and the redirects are followed here, each target checked before it is asked for: under a proxy the
+/// proxy resolves names itself, so the client's own redirects would go unchecked. Under a private run the client follows its own
+/// redirects, as it always has.
+pub(crate) async fn send_get(
+    client: &Client,
+    url: &str,
+    reach: &Reach,
+    accept: Option<&str>,
+    timeout: Option<Duration>,
+) -> Result<Response> {
+    let mut target = Url::parse(url).map_err(|e| anyhow!("{url}: {e}"))?;
+    for _ in 0..=reach::MAX_REDIRECTS {
+        reach::check(&target, reach).await?;
+        let mut request = client.get(target.as_str());
+        if let Some(accept) = accept {
+            request = request.header(header::ACCEPT, accept);
+        }
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let res = match request.send().await {
+            Ok(res) => res,
+            Err(e) if reach::refused(&e) => return Err(NotPublic.into()),
+            Err(e) => return Err(anyhow::Error::new(e).context(format!("fetching {target}"))),
+        };
+        let location = res.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).map(str::to_string);
+        match redirect_target(res.status().as_u16(), location.as_deref(), &target) {
+            Some(next) if matches!(reach, Reach::Public { .. }) => target = next,
+            _ => return Ok(res),
+        }
+    }
+    bail!("{url}: too many redirects")
+}
+
+/// [`send_get`] for the browser client: the same rules, and each request it makes is counted.
+async fn send_browser_get(url: &Url, reach: &Reach, timeout: Option<Duration>) -> Result<wreq::Response> {
+    let client = browser_for(reach)?;
+    let mut target = url.clone();
+    for _ in 0..=reach::MAX_REDIRECTS {
+        reach::check(&target, reach).await?;
+        crate::decide::USAGE.browser_requests.fetch_add(1, Relaxed);
+        let mut request = client.get(target.as_str());
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let res = match request.send().await {
+            Ok(res) => res,
+            Err(e) if reach::refused(&e) => return Err(NotPublic.into()),
+            Err(e) => {
+                return Err(anyhow::Error::new(e).context(format!("fetching {target} with a browser's fingerprint")));
+            }
+        };
+        let location = res.headers().get(wreq::header::LOCATION).and_then(|v| v.to_str().ok()).map(str::to_string);
+        match redirect_target(res.status().as_u16(), location.as_deref(), &target) {
+            Some(next) if matches!(reach, Reach::Public { .. }) => target = next,
+            _ => return Ok(res),
+        }
+    }
+    bail!("{url}: too many redirects")
+}
+
+/// Whether `url` may be rendered under `reach`, checked before the browser starts (see the README). A private run renders as
+/// before. A public run renders a page only if its own address passes the check, and under `JURL_PUBLIC_ONLY=1` it does not
+/// render at all: the browser makes requests of its own (its redirects, the page's scripts) that no check sees.
+pub(crate) async fn render_allowed(url: &Url, reach: &Reach, public_only: bool) -> Result<()> {
+    if matches!(reach, Reach::Private) {
+        return Ok(());
+    }
+    if public_only {
+        bail!("rendering is refused under JURL_PUBLIC_ONLY=1: the browser's own requests are not checked");
+    }
+    reach::check(url, reach).await
 }
 
 /// The page a body makes: its text as its Content-Type's charset says, and whether it is markdown.
@@ -543,13 +638,13 @@ const TWIN_TIMEOUT: Duration = Duration::from_secs(4);
 /// proposal (llmstxt.org) has it: a page's markdown is at the same URL with `.md` appended, and a directory's at
 /// `index.md`. A candidate counts only if it answers with an HTML page on the same host, so a page the site doesn't
 /// have is never named.
-async fn html_twin(client: &Client, url: &Url, links: &[String]) -> Option<Url> {
+async fn html_twin(client: &Client, reach: &Reach, url: &Url, links: &[String]) -> Option<Url> {
     let canonical = links.iter().filter_map(|l| canonical_link(l)).filter_map(|c| url.join(c).ok());
     for candidate in canonical.chain(md_stem(url)) {
         if candidate == *url || candidate.host_str() != url.host_str() {
             continue;
         }
-        if let Some(page) = serves_html(client, &candidate).await {
+        if let Some(page) = serves_html(client, reach, &candidate).await {
             return Some(page);
         }
     }
@@ -592,8 +687,8 @@ fn md_stem(url: &Url) -> Option<Url> {
 
 /// The URL of the page at `url` if it answers with an HTML page on the same host, after any redirects. The request asks
 /// for HTML outright: a site that answers every request with its markdown must not pass for its own HTML.
-async fn serves_html(client: &Client, url: &Url) -> Option<Url> {
-    let res = client.get(url.as_str()).header(header::ACCEPT, "text/html").timeout(TWIN_TIMEOUT).send().await.ok()?;
+async fn serves_html(client: &Client, reach: &Reach, url: &Url) -> Option<Url> {
+    let res = send_get(client, url.as_str(), reach, Some("text/html"), Some(TWIN_TIMEOUT)).await.ok()?;
     let ct = res.headers().get(header::CONTENT_TYPE)?.to_str().ok()?;
     let html = ct.starts_with("text/html") || ct.starts_with("application/xhtml+xml");
     let same_host = res.url().host_str() == url.host_str();
@@ -1233,7 +1328,7 @@ mod tests {
         let memo = Memo::default();
         for site in sites {
             let started = Instant::now();
-            let normal = get(&client, &site.url, PAGE_MAX).await;
+            let normal = get(&client, &site.url, PAGE_MAX, &PRIVATE).await;
             let normal_ms = started.elapsed().as_millis();
             let started = Instant::now();
             let browser = get_browser(&site.url, PAGE_MAX, &PRIVATE).await;
@@ -1424,6 +1519,61 @@ mod tests {
         let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach };
         let private = Url::parse("http://127.0.0.2:1/robots.txt").unwrap();
         assert_eq!(fetch_small(&client(), &private, PAGE_MAX, WAIT, retry, Instant::now()).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_public_run_renders_a_page_at_a_public_address_and_nothing_under_public_only() {
+        let reach = Reach::Public { allowed: std::collections::HashSet::new() };
+        let page = Url::parse("http://93.184.216.34/app").unwrap();
+        render_allowed(&page, &reach, false).await.expect("a public page may be rendered");
+        let err = render_allowed(&page, &reach, true).await.expect_err("refused under JURL_PUBLIC_ONLY");
+        assert!(format!("{err:#}").starts_with("rendering is refused under JURL_PUBLIC_ONLY=1"), "{err:#}");
+        let private = Url::parse("http://10.0.0.1/app").unwrap();
+        let err = render_allowed(&private, &reach, false).await.expect_err("a private page is refused");
+        assert_eq!(format!("{err:#}"), "not a public address");
+        render_allowed(&private, &Reach::Private, false).await.expect("a private run renders as before");
+    }
+
+    #[tokio::test]
+    async fn a_public_run_through_a_proxy_checks_each_target_before_the_proxy_is_asked() {
+        // The test server is the proxy: it is sent each request with its absolute address.
+        let (proxy, served) = serve_routed(|head| {
+            let target = head.split_whitespace().nth(1).unwrap_or_default();
+            Some(match target {
+                "http://93.184.216.34/page" => reply("200 OK", "Content-Type: text/html\r\n", b"<p>Via the proxy</p>"),
+                _ => reply("404 Not Found", "", b""),
+            })
+        });
+        let client = guarded_plain_builder(Vec::new())
+            .proxy(reqwest::Proxy::http(proxy.as_str()).expect("a proxy"))
+            .build()
+            .expect("a client");
+        let reach = Reach::Public { allowed: std::collections::HashSet::new() };
+        match get(&client, "http://93.184.216.34/page", PAGE_MAX, &reach).await.unwrap_or_else(|e| panic!("{e:#}")) {
+            Reply::Page { page, .. } => assert_eq!(page.body, "<p>Via the proxy</p>"),
+            Reply::Refused(_) => panic!("the proxy answered with a page"),
+        }
+        assert_eq!(served.count(), 1, "the proxy is asked for the public target");
+        // A private address, and a name that resolves to loopback, are refused before the proxy is asked.
+        for url in ["http://10.0.0.1/page", "http://localhost:1/page"] {
+            let err = get(&client, url, PAGE_MAX, &reach).await.err().expect("refused");
+            assert_eq!(format!("{err:#}"), "not a public address", "{url}");
+        }
+        assert_eq!(served.count(), 1, "the proxy is never asked for those");
+    }
+
+    #[tokio::test]
+    async fn a_proxy_host_resolves_as_the_system_resolves_it_and_any_other_name_is_checked() {
+        let (base, _served) =
+            serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Proxy host</p>")));
+        let named = format!("{}/", base.replacen("127.0.0.1", "localhost", 1));
+        let exempt = guarded_plain_builder(vec!["localhost".to_string()]).build().expect("a client");
+        let body =
+            exempt.get(named.as_str()).send().await.expect("the proxy host connects").text().await.expect("a body");
+        assert_eq!(body, "<p>Proxy host</p>");
+        let checked = guarded_plain_builder(Vec::new()).build().expect("a client");
+        let err = checked.get(named.as_str()).send().await.expect_err("refused");
+        assert!(reach::refused(&err), "{err:?}");
     }
 }
 
