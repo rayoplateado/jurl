@@ -2,115 +2,486 @@
   "_about": "Rows are front doors (the search starts there). Questions are asked as written: jurl --json --precise --follow 5 -q QUESTION FRONT. S1-S3 are the owner's developer sheets; R1-R6 are the real-world sheets (front doors checked to load with a browser user agent, 2026-10-10). R6es is R6 with the questions in Spanish.",
   "sheets": [
     {
-      "id": "R1", "title": "Coworkings Madrid", "lang": "en", "group": "real",
-      "questions": ["What is the monthly price of a flexible (hot) desk?", "Can you buy a day pass?", "Is it open 24/7?"],
+      "id": "R1",
+      "title": "Coworkings Madrid",
+      "lang": "en",
+      "group": "real",
+      "questions": [
+        "What is the monthly price of a flexible (hot) desk?",
+        "Can you buy a day pass?",
+        "Is it open 24/7?"
+      ],
       "rows": [
-        {"name": "Impact Hub Madrid", "front": "https://madrid.impacthub.net/"},
-        {"name": "Utopicus", "front": "https://utopicus.es/", "note": "utopicus.com returns 404 and www.utopicus.com 526; the site loads on utopicus.es"},
-        {"name": "Talent Garden Madrid", "front": "https://talentgarden.com/en/", "note": "talentgarden.org redirects to talentgarden.com/en/ (the global site; Madrid is one of its locations)"},
-        {"name": "Lexington", "front": "https://www.lexington.es/"}
+        {
+          "name": "Impact Hub Madrid",
+          "front": "https://madrid.impacthub.net/"
+        },
+        {
+          "name": "Utopicus",
+          "front": "https://utopicus.es/",
+          "note": "utopicus.com returns 404 and www.utopicus.com 526; the site loads on utopicus.es"
+        },
+        {
+          "name": "Talent Garden Madrid",
+          "front": "https://talentgarden.com/en/",
+          "note": "talentgarden.org redirects to talentgarden.com/en/ (the global site; Madrid is one of its locations)"
+        },
+        {
+          "name": "Lexington",
+          "front": "https://www.lexington.es/"
+        }
       ]
     },
     {
-      "id": "R2", "title": "Venture funds", "lang": "en", "group": "real",
-      "questions": ["Do they invest at pre-seed?", "What is their typical first ticket?", "How do you send them a pitch?"],
+      "id": "R2",
+      "title": "Venture funds",
+      "lang": "en",
+      "group": "real",
+      "questions": [
+        "Do they invest at pre-seed?",
+        "What is their typical first ticket?",
+        "How do you send them a pitch?"
+      ],
       "rows": [
-        {"name": "seaya.vc", "front": "https://seaya.vc/", "note": "403 to curl and to a browser user agent"},
-        {"name": "Kibo Ventures", "front": "https://www.kiboventures.com/"},
-        {"name": "K Fund", "front": "https://www.kfund.vc/"},
-        {"name": "Samaipata", "front": "https://www.samaipata.vc/"},
-        {"name": "JME Ventures", "front": "https://www.jme.vc/"},
-        {"name": "Nauta", "front": "https://www.nauta.vc/"}
+        {
+          "name": "seaya.vc",
+          "front": "https://seaya.vc/",
+          "note": "403 to curl and to a browser user agent"
+        },
+        {
+          "name": "Kibo Ventures",
+          "front": "https://www.kiboventures.com/"
+        },
+        {
+          "name": "K Fund",
+          "front": "https://www.kfund.vc/"
+        },
+        {
+          "name": "Samaipata",
+          "front": "https://www.samaipata.vc/"
+        },
+        {
+          "name": "JME Ventures",
+          "front": "https://www.jme.vc/"
+        },
+        {
+          "name": "Nauta",
+          "front": "https://www.nauta.vc/"
+        }
       ]
     },
     {
-      "id": "R3", "title": "Public grants", "lang": "en", "group": "real",
-      "questions": ["When is the application deadline?", "What is the maximum amount?"],
+      "id": "R3",
+      "title": "Public grants",
+      "lang": "en",
+      "group": "real",
+      "questions": [
+        "When is the application deadline?",
+        "What is the maximum amount?"
+      ],
       "rows": [
-        {"name": "ENISA", "front": "https://www.enisa.es/", "note": "enisa.es without www does not connect"},
-        {"name": "CDTI", "front": "https://www.cdti.es/"},
-        {"name": "Acelerapyme (Kit Digital)", "front": "https://www.acelerapyme.gob.es/"},
-        {"name": "EIC", "front": "https://eic.ec.europa.eu/", "note": "the front door redirects to a language selector (/select-language)"}
+        {
+          "name": "ENISA",
+          "front": "https://www.enisa.es/",
+          "note": "enisa.es without www does not connect"
+        },
+        {
+          "name": "CDTI",
+          "front": "https://www.cdti.es/"
+        },
+        {
+          "name": "Acelerapyme (Kit Digital)",
+          "front": "https://www.acelerapyme.gob.es/"
+        },
+        {
+          "name": "EIC",
+          "front": "https://eic.ec.europa.eu/",
+          "note": "the front door redirects to a language selector (/select-language)"
+        }
       ]
     },
     {
-      "id": "R4", "title": "Industry events", "lang": "en", "group": "real",
-      "questions": ["What are the dates of the next edition?", "How much is a general ticket?", "In which city is it held?"],
+      "id": "R4",
+      "title": "Industry events",
+      "lang": "en",
+      "group": "real",
+      "questions": [
+        "What are the dates of the next edition?",
+        "How much is a general ticket?",
+        "In which city is it held?"
+      ],
       "rows": [
-        {"name": "Web Summit", "front": "https://websummit.com/"},
-        {"name": "4YFN", "front": "https://www.4yfn.com/"},
-        {"name": "South Summit", "front": "https://www.southsummit.io/", "note": "southsummit.io without www does not connect"},
-        {"name": "VivaTech", "front": "https://vivatech.com/", "note": "vivatechnology.com redirects to vivatech.com"},
-        {"name": "Slush", "front": "https://slush.org/"}
+        {
+          "name": "Web Summit",
+          "front": "https://websummit.com/"
+        },
+        {
+          "name": "4YFN",
+          "front": "https://www.4yfn.com/"
+        },
+        {
+          "name": "South Summit",
+          "front": "https://www.southsummit.io/",
+          "note": "southsummit.io without www does not connect"
+        },
+        {
+          "name": "VivaTech",
+          "front": "https://vivatech.com/",
+          "note": "vivatechnology.com redirects to vivatech.com"
+        },
+        {
+          "name": "Slush",
+          "front": "https://slush.org/"
+        }
       ]
     },
     {
-      "id": "R5", "title": "Masters and bootcamps", "lang": "en", "group": "real",
-      "questions": ["What is the price of the flagship MBA or bootcamp?", "How long does it last?", "Is there an online version?"],
+      "id": "R5",
+      "title": "Masters and bootcamps",
+      "lang": "en",
+      "group": "real",
+      "questions": [
+        "What is the price of the flagship MBA or bootcamp?",
+        "How long does it last?",
+        "Is there an online version?"
+      ],
       "rows": [
-        {"name": "IE Business School", "front": "https://www.ie.edu/"},
-        {"name": "ESADE", "front": "https://esade.edu/", "note": "403 to curl without a browser user agent; loads with one"},
-        {"name": "IESE", "front": "https://www.iese.edu/"},
-        {"name": "Ironhack", "front": "https://www.ironhack.com/"}
+        {
+          "name": "IE Business School",
+          "front": "https://www.ie.edu/"
+        },
+        {
+          "name": "ESADE",
+          "front": "https://esade.edu/",
+          "note": "403 to curl without a browser user agent; loads with one"
+        },
+        {
+          "name": "IESE",
+          "front": "https://www.iese.edu/"
+        },
+        {
+          "name": "Ironhack",
+          "front": "https://www.ironhack.com/"
+        }
       ]
     },
     {
-      "id": "R6", "title": "Spanish online shops", "lang": "en", "group": "real",
-      "questions": ["From what order amount is shipping free?", "How many days do you have to return an item?"],
+      "id": "R6",
+      "title": "Spanish online shops",
+      "lang": "en",
+      "group": "real",
+      "questions": [
+        "From what order amount is shipping free?",
+        "How many days do you have to return an item?"
+      ],
       "rows": [
-        {"name": "Ecoalf", "front": "https://ecoalf.com/"},
-        {"name": "Hawkers", "front": "https://www.hawkersco.com/"},
-        {"name": "Pompeii", "front": "https://pompeiibrand.com/"},
-        {"name": "Scalpers", "front": "https://scalperscompany.com/"},
-        {"name": "Mr Wonderful", "front": "https://mrwonderful.com/", "note": "mrwonderfulshop.es does not connect; the shop loads on mrwonderful.com"}
+        {
+          "name": "Ecoalf",
+          "front": "https://ecoalf.com/"
+        },
+        {
+          "name": "Hawkers",
+          "front": "https://www.hawkersco.com/"
+        },
+        {
+          "name": "Pompeii",
+          "front": "https://pompeiibrand.com/"
+        },
+        {
+          "name": "Scalpers",
+          "front": "https://scalperscompany.com/"
+        },
+        {
+          "name": "Mr Wonderful",
+          "front": "https://mrwonderful.com/",
+          "note": "mrwonderfulshop.es does not connect; the shop loads on mrwonderful.com"
+        }
       ]
     },
     {
-      "id": "R6es", "title": "Spanish online shops, questions in Spanish", "lang": "es", "group": "real",
-      "questions": ["¿A partir de qué importe de pedido el envío es gratis?", "¿Cuántos días tengo para devolver un artículo?"],
+      "id": "R6es",
+      "title": "Spanish online shops, questions in Spanish",
+      "lang": "es",
+      "group": "real",
+      "questions": [
+        "¿A partir de qué importe de pedido el envío es gratis?",
+        "¿Cuántos días tengo para devolver un artículo?"
+      ],
       "rows": [
-        {"name": "Ecoalf", "front": "https://ecoalf.com/"},
-        {"name": "Hawkers", "front": "https://www.hawkersco.com/"},
-        {"name": "Pompeii", "front": "https://pompeiibrand.com/"},
-        {"name": "Scalpers", "front": "https://scalperscompany.com/"},
-        {"name": "Mr Wonderful", "front": "https://mrwonderful.com/"}
+        {
+          "name": "Ecoalf",
+          "front": "https://ecoalf.com/"
+        },
+        {
+          "name": "Hawkers",
+          "front": "https://www.hawkersco.com/"
+        },
+        {
+          "name": "Pompeii",
+          "front": "https://pompeiibrand.com/"
+        },
+        {
+          "name": "Scalpers",
+          "front": "https://scalperscompany.com/"
+        },
+        {
+          "name": "Mr Wonderful",
+          "front": "https://mrwonderful.com/"
+        }
       ]
     },
     {
-      "id": "S1", "title": "API limits", "lang": "en", "group": "dev",
-      "questions": ["What is the primary rate limit for authenticated requests?"],
+      "id": "S1",
+      "title": "API limits",
+      "lang": "en",
+      "group": "dev",
+      "questions": [
+        "What is the primary rate limit for authenticated requests?"
+      ],
       "rows": [
-        {"name": "github.com", "front": "github.com"},
-        {"name": "gitlab.com", "front": "gitlab.com"},
-        {"name": "bitbucket.org", "front": "bitbucket.org"},
-        {"name": "stripe.com", "front": "stripe.com"},
-        {"name": "shopify.com", "front": "shopify.com"}
+        {
+          "name": "github.com",
+          "front": "github.com"
+        },
+        {
+          "name": "gitlab.com",
+          "front": "gitlab.com"
+        },
+        {
+          "name": "bitbucket.org",
+          "front": "bitbucket.org"
+        },
+        {
+          "name": "stripe.com",
+          "front": "stripe.com"
+        },
+        {
+          "name": "shopify.com",
+          "front": "shopify.com"
+        }
       ]
     },
     {
-      "id": "S2", "title": "Competitor pricing", "lang": "en", "group": "dev",
-      "questions": ["What is the monthly price of the cheapest paid plan?"],
+      "id": "S2",
+      "title": "Competitor pricing",
+      "lang": "en",
+      "group": "dev",
+      "questions": [
+        "What is the monthly price of the cheapest paid plan?"
+      ],
       "rows": [
-        {"name": "linear.app", "front": "linear.app"},
-        {"name": "notion.com", "front": "notion.com"},
-        {"name": "clickup.com", "front": "clickup.com"},
-        {"name": "vercel.com", "front": "vercel.com"},
-        {"name": "supabase.com", "front": "supabase.com"},
-        {"name": "posthog.com", "front": "posthog.com"},
-        {"name": "figma.com", "front": "figma.com"},
-        {"name": "asana.com", "front": "asana.com"}
+        {
+          "name": "linear.app",
+          "front": "linear.app"
+        },
+        {
+          "name": "notion.com",
+          "front": "notion.com"
+        },
+        {
+          "name": "clickup.com",
+          "front": "clickup.com"
+        },
+        {
+          "name": "vercel.com",
+          "front": "vercel.com"
+        },
+        {
+          "name": "supabase.com",
+          "front": "supabase.com"
+        },
+        {
+          "name": "posthog.com",
+          "front": "posthog.com"
+        },
+        {
+          "name": "figma.com",
+          "front": "figma.com"
+        },
+        {
+          "name": "asana.com",
+          "front": "asana.com"
+        }
       ]
     },
     {
-      "id": "S3", "title": "Compliance", "lang": "en", "group": "dev",
-      "questions": ["Do they have a SOC 2 Type II report?", "Can customers choose where their data is stored?"],
+      "id": "S3",
+      "title": "Compliance",
+      "lang": "en",
+      "group": "dev",
+      "questions": [
+        "Do they have a SOC 2 Type II report?",
+        "Can customers choose where their data is stored?"
+      ],
       "rows": [
-        {"name": "vercel.com", "front": "vercel.com"},
-        {"name": "supabase.com", "front": "supabase.com"},
-        {"name": "posthog.com", "front": "posthog.com"},
-        {"name": "sentry.io", "front": "sentry.io"},
-        {"name": "resend.com", "front": "resend.com"},
-        {"name": "cloudflare.com", "front": "cloudflare.com"}
+        {
+          "name": "vercel.com",
+          "front": "vercel.com"
+        },
+        {
+          "name": "supabase.com",
+          "front": "supabase.com"
+        },
+        {
+          "name": "posthog.com",
+          "front": "posthog.com"
+        },
+        {
+          "name": "sentry.io",
+          "front": "sentry.io"
+        },
+        {
+          "name": "resend.com",
+          "front": "resend.com"
+        },
+        {
+          "name": "cloudflare.com",
+          "front": "cloudflare.com"
+        }
+      ]
+    },
+    {
+      "id": "B1",
+      "title": "Class (b) re-run: Kit Digital maximum aid",
+      "lang": "en",
+      "group": "sharpened",
+      "questions": [
+        "What is the maximum Kit Digital aid per company?"
+      ],
+      "rows": [
+        {
+          "name": "Acelerapyme (Kit Digital)",
+          "front": "https://www.acelerapyme.gob.es/",
+          "note": "the original question: 'What is the maximum amount?'"
+        }
+      ]
+    },
+    {
+      "id": "B2",
+      "title": "Class (b) re-run: EIC maximum funding",
+      "lang": "en",
+      "group": "sharpened",
+      "questions": [
+        "What is the maximum funding per project?"
+      ],
+      "rows": [
+        {
+          "name": "EIC",
+          "front": "https://eic.ec.europa.eu/",
+          "note": "the original question: 'What is the maximum amount?'"
+        }
+      ]
+    },
+    {
+      "id": "B3",
+      "title": "Class (b) re-run: South Summit general ticket",
+      "lang": "en",
+      "group": "sharpened",
+      "questions": [
+        "How much is the general admission ticket (not startup or investor passes)?"
+      ],
+      "rows": [
+        {
+          "name": "South Summit",
+          "front": "https://www.southsummit.io/",
+          "note": "the original question: 'How much is a general ticket?'"
+        }
+      ]
+    },
+    {
+      "id": "B4",
+      "title": "Class (b) re-run: Slush general ticket",
+      "lang": "en",
+      "group": "sharpened",
+      "questions": [
+        "How much is the general admission ticket (not startup or investor passes)?"
+      ],
+      "rows": [
+        {
+          "name": "Slush",
+          "front": "https://slush.org/",
+          "note": "the original question: 'How much is a general ticket?'"
+        }
+      ]
+    },
+    {
+      "id": "B5",
+      "title": "Class (b) re-run: ESADE online flagship MBA",
+      "lang": "en",
+      "group": "sharpened",
+      "questions": [
+        "Can you take the full-time MBA online?"
+      ],
+      "rows": [
+        {
+          "name": "ESADE",
+          "front": "https://esade.edu/",
+          "note": "the original question: 'Is there an online version?'"
+        }
+      ]
+    },
+    {
+      "id": "B6",
+      "title": "Class (b) re-run: Figma full seat",
+      "lang": "en",
+      "group": "sharpened",
+      "questions": [
+        "What is the monthly price per full seat of the cheapest paid plan (not a collab or dev seat)?"
+      ],
+      "rows": [
+        {
+          "name": "figma.com",
+          "front": "figma.com",
+          "note": "the original question: 'What is the monthly price of the cheapest paid plan?'"
+        }
+      ]
+    },
+    {
+      "id": "B7",
+      "title": "Class (b) re-run: Vercel data location",
+      "lang": "en",
+      "group": "sharpened",
+      "questions": [
+        "Can customers choose the region where their data is stored, not only where Serverless Functions run?"
+      ],
+      "rows": [
+        {
+          "name": "vercel.com",
+          "front": "vercel.com",
+          "note": "the original question: 'Can customers choose where their data is stored?'"
+        }
+      ]
+    },
+    {
+      "id": "K1",
+      "title": "Accept-Language risk: a site that honours the header, asked in Spanish",
+      "lang": "es",
+      "group": "risk",
+      "questions": [
+        "¿Cuál es el límite de peticiones por segundo para las solicitudes autenticadas?"
+      ],
+      "rows": [
+        {
+          "name": "Stripe",
+          "front": "stripe.com",
+          "note": "stripe.com redirects by Accept-Language (/es without it, /en-es with en); docs.stripe.com answers in the header's language"
+        }
+      ]
+    },
+    {
+      "id": "K2",
+      "title": "Accept-Language risk: a second bilingual site, asked in Spanish",
+      "lang": "es",
+      "group": "risk",
+      "questions": [
+        "¿Cuánto dura el bootcamp?"
+      ],
+      "rows": [
+        {
+          "name": "Ironhack",
+          "front": "https://www.ironhack.com/",
+          "note": "has /es and English pages"
+        }
       ]
     }
   ]

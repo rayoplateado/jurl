@@ -27,6 +27,10 @@
   "verdict": "wrong",
   "why": "\"Lisensi Kolaborasi US$3/bulan\": the collaborator seat, not the cheapest plan (as before)."
  },
+ "figma.com|What is the monthly price per full seat of the cheapest paid plan (not a collab or dev seat)?|$16/mo": {
+  "verdict": "correct",
+  "why": "\"Professional, Full seat, $16/mo\": the cheapest paid plan's full seat, monthly (b, fixed by the sharper question)."
+ },
  "github.com|What is the primary rate limit for authenticated requests?|5,000 requests per hour": {
   "verdict": "correct",
   "why": "\"All of these requests count towards your personal rate limit of 5,000 requests per hour\"."
@@ -34,6 +38,10 @@
  "gitlab.com|What is the primary rate limit for authenticated requests?|A sustained limit, measured each hour. Use this number to plan your usage": {
   "verdict": "wrong",
   "why": "\"A sustained limit, measured each hour. Use this number to plan your usage.\" states no number."
+ },
+ "gitlab.com|What is the primary rate limit for authenticated requests?|Authenticated requests receive your plan’s full allowance": {
+  "verdict": "wrong",
+  "why": "\"Authenticated requests receive your plan's full allowance\": the rule, with no figure (d)."
  },
  "https://ecoalf.com/|From what order amount is shipping free?|150€": {
   "verdict": "correct",
@@ -90,6 +98,10 @@
  "https://madrid.impacthub.net/|Can you buy a day pass?|Ven cuando lo necesites. Adquiere tu pase de un día o un bono de 10 días para combinar teletrabajo y oficina con total flexibilidad": {
   "verdict": "correct",
   "why": "\"Adquiere tu pase de un dia o un bono de 10 dias\": a day pass can be bought."
+ },
+ "https://madrid.impacthub.net/|Can you buy a day pass?|días o mediante bonos flexibles": {
+  "verdict": "correct",
+  "why": "\"disponibles por horas, días o mediante bonos flexibles\": offices can be taken by the day."
  },
  "https://madrid.impacthub.net/|Is it open 24/7?|24/7": {
   "verdict": "correct",
@@ -150,6 +162,10 @@
  "https://seaya.vc/|Do they invest at pre-seed?|Series A and B": {
   "verdict": "correct",
   "why": "Implicit no: the fund \"will continue to focus on leading Series A and B rounds\", not pre-seed."
+ },
+ "https://seaya.vc/|How do you send them a pitch?|+34 91 110 8697": {
+  "verdict": "wrong",
+  "why": "The office telephone number on the contact page, not a way to pitch (d)."
  },
  "https://seaya.vc/|How do you send them a pitch?|dealflow.website@seaya.vc": {
   "verdict": "correct",
@@ -251,6 +267,10 @@
   "verdict": "correct",
   "why": "\"Dispones de 15 dias naturales ... para devolver\"."
  },
+ "https://www.ie.edu/|How long does it last?|2 weeks": {
+  "verdict": "wrong",
+  "why": "\"Within 2 weeks of submitting\" is the admissions response time, not the programme's length (d)."
+ },
  "https://www.ie.edu/|How long does it last?|TWO-WEEK MODULE OPTIONS": {
   "verdict": "wrong",
   "why": "\"TWO-WEEK MODULE OPTIONS\" is a menu label; the duration of the MBA is not given."
@@ -279,6 +299,14 @@
   "verdict": "wrong",
   "why": "\"The Roadmap 2026-28\" is the institution's strategy period, not the MBA's length."
  },
+ "https://www.iese.edu/|How long does it last?|9-month academic phase + mandatory internship (at least 3 months)": {
+  "verdict": "wrong",
+  "why": "The Master in Finance's 9-month academic phase: a different programme from the full-time MBA (b)."
+ },
+ "https://www.iese.edu/|Is there an online version?|At IESE we also create tailor-made programs for organizations in fully online and in blended (online and in-person) formats": {
+  "verdict": "wrong",
+  "why": "Tailor-made online programmes for organisations, not the flagship MBA or a bootcamp (b)."
+ },
  "https://www.iese.edu/|Is there an online version?|Online": {
   "verdict": "wrong",
   "why": "\"Online\" is a category label among Focused Programs, not a statement about an online MBA or bootcamp."
@@ -291,6 +319,10 @@
   "verdict": "wrong",
   "why": "\"9:00 a 17:00\" is the daily schedule of live bootcamps, not their length."
  },
+ "https://www.ironhack.com/|How long does it last?|Our Career Services support begins when you enrol in one of our courses and continues until you find a job or until one year after your graduation date, whichever comes first": {
+  "verdict": "wrong",
+  "why": "The career-support promise (\"Our Career Services support begins when you enrol\"), not the bootcamp's length (d)."
+ },
  "https://www.ironhack.com/|How long does it last?|bis zu 1 Jahr nach Abschluss (oder bis du einen Job hast)": {
   "verdict": "wrong",
   "why": "\"Dauer: bis zu 1 Jahr nach Abschluss\" is career support in the German FAQ, not the bootcamp's length."
@@ -298,6 +330,10 @@
  "https://www.ironhack.com/|Is there an online version?|Ironhack Remoto": {
   "verdict": "correct",
   "why": "\"Ironhack Remoto\" is its remote (online) bootcamp format."
+ },
+ "https://www.ironhack.com/|Is there an online version?|Si bien es cierto que muchos bootcamps, sobre todo los tecnológicos, se asemejan a esta idea, también existe una modalidad totalmente distinta: los bootcamps virtuales o en remoto": {
+  "verdict": "correct",
+  "why": "Ironhack's own blog: there is a remote (virtual) modality of bootcamp, the one it sells as Ironhack Remoto."
  },
  "https://www.jme.vc/|How do you send them a pitch?|jose@jme.vc o en la dirección": {
   "verdict": "wrong",
@@ -327,6 +363,10 @@
   "verdict": "correct",
   "why": "Lexington sells \"pases diarios a zonas de trabajo comun\" (daily passes to shared areas)."
  },
+ "https://www.lexington.es/|Can you buy a day pass?|¡Sí! Podrás elegir cualquier espacio de trabajo habilitado en nuestras zonas comunes": {
+  "verdict": "wrong",
+  "why": "\"¡Sí! Podrás elegir cualquier espacio de trabajo habilitado en nuestras zonas comunes\": a yes about shared areas, not a day pass (d)."
+ },
  "https://www.lexington.es/|Is it open 24/7?|24/7": {
   "verdict": "correct",
   "why": "\"podreis acceder a la oficina alquilada de manera ilimitada, 24/7\" (members' access, 24/7)."
@@ -354,6 +394,10 @@
  "https://www.southsummit.io/|How much is a general ticket?|R$ 499": {
   "verdict": "wrong",
   "why": "\"R$ 499\" is the ticket of the Brazil event, in reais, not the general ticket of the Madrid event."
+ },
+ "https://www.southsummit.io/|How much is the general admission ticket (not startup or investor passes)?|299€": {
+  "verdict": "wrong",
+  "why": "The sharper question still gets the startup pass (299 EUR, Madrid Ecosystem line): not the general admission (b)."
  },
  "https://www.southsummit.io/|In which city is it held?|MADRID": {
   "verdict": "wrong",
@@ -387,6 +431,10 @@
   "verdict": "correct",
   "why": "\"PostHog is certified as SOC 2 Type 2 compliant\"."
  },
+ "posthog.com|What is the monthly price of the cheapest paid plan?|$0.000015/row": {
+  "verdict": "wrong",
+  "why": "\"$0.000015/row\" is usage pricing per row, not a monthly price of a paid plan (d)."
+ },
  "resend.com|Can customers choose where their data is stored?|All of our customers' data is still stored in the United States": {
   "verdict": "correct",
   "why": "\"All of our customers' data is still stored in the United States\": the answer is no, no region choice."
@@ -407,6 +455,14 @@
   "verdict": "correct",
   "why": "The API rate-limit table: \"Global API rate limit, Live mode: 100 requests per second\"."
  },
+ "stripe.com|¿Cuál es el límite de peticiones por segundo para las solicitudes autenticadas?|100 peticiones por segundo": {
+  "verdict": "correct",
+  "why": "\"100 peticiones por segundo\" in the Spanish table (live-mode global rate limit): the answer in the question's language."
+ },
+ "stripe.com|¿Cuál es el límite de peticiones por segundo para las solicitudes autenticadas?|100 requests per second": {
+  "verdict": "correct",
+  "why": "The live-mode global rate limit is 100 requests per second (content right; the answer is in English for a Spanish question)."
+ },
  "supabase.com|Can customers choose where their data is stored?|Your database is hosted in the AWS region you select when you create your project. You choose the region—we don't select it for you": {
   "verdict": "correct",
   "why": "\"Your database is hosted in the AWS region you select when you create your project.\""
@@ -418,6 +474,10 @@
  "supabase.com|What is the monthly price of the cheapest paid plan?|$25/month": {
   "verdict": "correct",
   "why": "\"Pro: from $25/month\": the cheapest paid plan."
+ },
+ "vercel.com|Can customers choose the region where their data is stored, not only where Serverless Functions run?|You can create Blob stores in any of the 19 regions. Use the region selector in the dashboard at blob store creation time, or use the CLI with the --region option": {
+  "verdict": "correct",
+  "why": "\"You can create Blob stores in any of the 19 regions\": customers pick where their data is stored (Vercel Blob; the sharper question asks about data, not Functions)."
  },
  "vercel.com|Can customers choose where their data is stored?|Previously, Hobby customers could only choose US East (iad1) regardless of where their data was hosted. Starting today, all plans can co-locate their Functions with their data for lower latency when server-rendering with hybrid frameworks like Next.js, SvelteKit, and more, or when using API Routes": {
   "verdict": "wrong",

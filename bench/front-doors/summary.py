@@ -24,6 +24,10 @@ def cells(round_name, earlier=()):
             j = JUDGE.get(f"{r['front']}|{r['question']}|{norm(r['answer'])}")
             v = j["verdict"] if j else "unjudged"
             cls = "wrong_answer" if v == "wrong" else ""
+        elif r.get("exit") == 2 and r.get("pages") is None:
+            # jurl could not run the search (no page read, no Jev call): an infrastructure failure, not a verdict
+            v = "not_run"
+            cls = "not run: " + (r.get("error") or "no error message")[:60]
         else:
             v = "not_found"
             cls = NF.get(f"{round_name}|{cell}", {}).get("class")
@@ -56,10 +60,11 @@ def row(name, rs):
     c = sum(r["verdict"] == "correct" for r in rs)
     w = sum(r["verdict"] == "wrong" for r in rs)
     n = sum(r["verdict"] == "not_found" for r in rs)
+    nr = sum(r["verdict"] == "not_run" for r in rs)
     pages = [r["pages"] for r in rs if r["pages"] is not None]
     used = [r["tokens_used"] for r in rs]
     billed = sum(r["tokens_billed"] for r in rs)
-    return (f"| {name} | {len(rs)} | {c} | {w} | {n} | {st.mean(pages) if pages else 0:.1f} | "
+    return (f"| {name} | {len(rs)} | {c} | {w} | {n}{f' (+{nr} not run)' if nr else ''} | {st.mean(pages) if pages else 0:.1f} | "
             f"{st.mean(used) if used else 0:,.0f} | {billed:,} | {billed * 0.042 / 1e6:.4f} |")
 
 

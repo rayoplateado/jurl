@@ -107,6 +107,46 @@
   "class": "missed_on_read",
   "why": "the pricing page is read as markdown (no prices in it); the HTML has them ('Asana: $10.99 ... billed monthly')"
  },
+ "r2a4|R1-0-0": {
+  "class": "not_on_site",
+  "why": "Re-verified in round 2a4: the price pages read give private-office rates (\"Oficina flexible ... €/mes\"), no hot-desk price."
+ },
+ "r2a4|R1-2-0": {
+  "class": "not_on_site",
+  "why": "Re-verified in round 2a4: 7 pages read (coworking and knowledge-base pages), no desk prices in them."
+ },
+ "r2a4|R1-2-1": {
+  "class": "not_on_site",
+  "why": "Re-verified in round 2a4: 10 pages read, no day-pass text in them."
+ },
+ "r2a4|R1-3-0": {
+  "class": "not_on_site",
+  "why": "Re-verified in round 2a4: the prices read are for private offices, not for a hot desk."
+ },
+ "r2a4|R5-0-0": {
+  "class": "not_on_site",
+  "why": "Re-verified in round 2a4: 9 pages read, no MBA or bootcamp fee in them; the fee page was not reached."
+ },
+ "r2a4|S1-4-0": {
+  "class": "not_reached",
+  "why": "Re-verified in round 2a4: the hub /docs/api/usage/limits is read; its table names the REST Admin API but gives no figure; the REST Admin API page (one hop past the hub) is not reached. --follow 10 takes the Storefront pages instead and answers wrongly."
+ },
+ "r2a|R2-2-2": {
+  "class": "not_on_site",
+  "why": "The 2020 K Founders form is no longer on the pages read (it was the stale answer); no current pitch route was found."
+ },
+ "sharp|B1-0-0": {
+  "class": "not_on_site",
+  "why": "The per-company Kit Digital aid is not on the pages read (the sharper question removes the wrong 40 million AI budget)."
+ },
+ "sharp|B2-0-0": {
+  "class": "not_reached",
+  "why": "Closest \"EUR 10 million\" (p 0.37) on an EIC funding page; not picked and not verified."
+ },
+ "sharp|B4-0-0": {
+  "class": "not_reached",
+  "why": "Closest \"1195 EUR\" on slush.org (p 0.27): not accepted as the general admission price; not verified."
+ },
  "step1|R2-0-0": {
   "class": "not_reached",
   "why": "Regression: the 2023 fund article that answered in baseline sits in a sitemap that newest-first no longer reads."
