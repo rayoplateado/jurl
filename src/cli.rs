@@ -38,7 +38,7 @@ pub(crate) struct Args {
     #[arg(short, long)]
     pub(crate) precise: bool,
     /// With -q: when the page doesn't answer, follow its links within the same site, most promising first,
-    /// reading up to this many pages in all [default: 5]
+    /// reading up to this many pages in all [default: 5]. A search from a public address reads only public addresses
     #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]
     pub(crate) follow: Option<usize>,
     /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text, or unfilled template placeholders)
@@ -47,6 +47,12 @@ pub(crate) struct Args {
     /// Don't ask a page that answers 403 or 503 again with a browser's TLS fingerprint (JURL_NO_BROWSER_RETRY does the same)
     #[arg(long)]
     pub(crate) no_browser_retry: bool,
+    /// What the run may read, set from the start URL once it is known (see `reach.rs`). Not a flag.
+    #[arg(skip)]
+    pub(crate) reach: crate::reach::Reach,
+    /// Whether `JURL_PUBLIC_ONLY=1` is set (see `reach.rs`): it refuses a proxy and rendering as well. Not a flag.
+    #[arg(skip)]
+    pub(crate) public_only: bool,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,

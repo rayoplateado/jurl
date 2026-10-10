@@ -101,6 +101,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
     let req = clef_keys.as_ref().map(|keys| LookRequest {
         http: ctx.client,
+        reach: &ctx.args.reach,
         clef: &clef_client,
         keys,
         title: &ex.title,
@@ -337,8 +338,9 @@ impl Looks {
 
 /// What the looks of one `images` call share: the clients, Clef's keys, the page title and the --find question.
 struct LookRequest<'a> {
-    /// Downloads each thumbnail: the page's own client.
+    /// Downloads each thumbnail: the page's own client, under the run's reach.
     http: &'a Client,
+    reach: &'a crate::reach::Reach,
     /// Calls Clef: one HTTP/1 connection per call.
     clef: &'a Client,
     keys: &'a ClefKeys,
@@ -387,7 +389,7 @@ fn clef_ask(title: &str, img: &Image, query: Option<&str>) -> (Value, Value) {
 
 /// Clef's view of one image: with a query, P(it shows that); without, P(it is content, not chrome).
 async fn look(req: &LookRequest<'_>, img: &Image) -> Result<f64> {
-    let data = thumbnail(req.http, &img.preview).await?;
+    let data = thumbnail(req.http, req.reach, &img.preview).await?;
     let (state, question) = clef_ask(req.title, img, req.query);
     let qs = Map::from_iter([("q".to_string(), question)]);
     let call =
@@ -425,8 +427,8 @@ where
 }
 
 /// Download and shrink to a small JPEG: fewer vision tokens, faster Clef. An image past `IMAGE_MAX` is not read.
-async fn thumbnail(client: &Client, url: &url::Url) -> Result<String> {
-    let mut res = client.get(url.as_str()).send().await?.error_for_status()?;
+async fn thumbnail(client: &Client, reach: &crate::reach::Reach, url: &url::Url) -> Result<String> {
+    let mut res = crate::fetch::send_get(client, url.as_str(), reach, None, None).await?.error_for_status()?;
     let Some(bytes) = fetch::read_capped(&mut res, IMAGE_MAX).await? else {
         bail!("{url}: image larger than {}", fetch::size_label(IMAGE_MAX));
     };
@@ -615,8 +617,19 @@ mod tests {
     async fn an_image_past_its_cap_is_not_read() {
         let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_string();
         let url = url::Url::parse(&fetch::test_server::serve(head, vec![0u8; IMAGE_MAX + 1], true)).unwrap();
-        let err = thumbnail(&fetch::test_server::client(), &url).await.unwrap_err();
+        let err = thumbnail(&fetch::test_server::client(), &crate::reach::Reach::Private, &url).await.unwrap_err();
         assert!(format!("{err:#}").ends_with("image larger than 15 MB"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn an_image_under_a_public_run_is_not_read_from_a_private_address() {
+        // The page is public; its image sits on another loopback address, which the run never asks for.
+        let reach = crate::reach::Reach::Public {
+            allowed: std::collections::HashSet::from([std::net::IpAddr::from([127, 0, 0, 1])]),
+        };
+        let url = url::Url::parse("http://127.0.0.2:1/photo.png").unwrap();
+        let err = thumbnail(&fetch::test_server::client(), &reach, &url).await.unwrap_err();
+        assert_eq!(format!("{err:#}"), "not a public address");
     }
 
     #[tokio::test]
@@ -626,7 +639,7 @@ mod tests {
         let png = cursor.into_inner();
         let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", png.len());
         let url = url::Url::parse(&fetch::test_server::serve(head, png, false)).unwrap();
-        let data = thumbnail(&fetch::test_server::client(), &url).await.unwrap();
+        let data = thumbnail(&fetch::test_server::client(), &crate::reach::Reach::Private, &url).await.unwrap();
         assert!(data.starts_with("data:image/jpeg;base64,"), "{}", data.chars().take(40).collect::<String>());
     }
 
