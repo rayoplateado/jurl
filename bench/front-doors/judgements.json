@@ -388,16 +388,16 @@
   "why": "Under \"Are you a founder?\" the page offers \"Submit Deck\", the way to send a pitch."
  },
  "https://www.southsummit.io/|How much is a general ticket?|299€": {
-  "verdict": "wrong",
-  "why": "299 EUR is the Startup Pass in the FAQ, not the general ticket."
+  "verdict": "correct",
+  "why": "South Summit's ticket list: \"Madrid Ecosystem – 299€, Startup Pass – 399€, Executive Pass – 949€ and Investor Pass – 1.399€\". The Ecosystem pass is the general (not startup or investor) ticket, so 299€ is the general admission price."
  },
  "https://www.southsummit.io/|How much is a general ticket?|R$ 499": {
   "verdict": "wrong",
   "why": "\"R$ 499\" is the ticket of the Brazil event, in reais, not the general ticket of the Madrid event."
  },
  "https://www.southsummit.io/|How much is the general admission ticket (not startup or investor passes)?|299€": {
-  "verdict": "wrong",
-  "why": "The sharper question still gets the startup pass (299 EUR, Madrid Ecosystem line): not the general admission (b)."
+  "verdict": "correct",
+  "why": "South Summit's ticket list: \"Madrid Ecosystem – 299€, Startup Pass – 399€, Executive Pass – 949€ and Investor Pass – 1.399€\". The Ecosystem pass is the general (not startup or investor) ticket, so 299€ is the general admission price."
  },
  "https://www.southsummit.io/|In which city is it held?|MADRID": {
   "verdict": "wrong",
@@ -629,7 +629,7 @@
  },
  "https://madrid.impacthub.net/|What is the monthly price of a flexible (hot) desk?|120€": {
   "verdict": "wrong",
-  "why": "\"Afternoon 120€\" is one session's price, not a monthly hot desk price."
+  "why": "A single session tariff with no unit (\"Afternoon 120€\"), not the monthly price of a flexible desk. Compare \"Starting at 120€/month\" (correct): the unit is stated there."
  },
  "https://madrid.impacthub.net/|Can you buy a day pass?|Ven cuando quieras: sin reservas, sin compromisos. Compra tu pase diario o tu bono de 10 días online. ¡No necesitas reserva previa": {
   "verdict": "correct",
@@ -670,5 +670,61 @@
  "https://www.gitex-europe.com/|How much is a general admission ticket?|Offer Visitor Pass (JSON-LD, GITEX AI EUROPE 2026): price 30 EUR.": {
   "verdict": "wrong",
   "why": "The visitor pass (30 EUR) is for GITEX AI EUROPE 2026, a past edition."
+ },
+ "https://www.4yfn.com/|What are the dates of the next edition?|**1- 4 March 2027**": {
+  "verdict": "correct",
+  "why": "4YFN27, the next edition: \"Taking place in Barcelona from 1- 4 March 2027\"."
+ },
+ "vercel.com|What is the monthly price of the cheapest paid plan?|$20/month": {
+  "verdict": "correct",
+  "why": "The Pro plan's \"$20/month Pro platform fee\" is the cheapest paid plan (Hobby is free)."
+ },
+ "vercel.com|Do they have a SOC 2 Type II report?|Vercel holds a SOC 2 Type 2 attestation for Security, Confidentiality, and Availability": {
+  "verdict": "correct",
+  "why": "\"Vercel holds a SOC 2 Type 2 attestation for Security, Confidentiality, and Availability\": yes, with the report named."
+ },
+ "vercel.com|Can customers choose where their data is stored?|Global Delivery": {
+  "verdict": "wrong",
+  "why": "\"Global Delivery\" is an item in the page's product list, not an answer about where data is stored."
+ },
+ "vercel.com|Can customers choose where their data is stored?|the region where the run starts by default, or any target region you choose": {
+  "verdict": "wrong",
+  "why": "A Workflows changelog: where one product keeps its run state, not where customers' data is stored."
+ },
+ "supabase.com|Do they have a SOC 2 Type II report?|Update (2023-05-22): Supabase is now SOC2 Type 2 compliant. Read more about security at Supabase in our [Security Center](https://supabase.com/security)": {
+  "verdict": "correct",
+  "why": "\"Supabase is now SOC2 Type 2 compliant\" (update dated 2023-05-22): yes."
+ },
+ "posthog.com|Do they have a SOC 2 Type II report?|PostHog is certified as SOC 2 Type 2 compliant": {
+  "verdict": "correct",
+  "why": "\"PostHog is certified as SOC 2 Type 2 compliant\": yes."
+ },
+ "resend.com|Can customers choose where their data is stored?|You can still select any region we support": {
+  "verdict": "correct",
+  "why": "\"You can still select any region we support\": customers choose their data region from the supported ones."
+ },
+ "cloudflare.com|Do they have a SOC 2 Type II report?|Meet SOC 2, PCI DSS, HIPAA, and GDPR requirements with [audit logs](https://developers.cloudflare.com/logs/), data residency controls, and [privacy features](https://developers.cloudflare.com/privacy-gateway/)": {
+  "verdict": "wrong",
+  "why": "Says the product helps customers meet SOC 2 requirements; it does not say Cloudflare holds a SOC 2 Type II report."
+ },
+ "https://seaya.vc/|Do they invest at pre-seed?|The company has raised a total of €6.5 million, €4.5 million in this round and €2 million in last June’s pre-seed round, in which the two funds already participated": {
+  "verdict": "wrong",
+  "why": "The funds took part in a pre-seed round of one company; the fund's own page says it focuses on Series A and B (the bench's answer is no)."
+ },
+ "https://www.kfund.vc/|Do they invest at pre-seed?|We're excited to announce that we now have a fully dedicated team looking into pre-seed opportunities to invest in high-performing and ambitious founders": {
+  "verdict": "correct",
+  "why": "\"a fully dedicated team looking into pre-seed opportunities\": yes, K Fund invests at pre-seed."
+ },
+ "https://www.southsummit.io/|What are the dates of the next edition?|BRAZIL 2027": {
+  "verdict": "wrong",
+  "why": "\"BRAZIL 2027\" is a menu label, as \"2027\" was: no dates for the next edition."
+ },
+ "posthog.com|Can customers choose where their data is stored?|yes - you need to create a fresh account at eu.posthog.com to do this": {
+  "verdict": "correct",
+  "why": "A 2023 forum reply: \"yes - you need to create a fresh account at eu.posthog.com\": EU storage is a choice."
+ },
+ "https://esade.edu/|Is there an online version?|Access e-books, journals, databases, and other online materials": {
+  "verdict": "wrong",
+  "why": "A library-resources line (e-books, journals, databases), as the earlier answer was: not whether the programme has an online version."
  }
 }

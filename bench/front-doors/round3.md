@@ -62,7 +62,7 @@ Per cell (candidates = sitemap URLs listed + links on the front page; read = pag
 | R4-1-0 | 4YFN | not_found | 2027 | none | Event | 0 | - | 66 / 5 |
 | R4-1-1 | 4YFN | not_found |  | none | Event | 1 | - | 66 / 5 |
 | R4-2-0 | South Summit | wrong | De 3 a 5 de junho de 2026 | none | - | 0 | es,pt | 82 / 5 |
-| R4-2-1 | South Summit | wrong | 299€ | none | Event | 1 | - | 82 / 5 |
+| R4-2-1 | South Summit | correct | 299€ | none | Event | 1 | - | 82 / 5 |
 | R4-3-0 | VivaTech | not_found |  | SearchAction | Event | 0 | - | 41 / 5 |
 | R4-3-1 | VivaTech | not_found |  | SearchAction | Event | 0 | - | 41 / 5 |
 | R4-4-1 | Slush | wrong | 395€* | none | - | 1 | - | 394 / 2 |

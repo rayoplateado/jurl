@@ -9,17 +9,17 @@ Measured 2026-10-10 with `bench/front-doors/run.py`. Every cell is `jurl -t --js
 | set | round | cells | correct | wrong | not found | not run |
 |---|---|---:|---:|---:|---:|---:|
 | real-world | baseline | 85 | 45 | 19 | 21 | 0 |
-| real-world | step 4 (round 1) | 85 | 46 | 14 | 25 | 0 |
-| real-world | r2a4: flag + step 5 (tried, reverted) | 85 | 46 | 12 | 24 | 3 |
-| real-world | **final: step 4 + step 5** | 85 | 46 | 15 | 24 | 0 |
+| real-world | step 4 (round 1) | 85 | 47 | 13 | 25 | 0 |
+| real-world | r2a4: flag + step 5 (tried, reverted) | 85 | 47 | 11 | 24 | 3 |
+| real-world | **final: step 4 + step 5** | 85 | 47 | 14 | 24 | 0 |
 | developer | baseline | 25 | 16 | 3 | 6 | 0 |
 | developer | step 4 (round 1) | 25 | 17 | 3 | 5 | 0 |
 | developer | r2a4: flag + step 5 (tried, reverted) | 25 | 18 | 3 | 4 | 0 |
 | developer | **final: step 4 + step 5** | 25 | 18 | 3 | 4 | 0 |
 | all | baseline | 110 | 61 | 22 | 27 | 0 |
-| all | step 4 (round 1) | 110 | 63 | 17 | 30 | 0 |
-| all | r2a4: flag + step 5 (tried, reverted) | 110 | 64 | 15 | 28 | 3 |
-| all | **final: step 4 + step 5** | 110 | 64 | 18 | 28 | 0 |
+| all | step 4 (round 1) | 110 | 64 | 16 | 30 | 0 |
+| all | r2a4: flag + step 5 (tried, reverted) | 110 | 65 | 14 | 28 | 3 |
+| all | **final: step 4 + step 5** | 110 | 65 | 17 | 28 | 0 |
 
 ## Rounds
 
@@ -86,16 +86,16 @@ Failures by class (step2): wrong_answer 20, not_reached (carried) 13, not_on_sit
 | R1 | 12 | 7 | 0 | 5 | 4.2 | 76,022 | 184,457 | 0.0077 |
 | R2 | 18 | 5 | 2 | 11 | 4.2 | 52,753 | 326,659 | 0.0137 |
 | R3 | 8 | 3 | 3 | 2 | 2.5 | 42,119 | 100,323 | 0.0042 |
-| R4 | 15 | 8 | 3 | 4 | 3.3 | 60,162 | 153,146 | 0.0064 |
+| R4 | 15 | 9 | 2 | 4 | 3.3 | 60,162 | 153,146 | 0.0064 |
 | R5 | 12 | 4 | 6 | 2 | 4.3 | 90,159 | 404,972 | 0.0170 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 85,404 | 185,468 | 0.0078 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 204,011 | 0.0086 |
 | S1 | 5 | 2 | 0 | 3 | 5.0 | 106,662 | 195,645 | 0.0082 |
 | S2 | 8 | 5 | 1 | 2 | 3.5 | 80,540 | 69,356 | 0.0029 |
 | S3 | 12 | 10 | 2 | 0 | 4.0 | 77,036 | 256,996 | 0.0108 |
-| **all** | 110 | 64 | 17 | 29 | 3.7 | 72,990 | 2,081,033 | 0.0874 |
+| **all** | 110 | 65 | 16 | 29 | 3.7 | 72,990 | 2,081,033 | 0.0874 |
 
-Failures by class (step3): wrong_answer 17, not_reached (carried) 13, js_only (carried) 4, not_on_site (carried) 4, missed_on_read (carried) 2, not_on_site 2, blocked (carried) 2, missed_on_read 1, not_reached 1.
+Failures by class (step3): wrong_answer 16, not_reached (carried) 13, js_only (carried) 4, not_on_site (carried) 4, missed_on_read (carried) 2, not_on_site 2, blocked (carried) 2, missed_on_read 1, not_reached 1.
 
 **Step 4 (round 1): Accept-Language `en` by default, `JURL_ACCEPT_LANGUAGE` overrides**
 
@@ -104,16 +104,16 @@ Failures by class (step3): wrong_answer 17, not_reached (carried) 13, js_only (c
 | R1 | 12 | 7 | 0 | 5 | 4.2 | 76,011 | 2,919 | 0.0001 |
 | R2 | 18 | 5 | 2 | 11 | 4.2 | 52,753 | 0 | 0.0000 |
 | R3 | 8 | 2 | 3 | 3 | 2.5 | 40,201 | 4,202 | 0.0002 |
-| R4 | 15 | 8 | 3 | 4 | 3.3 | 60,163 | 14,750 | 0.0006 |
+| R4 | 15 | 9 | 2 | 4 | 3.3 | 60,163 | 14,750 | 0.0006 |
 | R5 | 12 | 4 | 6 | 2 | 4.3 | 90,477 | 8,930 | 0.0004 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 85,313 | 30,200 | 0.0013 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 0 | 0.0000 |
 | S1 | 5 | 2 | 0 | 3 | 5.0 | 106,088 | 82,468 | 0.0035 |
 | S2 | 8 | 5 | 1 | 2 | 3.5 | 80,540 | 0 | 0.0000 |
 | S3 | 12 | 10 | 2 | 0 | 4.0 | 77,036 | 0 | 0.0000 |
-| **all** | 110 | 63 | 17 | 30 | 3.7 | 72,849 | 143,469 | 0.0060 |
+| **all** | 110 | 64 | 16 | 30 | 3.7 | 72,849 | 143,469 | 0.0060 |
 
-Failures by class (step4): wrong_answer 17, not_reached (carried) 13, not_on_site (carried) 6, js_only (carried) 4, missed_on_read (carried) 2, not_reached 2, blocked (carried) 2, missed_on_read 1.
+Failures by class (step4): wrong_answer 16, not_reached (carried) 13, not_on_site (carried) 6, js_only (carried) 4, missed_on_read (carried) 2, not_reached 2, blocked (carried) 2, missed_on_read 1.
 
 **Step 5, round 1 (no navigation flag): the sitemaps of linked hosts, read through their robots.txt**
 
@@ -122,16 +122,16 @@ Failures by class (step4): wrong_answer 17, not_reached (carried) 13, not_on_sit
 | R1 | 12 | 7 | 0 | 5 | 4.2 | 81,227 | 262,801 | 0.0110 |
 | R2 | 18 | 5 | 2 | 11 | 4.2 | 58,772 | 139,344 | 0.0059 |
 | R3 | 8 | 2 | 4 | 2 | 2.5 | 42,494 | 90,352 | 0.0038 |
-| R4 | 15 | 8 | 4 | 3 | 3.6 | 66,691 | 158,399 | 0.0067 |
+| R4 | 15 | 9 | 3 | 3 | 3.6 | 66,691 | 158,399 | 0.0067 |
 | R5 | 12 | 4 | 6 | 2 | 4.5 | 100,304 | 483,819 | 0.0203 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 85,313 | 0 | 0.0000 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 0 | 0.0000 |
 | S1 | 5 | 3 | 1 | 1 | 4.6 | 98,730 | 219,759 | 0.0092 |
 | S2 | 8 | 5 | 1 | 2 | 3.8 | 84,368 | 118,922 | 0.0050 |
 | S3 | 12 | 10 | 1 | 1 | 3.8 | 75,929 | 137,637 | 0.0058 |
-| **all** | 110 | 64 | 19 | 27 | 3.8 | 76,356 | 1,611,033 | 0.0677 |
+| **all** | 110 | 65 | 18 | 27 | 3.8 | 76,356 | 1,611,033 | 0.0677 |
 
-Failures by class (step5): wrong_answer 19, not_reached (carried) 12, not_on_site (carried) 6, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 1, not_on_site 1.
+Failures by class (step5): wrong_answer 18, not_reached (carried) 12, not_on_site (carried) 6, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 1, not_on_site 1.
 
 **Round 2a, tried and reverted: navigation-like blocks dropped from the page (link share 0.8, one link), banner role**
 
@@ -140,16 +140,16 @@ Failures by class (step5): wrong_answer 19, not_reached (carried) 12, not_on_sit
 | R1 | 12 | 6 | 1 | 5 | 4.2 | 75,381 | 306,220 | 0.0129 |
 | R2 | 18 | 4 | 2 | 12 | 3.9 | 39,906 | 172,015 | 0.0072 |
 | R3 | 8 | 2 | 3 | 3 | 2.5 | 40,025 | 36,996 | 0.0016 |
-| R4 | 15 | 8 | 3 | 4 | 3.3 | 60,005 | 33,126 | 0.0014 |
+| R4 | 15 | 9 | 2 | 4 | 3.3 | 60,005 | 33,126 | 0.0014 |
 | R5 | 12 | 2 | 5 | 2 (+3 not run) | 4.3 | 66,896 | 336,503 | 0.0141 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 84,782 | 113,164 | 0.0048 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,408 | 129,246 | 0.0054 |
 | S1 | 5 | 2 | 1 | 2 | 5.0 | 102,024 | 95,754 | 0.0040 |
 | S2 | 8 | 5 | 2 | 1 | 3.5 | 80,371 | 31,788 | 0.0013 |
 | S3 | 12 | 10 | 2 | 0 | 4.0 | 76,924 | 36,990 | 0.0016 |
-| **all** | 110 | 59 | 19 | 29 (+3 not run) | 3.7 | 67,763 | 1,291,802 | 0.0543 |
+| **all** | 110 | 60 | 18 | 29 (+3 not run) | 3.7 | 67,763 | 1,291,802 | 0.0543 |
 
-Failures by class (r2a): wrong_answer 19, not_reached (carried) 14, not_on_site (carried) 5, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 2, not_on_site 1.
+Failures by class (r2a): wrong_answer 18, not_reached (carried) 14, not_on_site (carried) 5, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 2, not_on_site 1.
 
 **Round 2a2, tried and reverted: navigation-like blocks dropped (two or more links)**
 
@@ -158,16 +158,16 @@ Failures by class (r2a): wrong_answer 19, not_reached (carried) 14, not_on_site 
 | R1 | 12 | 6 | 0 | 5 | 4.3 | 81,811 | 298,554 | 0.0125 |
 | R2 | 18 | 5 | 2 | 11 | 4.2 | 52,726 | 1,269 | 0.0001 |
 | R3 | 8 | 2 | 3 | 3 | 2.5 | 40,186 | 0 | 0.0000 |
-| R4 | 15 | 8 | 3 | 4 | 3.3 | 60,162 | 0 | 0.0000 |
+| R4 | 15 | 9 | 2 | 4 | 3.3 | 60,162 | 0 | 0.0000 |
 | R5 | 12 | 3 | 4 | 2 (+3 not run) | 4.3 | 66,730 | 29,915 | 0.0013 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 85,301 | 0 | 0.0000 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,955 | 0 | 0.0000 |
 | S1 | 5 | 1 | 1 | 2 (+1 not run) | 5.0 | 90,741 | 41,203 | 0.0017 |
 | S2 | 8 | 5 | 1 | 2 | 3.5 | 80,540 | 0 | 0.0000 |
 | S3 | 12 | 10 | 2 | 0 | 4.0 | 77,033 | 0 | 0.0000 |
-| **all** | 110 | 60 | 16 | 29 (+4 not run) | 3.7 | 70,186 | 370,941 | 0.0156 |
+| **all** | 110 | 61 | 15 | 29 (+4 not run) | 3.7 | 70,186 | 370,941 | 0.0156 |
 
-Failures by class (r2a2): wrong_answer 16, not_reached (carried) 14, not_on_site (carried) 6, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 2.
+Failures by class (r2a2): wrong_answer 15, not_reached (carried) 14, not_on_site (carried) 6, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 2.
 
 **Round 2a3, tried and reverted: navigation flag, step 5, banner role**
 
@@ -176,16 +176,16 @@ Failures by class (r2a2): wrong_answer 16, not_reached (carried) 14, not_on_site
 | R1 | 12 | 7 | 0 | 5 | 4.2 | 81,467 | 17,720 | 0.0007 |
 | R2 | 18 | 5 | 2 | 11 | 4.2 | 58,751 | 0 | 0.0000 |
 | R3 | 8 | 3 | 3 | 2 | 2.5 | 44,413 | 0 | 0.0000 |
-| R4 | 15 | 8 | 3 | 4 | 3.7 | 66,619 | 7,084 | 0.0003 |
+| R4 | 15 | 9 | 2 | 4 | 3.7 | 66,619 | 7,084 | 0.0003 |
 | R5 | 12 | 3 | 4 | 2 (+3 not run) | 4.6 | 75,406 | 97,800 | 0.0041 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 85,313 | 0 | 0.0000 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 0 | 0.0000 |
 | S1 | 5 | 3 | 1 | 1 | 4.6 | 98,730 | 0 | 0.0000 |
 | S2 | 8 | 5 | 1 | 2 | 3.8 | 84,368 | 0 | 0.0000 |
 | S3 | 12 | 10 | 1 | 1 | 3.8 | 75,929 | 0 | 0.0000 |
-| **all** | 110 | 64 | 15 | 28 (+3 not run) | 3.8 | 73,792 | 122,604 | 0.0051 |
+| **all** | 110 | 65 | 14 | 28 (+3 not run) | 3.8 | 73,792 | 122,604 | 0.0051 |
 
-Failures by class (r2a3): wrong_answer 15, not_reached (carried) 12, not_on_site (carried) 7, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 2.
+Failures by class (r2a3): wrong_answer 14, not_reached (carried) 12, not_on_site (carried) 7, js_only (carried) 4, missed_on_read (carried) 3, blocked (carried) 2.
 
 **Round 2a4, tried and reverted: navigation flag and step 5 (EIC's 2026 deadline is correct only with the flag)**
 
@@ -194,16 +194,16 @@ Failures by class (r2a3): wrong_answer 15, not_reached (carried) 12, not_on_site
 | R1 | 12 | 7 | 0 | 5 | 4.2 | 81,363 | 9,920 | 0.0004 |
 | R2 | 18 | 5 | 2 | 11 | 4.2 | 58,772 | 0 | 0.0000 |
 | R3 | 8 | 3 | 3 | 2 | 2.5 | 44,413 | 0 | 0.0000 |
-| R4 | 15 | 8 | 3 | 4 | 3.7 | 66,192 | 0 | 0.0000 |
+| R4 | 15 | 9 | 2 | 4 | 3.7 | 66,192 | 0 | 0.0000 |
 | R5 | 12 | 3 | 4 | 2 (+3 not run) | 4.6 | 75,913 | 65,629 | 0.0028 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 85,313 | 0 | 0.0000 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 0 | 0.0000 |
 | S1 | 5 | 3 | 1 | 1 | 4.6 | 98,730 | 0 | 0.0000 |
 | S2 | 8 | 5 | 1 | 2 | 3.8 | 84,368 | 0 | 0.0000 |
 | S3 | 12 | 10 | 1 | 1 | 3.8 | 75,929 | 0 | 0.0000 |
-| **all** | 110 | 64 | 15 | 28 (+3 not run) | 3.8 | 73,781 | 75,549 | 0.0032 |
+| **all** | 110 | 65 | 14 | 28 (+3 not run) | 3.8 | 73,781 | 75,549 | 0.0032 |
 
-Failures by class (r2a4): wrong_answer 15, not_reached (carried) 7, not_on_site (carried) 7, not_on_site 5, js_only (carried) 4, missed_on_read (carried) 2, blocked (carried) 2, not_reached 1.
+Failures by class (r2a4): wrong_answer 14, not_reached (carried) 7, not_on_site (carried) 7, not_on_site 5, js_only (carried) 4, missed_on_read (carried) 2, blocked (carried) 2, not_reached 1.
 
 **Round 2a5, tried and reverted: navigation flag, no step 5**
 
@@ -212,16 +212,16 @@ Failures by class (r2a4): wrong_answer 15, not_reached (carried) 7, not_on_site 
 | R1 | 12 | 7 | 0 | 5 | 4.2 | 76,133 | 0 | 0.0000 |
 | R2 | 18 | 5 | 2 | 11 | 4.2 | 52,753 | 0 | 0.0000 |
 | R3 | 8 | 2 | 3 | 3 | 2.5 | 40,201 | 0 | 0.0000 |
-| R4 | 15 | 8 | 3 | 4 | 3.3 | 60,162 | 0 | 0.0000 |
+| R4 | 15 | 9 | 2 | 4 | 3.3 | 60,162 | 0 | 0.0000 |
 | R5 | 12 | 3 | 4 | 2 (+3 not run) | 4.3 | 66,783 | 0 | 0.0000 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 85,313 | 0 | 0.0000 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 0 | 0.0000 |
 | S1 | 5 | 2 | 1 | 2 | 5.0 | 104,491 | 21,585 | 0.0009 |
 | S2 | 8 | 5 | 1 | 2 | 3.5 | 80,540 | 0 | 0.0000 |
 | S3 | 12 | 10 | 2 | 0 | 4.0 | 77,033 | 0 | 0.0000 |
-| **all** | 110 | 62 | 16 | 29 (+3 not run) | 3.7 | 70,205 | 21,585 | 0.0009 |
+| **all** | 110 | 63 | 15 | 29 (+3 not run) | 3.7 | 70,205 | 21,585 | 0.0009 |
 
-Failures by class (r2a5): wrong_answer 16, not_on_site (carried) 11, not_reached (carried) 10, js_only (carried) 4, missed_on_read (carried) 2, blocked (carried) 2.
+Failures by class (r2a5): wrong_answer 15, not_on_site (carried) 11, not_reached (carried) 10, js_only (carried) 4, missed_on_read (carried) 2, blocked (carried) 2.
 
 **FINAL: step 4 + step 5 (the linked hosts' sitemaps), no navigation flag; measured with `en`**
 
@@ -230,16 +230,16 @@ Failures by class (r2a5): wrong_answer 16, not_on_site (carried) 11, not_reached
 | R1 | 12 | 7 | 0 | 5 | 4.2 | 81,184 | 4,939 | 0.0002 |
 | R2 | 18 | 5 | 2 | 11 | 4.2 | 58,772 | 0 | 0.0000 |
 | R3 | 8 | 2 | 4 | 2 | 2.5 | 42,494 | 0 | 0.0000 |
-| R4 | 15 | 8 | 3 | 4 | 3.7 | 66,998 | 3,856 | 0.0002 |
+| R4 | 15 | 9 | 2 | 4 | 3.7 | 66,998 | 3,856 | 0.0002 |
 | R5 | 12 | 4 | 6 | 2 | 4.5 | 99,906 | 5,646 | 0.0002 |
 | R6 | 10 | 10 | 0 | 0 | 3.0 | 85,313 | 0 | 0.0000 |
 | R6es | 10 | 10 | 0 | 0 | 3.2 | 88,966 | 0 | 0.0000 |
 | S1 | 5 | 3 | 1 | 1 | 4.6 | 98,730 | 0 | 0.0000 |
 | S2 | 8 | 5 | 1 | 2 | 3.8 | 84,368 | 11,776 | 0.0005 |
 | S3 | 12 | 10 | 1 | 1 | 3.8 | 77,050 | 42,240 | 0.0018 |
-| **all** | 110 | 64 | 18 | 28 | 3.8 | 76,472 | 68,457 | 0.0029 |
+| **all** | 110 | 65 | 17 | 28 | 3.8 | 76,472 | 68,457 | 0.0029 |
 
-Failures by class (final): wrong_answer 18, not_on_site (carried) 12, not_reached (carried) 8, js_only (carried) 4, missed_on_read (carried) 2, blocked (carried) 2.
+Failures by class (final): wrong_answer 17, not_on_site (carried) 12, not_reached (carried) 8, js_only (carried) 4, missed_on_read (carried) 2, blocked (carried) 2.
 
 ## Final round, cell by cell
 
@@ -254,8 +254,8 @@ Contratar online | not_found | not_on_site (carried). (carried from r2a4) Re-ver
 | R1 | Utopicus | What is the monthly price of a flexible (hot) desk? | 259€/mes | correct | The Utopicus Passport, its flexible workstation, is listed at 259 EUR/mes ("Comfortable workstation 24/7 access"). |
 | R1 | Utopicus | Can you buy a day pass? | Bono 10 pases de día Working Pass a utilizar en 3 meses | correct | "Bono 10 pases de dia Working Pass": a pack of 10 day passes is sold. |
 | R1 | Utopicus | Is it open 24/7? | 4-8 | not_found | missed_on_read (carried). (carried from step4) The same hours page as in step 3: read, not picked. |
-| R1 | Talent Garden Madrid | What is the monthly price of a flexible (hot) desk? |  | not_found | not_on_site (carried). (carried from r2a4) Re-verified in round 2a4: 7 pages read (coworking and knowledge-base pages), no desk prices in them. |
-| R1 | Talent Garden Madrid | Can you buy a day pass? | Fixed desks, hourly packages or access to the digital community | not_found | not_on_site (carried). (carried from r2a4) Re-verified in round 2a4: 10 pages read, no day-pass text in them. |
+| R1 | Talent Garden Madrid | What is the monthly price of a flexible (hot) desk? |  | not_found | not_on_site (carried). (carried from r2a4) Re-verified in round 2a4: 5 pages read (coworking and knowledge-base pages), no desk prices in them. |
+| R1 | Talent Garden Madrid | Can you buy a day pass? | Fixed desks, hourly packages or access to the digital community | not_found | not_on_site (carried). (carried from r2a4) Re-verified in round 2a4: 5 pages read, no day-pass text in them. |
 | R1 | Talent Garden Madrid | Is it open 24/7? | 24/7 access in all TAGs | correct | "24/7 access in all TAGs" (TAG = Talent Garden campus) on the front page. |
 | R1 | Lexington | What is the monthly price of a flexible (hot) desk? | Alquiler zonas comunes
 €
@@ -301,7 +301,7 @@ In | not_found | not_on_site (carried). (carried from r2a4) Re-verified in round
 | R4 | 4YFN | How much is a general ticket? |  | not_found | not_reached (carried). (carried from baseline) no ticket text in the pages read; the tickets page was not reached (unverified) |
 | R4 | 4YFN | In which city is it held? | Barcelona | correct | The page says 4YFN is held in Barcelona ("4YFN26 Barcelona ... Fira de Barcelona"). |
 | R4 | South Summit | What are the dates of the next edition? | De 3 a 5 de junho de 2026 | wrong | The 3-5 June 2026 dates are the Madrid 2026 edition, already past: not the next edition. |
-| R4 | South Summit | How much is a general ticket? | 299€ | wrong | 299 EUR is the Startup Pass in the FAQ, not the general ticket. |
+| R4 | South Summit | How much is a general ticket? | 299€ | correct | South Summit's ticket list: "Madrid Ecosystem – 299€, Startup Pass – 399€, Executive Pass – 949€ and Investor Pass – 1.399€". The Ecosystem pass is the general (not startup or investor) ticket, so 299€ is the general admission price. |
 | R4 | South Summit | In which city is it held? | Madrid | correct | "WHERE: La Nave (C/ Cifuentes, 5), Madrid": the event is held in Madrid. |
 | R4 | VivaTech | What are the dates of the next edition? | June 16 | not_found | blocked (carried). (carried from baseline) subpages return HTTP 403 (information, practical information, get-your-pass) |
 | R4 | VivaTech | How much is a general ticket? |  | not_found | blocked (carried). (carried from baseline) subpages return HTTP 403 (get-your-pass) |
@@ -473,7 +473,7 @@ The three re-runs (`final-none`, `risk-none`) move no verdict: S1 Stripe q0 corr
 
 ### Changed-reach not-found cells (round 2a4 against step 4)
 
-Five not-found cells read different pages in round 2a4, and the final round has the same not-found cells: Talent Garden (hot desk price and day pass: seven and ten pages read; no desk price or day pass in them, `not_on_site`), Lexington (hot desk price: six pages read; the prices are for private offices, `not_on_site`), IE (flagship MBA price: nine pages read; no fee in them, `not_on_site`), and Shopify (`not_reached`, as above). The other not-found classes are carried from the round they were first lost in (RESULTS.md marks them), unverified beyond jurl's own traces.
+Five not-found cells read different pages in round 2a4, and the final round has the same not-found cells: Talent Garden (hot desk price and day pass: five pages read in each of r2a4 and the final round, per the result files; no desk price or day pass in them, `not_on_site`), Lexington (hot desk price: six pages read; the prices are for private offices, `not_on_site`), IE (flagship MBA price: nine pages read; no fee in them, `not_on_site`), and Shopify (`not_reached`, as above). The other not-found classes are carried from the round they were first lost in (RESULTS.md marks them), unverified beyond jurl's own traces.
 
 ### Cost, CI and size
 
