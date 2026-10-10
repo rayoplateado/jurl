@@ -276,6 +276,13 @@ async fn read(
     }
 }
 
+/// Whether a fetched page is rendered with Lightpanda afterwards: an app shell or a page with placeholders, unless the run
+/// already rendered it (`--render`) or the stealth sidecar served it. The sidecar's HTML is a browser's DOM after the scripts
+/// ran, and a render would ask again the host that refused the page.
+fn renders_after_fetch(render: bool, route: fetch::Route, shell: bool, placeholders: bool) -> bool {
+    !render && route != fetch::Route::Stealth && (shell || placeholders)
+}
+
 /// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images. Also says how the page was
 /// served, for the usage's `route`.
 pub(crate) async fn load(
@@ -323,7 +330,7 @@ pub(crate) async fn load(
     // (a long text is no proof that the script ran): render it instead of giving up.
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
     let shell = ex.app_shell && text < APP_SHELL_TEXT;
-    if !args.render && (shell || placeholders) {
+    if renders_after_fetch(args.render, page.route, shell, placeholders) {
         if let Err(e) = fetch::render_allowed(&page.url, &args.reach, args.public_only, args.render_sandboxed).await {
             // An app shell has nothing to read without its render. A page with placeholders is readable as it is.
             if shell {
@@ -356,4 +363,19 @@ pub(crate) async fn load(
         extract::json_ld::add_to(&mut ex, html);
     }
     Ok((page.url, ex, served))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_page_the_stealth_sidecar_served_is_not_rendered_again() {
+        use fetch::Route;
+        assert!(renders_after_fetch(false, Route::Direct, true, false));
+        assert!(renders_after_fetch(false, Route::Browser, false, true));
+        assert!(!renders_after_fetch(false, Route::Stealth, true, true), "the sidecar's DOM is already rendered");
+        assert!(!renders_after_fetch(true, Route::Direct, true, true), "--render rendered it already");
+        assert!(!renders_after_fetch(false, Route::Direct, false, false));
+    }
 }
