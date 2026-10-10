@@ -1,6 +1,6 @@
 //! Rung 5 of the read ladder: a stealth sidecar that loads one public page in a stealth browser (Camoufox, MPL-2.0) and
 //! returns the rendered HTML, with its own verdict on what it found. jurl asks it only for a page that a host still refuses
-//! with 401, 403 or 429 after rungs 1–3 (see `fetch::fetch_capped`), and only when `JURL_STEALTH_URL` and
+//! with 202, 401, 403 or 429 after rungs 1–3 (see `fetch::fetch_capped`), and only when `JURL_STEALTH_URL` and
 //! `JURL_STEALTH_TOKEN` are both set. jurl decides nothing from the page's text: the sidecar says `content`, `captcha`,
 //! `blocked`, `challenge` or `error`. A CAPTCHA is never solved: the page is an error, and it goes to human review.
 //!
@@ -45,9 +45,13 @@ impl std::fmt::Display for Captcha {
 
 impl std::error::Error for Captcha {}
 
-/// Whether a page that a host refused with `status` is asked of the sidecar: the statuses an anti-bot wall answers with.
+/// Whether a page that a host refused with `status` is asked of the sidecar: the statuses an anti-bot wall answers with, and a
+/// 202 Accepted, which is no page (RFC 9110 §15.3.3).
 pub(crate) fn asked_for(status: StatusCode) -> bool {
-    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS)
+    matches!(
+        status,
+        StatusCode::ACCEPTED | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS
+    )
 }
 
 /// What a call to the sidecar came back with when it is not a page.
@@ -337,6 +341,16 @@ mod tests {
 
     fn sidecar(pairs: &[(&str, &str)]) -> Option<Sidecar> {
         Sidecar::configured(settings(pairs), false, false, false)
+    }
+
+    #[test]
+    fn a_202_is_asked_of_the_sidecar_as_a_403_is_and_a_404_or_503_is_not() {
+        for code in [202, 401, 403, 429] {
+            assert!(asked_for(StatusCode::from_u16(code).unwrap()), "{code} is not asked of the sidecar");
+        }
+        for code in [200, 404, 500, 503] {
+            assert!(!asked_for(StatusCode::from_u16(code).unwrap()), "{code} is asked of the sidecar");
+        }
     }
 
     #[test]
