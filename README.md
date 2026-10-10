@@ -273,7 +273,7 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
-| `--json` | Machine-readable output, with every probability and the run's `usage` |
+| `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`), and the `level` or `lang` when the block has one |
 | `-t, --timing` | Where the time went, on stderr |
 | `jurl init` | Set or replace your API keys, or sign in to jurl cloud |
 | `jurl login` | Sign this computer in to [jurl cloud](#jurl-cloud) |
