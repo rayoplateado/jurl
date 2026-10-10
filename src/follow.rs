@@ -64,12 +64,14 @@ struct Site {
     root: String,
     /// The search started at the site's front door, so the site itself is what the question is about.
     front_door: bool,
+    /// The language the start page declares, as it was fetched (see [`other_language`]). None when it declares none.
+    language: Option<String>,
 }
 
 impl Site {
     fn new(u: &Url) -> Self {
         let root = u.host_str().unwrap_or_default().trim_start_matches("www.").to_string();
-        Site { root, front_door: u.path() == "/" && u.query().is_none() }
+        Site { root, front_door: u.path() == "/" && u.query().is_none(), language: None }
     }
 
     /// Whose site it is, for [`Ctx::ask`]: only from the front door. Started from a page (an article, a repo),
@@ -105,6 +107,37 @@ impl Site {
                 h == self.root || h.ends_with(&format!(".{}", self.root))
             })
     }
+}
+
+/// A page that declares another language than the start page does: `--follow` does not read it (see [`visit`]). It is
+/// skipped like a page that failed to load, and `-t` says why.
+#[derive(Debug, PartialEq)]
+struct OtherLanguage {
+    page: String,
+    start: String,
+}
+
+impl std::fmt::Display for OtherLanguage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "in {}, the start page is in {}", self.page, self.start)
+    }
+}
+
+impl std::error::Error for OtherLanguage {}
+
+/// The primary language subtag of a declared language (BCP 47): the part before the first `-`, lowercased, so
+/// `es-ES` is `es`. None when there is none.
+fn primary_subtag(tag: &str) -> Option<String> {
+    let primary = tag.split('-').next()?.to_ascii_lowercase();
+    (!primary.is_empty()).then_some(primary)
+}
+
+/// The page's language when it is another than the start page's, compared by primary subtag, so a regional variant is
+/// the same language (`es-ES` for `es`, `pt-BR` for `pt`). None when either declares none: nothing changes then.
+fn other_language(start: Option<&str>, page: Option<&str>) -> Option<OtherLanguage> {
+    let start = primary_subtag(start?)?;
+    let page = primary_subtag(page?)?;
+    (start != page).then_some(OtherLanguage { page, start })
 }
 
 /// `robots.txt` for every crawler (`User-agent: *`) on one host: the paths jurl won't open, decided as RFC 9309 §2.2.2
@@ -572,6 +605,11 @@ async fn visit(
 ) -> Result<Visit> {
     let mut t = Timer::new();
     let (url, ex, served) = load(args, cfg, url, &mut t).await?;
+    // A page in another language than the start page's is not judged: it fails like a page that did not load (see
+    // [`Search::absorb_batch`]), so its links never become leads and Jev is not asked of it.
+    if let Some(other) = other_language(site.language.as_deref(), ex.lang.as_deref()) {
+        return Err(other.into());
+    }
     judge(args, client, api_key, url, ex, site, known, field_scores, read, served).await
 }
 
@@ -789,7 +827,7 @@ impl Search {
     ) -> Result<Search> {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
-        let site = Site::new(start);
+        let mut site = Site::new(start);
         let retry = Retry::for_run(
             args.no_browser_retry,
             args.timing,
@@ -801,6 +839,9 @@ impl Search {
 
         let (loaded, files) = tokio::join!(load(args, cfg, start, t), site_files(start, &site, retry));
         let (url, ex, served) = loaded?;
+        // The start page's language is the one it declares as fetched, after any redirect. The start page is judged
+        // here, not through `visit`, so it is never skipped for its language.
+        site.language = ex.lang.clone();
         let SiteFiles { robots, links: mut map } = files;
         // The hosts the page links to on its own registrable domain (docs.stripe.com from stripe.com): their llms.txt is
         // read too, and their pages are leads like the site's own.
@@ -980,8 +1021,9 @@ impl Search {
         Ok(Some(batch))
     }
 
-    /// Takes the results of a batch, in batch order. A page read is absorbed; one that failed to load, or was a block
-    /// page, is skipped (and said so under -t), its links never become leads; an API error ends the search.
+    /// Takes the results of a batch, in batch order. A page read is absorbed; one that failed to load, was a block
+    /// page, or is in another language than the start page's (see [`other_language`]), is skipped (and said so under
+    /// -t), its links never become leads; an API error ends the search.
     fn absorb_batch(&mut self, batch: Vec<Lead>, results: Vec<Result<Visit>>, timing: bool) -> Result<()> {
         for (lead, r) in batch.into_iter().zip(results) {
             match r {
@@ -1693,6 +1735,41 @@ mod tests {
         assert!(s.found.is_empty() && s.closest.is_none());
     }
 
+    /// A lead to `url`, scored `score`, reached from the start page.
+    fn at(url: &str, score: f64) -> Lead {
+        Lead { url: u(url), text: String::new(), score, p: score, path: Vec::new() }
+    }
+
+    #[test]
+    fn a_page_in_another_declared_language_is_skipped_and_leads_nothing() {
+        // Skipped like a page that failed to load, as a CAPTCHA is (see `visit`): nothing is absorbed, and the search
+        // goes on.
+        let mut s = search();
+        s.site.language = Some("es".into());
+        let other: anyhow::Error = OtherLanguage { page: "zh".into(), start: "es".into() }.into();
+        assert!(!is_api_error(&other), "an API error would end the search");
+        s.absorb_batch(vec![at("https://x.com/zh/returns", 0.5)], vec![Err(other)], true).expect("the search goes on");
+        assert_eq!(s.pages, 1);
+        assert!(s.leads.is_empty());
+        assert!(s.log.is_empty());
+        assert!(s.found.is_empty() && s.closest.is_none());
+    }
+
+    #[test]
+    fn the_answer_of_a_search_comes_from_a_page_in_the_start_pages_language() {
+        // The Chinese page is skipped and the Spanish page answers, so the answer is the Spanish page's. That page is
+        // built without Jev (see `visit_of`): what this shows is that the skipped page contributes nothing to the search.
+        let mut s = search();
+        s.site.language = Some("es".into());
+        let zh: anyhow::Error = OtherLanguage { page: "zh".into(), start: "es".into() }.into();
+        let es = visit_of("https://x.com/es/devoluciones", 1.0, 0.9, true, &[]);
+        let batch = vec![at("https://x.com/zh/returns", 0.5), at("https://x.com/es/devoluciones", 0.5)];
+        s.absorb_batch(batch, vec![Err(zh), Ok(es)], false).expect("the search goes on");
+        assert_eq!(s.pages, 2);
+        assert_eq!(s.log.iter().map(|r| r.url.path()).collect::<Vec<_>>(), ["/es/devoluciones"]);
+        assert_eq!(s.found.iter().map(|f| f.visit.url.path()).collect::<Vec<_>>(), ["/es/devoluciones"]);
+    }
+
     #[tokio::test]
     async fn a_captcha_on_the_start_page_fails_the_search() {
         // The start page is refused and the stealth sidecar answers with a CAPTCHA: the start cannot be read, so the search fails
@@ -1722,6 +1799,42 @@ mod tests {
         assert!(err.downcast_ref::<crate::stealth::Captcha>().is_some(), "{err:#}");
         assert_eq!(format!("{err:#}"), format!("{start}: an interactive CAPTCHA, not solved; for human review"));
         assert_eq!(seen.lock().expect("the request log").len(), 1, "the sidecar was asked once");
+    }
+
+    /// `visit` of `url` by a search whose start page declares `start` (none when None), with `read` as the pages read
+    /// before.
+    async fn visit_from(start: Option<&str>, url: &Url, read: &HashSet<String>) -> Result<Visit> {
+        use clap::Parser;
+        let args = Args::parse_from(["jurl", "-q", "what does it cost?", "--follow", "2", "http://127.0.0.1:1/"]);
+        let site = Site { language: start.map(String::from), ..Site::new(&u("https://x.com/")) };
+        let client = test_server::client();
+        visit(&args, &Config::default(), &client, "key", url, &site, &HashSet::new(), &FieldScores::new(), read).await
+    }
+
+    #[tokio::test]
+    async fn a_page_in_another_declared_language_is_not_judged() {
+        // The start page is Spanish. The Chinese page is loaded, then skipped before `judge`, which would ask Jev. A
+        // page that declares a regional variant of Spanish, or none, gets past the check: `read` holds it, so `judge`
+        // stops at once with "already read", before anything is asked of Jev.
+        let (base, served) = serve_routed(|head| {
+            let body = match path_of(head) {
+                "/zh" => r#"<html lang="zh-CN"><body><article><p>7天无理由退货</p></article></body></html>"#,
+                "/es" => r#"<html lang="es-ES"><body><article><p>Devoluciones en 14 días.</p></article></body></html>"#,
+                "/none" => "<html><body><article><p>Returns within 14 days.</p></article></body></html>",
+                _ => return Some(reply("404 Not Found", "", b"")),
+            };
+            Some(reply("200 OK", "Content-Type: text/html; charset=utf-8\r\n", body.as_bytes()))
+        });
+        let zh = u(&format!("{base}/zh"));
+        let err = visit_from(Some("es"), &zh, &HashSet::new()).await.err().expect("the Chinese page is skipped");
+        assert_eq!(err.downcast_ref::<OtherLanguage>(), Some(&OtherLanguage { page: "zh".into(), start: "es".into() }));
+        assert_eq!(format!("{err:#}"), "in zh, the start page is in es");
+        assert_eq!(served.count(), 1, "it is loaded, then skipped");
+        for page in [u(&format!("{base}/es")), u(&format!("{base}/none"))] {
+            let read = HashSet::from([links::key(&page)]);
+            let err = visit_from(Some("es"), &page, &read).await.err().expect("judge stops at once");
+            assert_eq!(format!("{err:#}"), format!("already read: {page}"), "not skipped for its language");
+        }
     }
 
     /// The links a site lists for `urls`, in that order, as `site_map` lists them.
@@ -1838,6 +1951,22 @@ mod tests {
             kept("https://x.com/", &["https://x.com/", "https://x.com/de/", "https://x.com/de"]),
             ["https://x.com/"]
         );
+    }
+
+    #[test]
+    fn a_page_is_in_another_language_only_by_its_primary_subtag() {
+        // A regional variant, and the case of a tag, is the same language.
+        assert_eq!(other_language(Some("es"), Some("es-ES")), None);
+        assert_eq!(other_language(Some("pt-BR"), Some("pt")), None);
+        assert_eq!(other_language(Some("EN"), Some("en-us")), None);
+        // Another language is named by its primary subtags.
+        let other = |page: &str, start: &str| Some(OtherLanguage { page: page.into(), start: start.into() });
+        assert_eq!(other_language(Some("es-ES"), Some("zh-CN")), other("zh", "es"));
+        assert_eq!(other_language(Some("pt"), Some("es-419")), other("es", "pt"));
+        // A page that declares no language, or a start page that declares none, changes nothing.
+        assert_eq!(other_language(Some("es"), None), None);
+        assert_eq!(other_language(None, Some("zh-CN")), None);
+        assert_eq!(other_language(Some(""), Some("zh")), None);
     }
 
     /// A site at a loopback server: each path is given its file, with `{host}` in it replaced by the request's own host

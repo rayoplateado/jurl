@@ -90,6 +90,9 @@ pub struct Link {
 #[derive(Default)]
 pub struct Extracted {
     pub title: String,
+    /// The language the page declares (BCP 47), as written: its `<html lang>`, else its `xml:lang`. None when it
+    /// declares none, and always for markdown.
+    pub lang: Option<String>,
     pub blocks: Vec<Block>,
     /// The page's JSON-LD values (see [`json_ld`]): --precise answers from them only when its text gives no answer.
     pub structured: Vec<Block>,
