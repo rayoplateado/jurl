@@ -208,8 +208,69 @@ pub(crate) fn host_key(url: &Url) -> Option<String> {
 /// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried. A page that a host
 /// refuses with 202, 401, 403 or 429, or resets the stream of, is read again through the fallback proxy, when the run has one
 /// (rung 3), and a page still refused that way is last asked of the stealth sidecar, when the run has one (see `refused_page`).
+/// The start URL's `www.` alternate is `start_with_alternate`'s, not this function's.
 pub(crate) async fn fetch(url: &str, retry: Retry<'_>) -> Result<Page> {
     fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
+}
+
+/// Runs `read` on a run's start URL, and once more on its `www.` alternate when the start's own host gave no answer at all (see
+/// [`www_alternate`] and [`unreached`]): what a browser does with a bare domain whose apex does not answer. The alternate is said on
+/// stderr under `-t`. The run then continues from the address `read` was given, which is the alternate's. When the alternate fails
+/// too, the start's error is returned, with the alternate named.
+pub(crate) async fn start_with_alternate<T>(
+    start: &Url,
+    timing: bool,
+    mut read: impl AsyncFnMut(&Url) -> Result<T>,
+) -> Result<T> {
+    let err = match read(start).await {
+        Ok(value) => return Ok(value),
+        Err(err) => err,
+    };
+    let Some(alternate) = www_alternate(start).filter(|_| unreached(&err, start)) else {
+        return Err(err);
+    };
+    let host = start.host_str().unwrap_or_default();
+    let alt = alternate.host_str().unwrap_or_default();
+    if timing {
+        eprintln!("jurl: {host} could not be reached; trying {alt}");
+    }
+    match read(&alternate).await {
+        Ok(value) => Ok(value),
+        Err(_) => Err(err.context(format!("{host} could not be reached ({alt} was tried too)"))),
+    }
+}
+
+/// The `www.` alternate of a start URL whose host is a registrable domain itself, as a browser tries for a bare domain: `klm.es`, not
+/// `docs.klm.es`, not `www.klm.es`, and not an address. It is the same URL with `www.` in front of the host, its scheme, port, path and
+/// query kept.
+pub(crate) fn www_alternate(url: &Url) -> Option<Url> {
+    let host = url.host_str()?;
+    if host.starts_with("www.") || crate::hosts::registrable(host) != Some(host) {
+        return None;
+    }
+    let mut alternate = url.clone();
+    alternate.set_host(Some(&format!("www.{host}"))).ok()?;
+    Some(alternate)
+}
+
+/// Whether `err` says that the start's own host gave no answer at all: its request failed before any reply, either to connect (the DNS
+/// lookup, a refused connection, the TLS handshake) or with no reply before the request's timeout, on either client. A status, a reset,
+/// a body that stalls after its headers and the guard's refusal are not that, and nor is a failure on a host the start redirected to.
+/// `is_request` keeps out the errors of a body, which both clients report as a kind of their own.
+fn unreached(err: &anyhow::Error, start: &Url) -> bool {
+    err.chain().any(|e| {
+        if let Some(e) = e.downcast_ref::<reqwest::Error>() {
+            e.is_request()
+                && (e.is_connect() || e.is_dns() || e.is_timeout())
+                && e.url().is_some_and(|u| u.host_str() == start.host_str())
+        } else if let Some(e) = e.downcast_ref::<wreq::Error>() {
+            e.is_request()
+                && (e.is_connect() || e.is_timeout())
+                && e.uri().is_some_and(|u| u.host() == start.host_str())
+        } else {
+            false
+        }
+    })
 }
 
 /// Whether a refused page is retried with a browser's fingerprint. A run opts out with `--no-browser-retry`, or with
@@ -3169,6 +3230,205 @@ mod tests {
         let client = wreq::Client::builder().http2_only().no_proxy().build().expect("a client");
         let err = client.get(format!("{site}/page")).send().await.expect_err("a reset");
         assert!(server_reset(&err) == Some(h2::Reason::REFUSED_STREAM), "{err:#}");
+    }
+
+    #[test]
+    fn the_www_alternate_is_a_bare_registrable_domain_with_www_in_front() {
+        let alternate = |s: &str| www_alternate(&Url::parse(s).expect("a URL")).map(|u| u.to_string());
+        assert_eq!(alternate("https://klm.es/"), Some("https://www.klm.es/".to_string()));
+        assert_eq!(alternate("http://klm.es:8080/a/b?c=1#d"), Some("http://www.klm.es:8080/a/b?c=1#d".to_string()));
+        assert_eq!(alternate("https://docs.klm.es/"), None, "a subdomain is not a bare domain");
+        assert_eq!(alternate("https://www.klm.es/"), None);
+        assert_eq!(alternate("https://127.0.0.1/"), None);
+        assert_eq!(alternate("http://localhost:8080/"), None);
+    }
+
+    /// An address that refuses a connection: a loopback port that nothing listens on.
+    fn refusing_addr() -> std::net::SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        drop(listener);
+        addr
+    }
+
+    #[tokio::test]
+    async fn a_host_that_refuses_the_connection_is_unreached_and_an_answer_is_not() {
+        let url = format!("http://{}/page", refusing_addr());
+        let start = Url::parse(&url).expect("a URL");
+        let err = fetch(&url, retry_off()).await.err().expect("refused");
+        assert!(unreached(&err, &start), "{err:#}");
+        let (site, _) = refusing_site("403 Forbidden");
+        let url = format!("{site}/page");
+        let start = Url::parse(&url).expect("a URL");
+        let err = fetch(&url, retry_off()).await.err().expect("refused");
+        assert!(!unreached(&err, &start), "a 403 is an answer: {err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_connect_that_never_completes_is_unreached() {
+        // 192.0.2.1 is a documentation address, which nothing answers: the connection never completes, and the request times out.
+        let url = "http://192.0.2.1/page";
+        let start = Url::parse(url).expect("a URL");
+        let err = send_get(plain_for(&PRIVATE), url, retry_off(), &[], Some(Duration::from_millis(300)))
+            .await
+            .expect_err("no connection is made");
+        assert!(unreached(&err, &start), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_host_that_takes_the_connection_and_never_answers_is_unreached() {
+        // The connection is made and the request is sent, but no reply comes: a host that gives no answer at all.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        std::thread::spawn(move || {
+            let Ok((_conn, _)) = listener.accept() else { return };
+            std::thread::sleep(Duration::from_secs(2));
+        });
+        let url = format!("http://{addr}/page");
+        let start = Url::parse(&url).expect("a URL");
+        let err = send_get(plain_for(&PRIVATE), &url, retry_off(), &[], Some(Duration::from_millis(200)))
+            .await
+            .expect_err("the request times out");
+        assert!(unreached(&err, &start), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_body_that_stalls_after_its_headers_is_not_unreached() {
+        // The host answers: its headers come, and then its body stops. That host answered, whatever the rest of its reply does.
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        std::thread::spawn(move || {
+            let Ok((mut conn, _)) = listener.accept() else { return };
+            let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n<p>Hel");
+            std::thread::sleep(Duration::from_secs(2));
+        });
+        let url = format!("http://{addr}/page");
+        let start = Url::parse(&url).expect("a URL");
+        let (mut res, _) = send_get(plain_for(&PRIVATE), &url, retry_off(), &[], Some(Duration::from_millis(300)))
+            .await
+            .expect("the headers come");
+        let err = read_capped(&mut res, PAGE_MAX).await.expect_err("the body stalls");
+        assert!(!unreached(&err, &start), "a host whose body stalls answered: {err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_tls_handshake_that_fails_is_unreached() {
+        // A server that is not TLS answers the handshake with plain text, so the handshake fails before any request.
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        std::thread::spawn(move || {
+            let Ok((mut conn, _)) = listener.accept() else { return };
+            let _ = conn.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        });
+        let url = format!("https://{addr}/page");
+        let start = Url::parse(&url).expect("a URL");
+        let err = fetch(&url, retry_off()).await.err().expect("the handshake fails");
+        assert!(unreached(&err, &start), "{err:#}");
+    }
+
+    /// A client for the tests of a start's alternate: each name resolves to the address given, so a bare domain can refuse the
+    /// connection and its `www.` can answer, with no DNS. It follows no redirects, as the page client does not (see `send_get`).
+    fn resolving(names: &[(&str, std::net::SocketAddr)]) -> reqwest::Client {
+        let mut builder = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none());
+        for (name, addr) in names {
+            builder = builder.resolve(name, *addr);
+        }
+        builder.build().expect("a client")
+    }
+
+    /// Reads `url` with `client`, as a run reads its start page: a refusal is the error, and each address read is noted in `read`.
+    async fn read_through(client: &reqwest::Client, read: &Mutex<Vec<String>>, url: &Url) -> Result<Page> {
+        read.lock().expect("the log").push(url.to_string());
+        match get(client, url.as_str(), PAGE_MAX, retry_off()).await? {
+            Reply::Page { page, .. } => Ok(page),
+            Reply::Refused(refused) => Err(refused.error(url.as_str(), None)),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bare_domain_that_refuses_the_connection_is_read_on_its_www() {
+        let (www, _) = serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>On www</p>")));
+        let www_addr: std::net::SocketAddr = www.trim_start_matches("http://").parse().expect("an address");
+        let client = resolving(&[("klm.es", refusing_addr()), ("www.klm.es", www_addr)]);
+        let read = Mutex::new(Vec::new());
+        let start = Url::parse("http://klm.es/precio?x=1").expect("a URL");
+        let page = start_with_alternate(&start, false, async |u| read_through(&client, &read, u).await)
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.url.as_str(), "http://www.klm.es/precio?x=1");
+        assert_eq!(page.body, "<p>On www</p>");
+        assert_eq!(*read.lock().expect("the log"), ["http://klm.es/precio?x=1", "http://www.klm.es/precio?x=1"]);
+    }
+
+    #[tokio::test]
+    async fn an_apex_that_answers_with_a_status_is_not_retried_on_its_www() {
+        let (apex, _) = refusing_site("403 Forbidden");
+        let apex_addr: std::net::SocketAddr = apex.trim_start_matches("http://").parse().expect("an address");
+        let client = resolving(&[("klm.es", apex_addr)]);
+        let read = Mutex::new(Vec::new());
+        let start = Url::parse("http://klm.es/").expect("a URL");
+        let err = start_with_alternate(&start, false, async |u| read_through(&client, &read, u).await)
+            .await
+            .err()
+            .expect("refused");
+        assert!(format!("{err:#}").contains("returned HTTP 403"), "{err:#}");
+        assert_eq!(read.lock().expect("the log").len(), 1, "an answer is final: www is not tried");
+    }
+
+    #[tokio::test]
+    async fn when_www_fails_too_the_start_s_own_error_stands_with_www_named() {
+        let client = resolving(&[("klm.es", refusing_addr()), ("www.klm.es", refusing_addr())]);
+        let read = Mutex::new(Vec::new());
+        let start = Url::parse("http://klm.es/").expect("a URL");
+        let err = start_with_alternate(&start, false, async |u| read_through(&client, &read, u).await)
+            .await
+            .err()
+            .expect("refused");
+        let text = format!("{err:#}");
+        assert!(text.contains("klm.es could not be reached (www.klm.es was tried too)"), "{text}");
+        assert!(text.contains("fetching http://klm.es/"), "the start's own error stands: {text}");
+        assert_eq!(read.lock().expect("the log").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_start_already_on_www_is_tried_once() {
+        let client = resolving(&[("www.klm.es", refusing_addr())]);
+        let read = Mutex::new(Vec::new());
+        let start = Url::parse("http://www.klm.es/").expect("a URL");
+        let err = start_with_alternate(&start, false, async |u| read_through(&client, &read, u).await)
+            .await
+            .err()
+            .expect("refused");
+        assert!(!format!("{err:#}").contains("was tried too"), "{err:#}");
+        assert_eq!(read.lock().expect("the log").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_a_host_that_refuses_is_that_hosts_failure_and_no_alternate_of_the_start() {
+        let (apex, _) =
+            serve_routed(|_| Some(reply("301 Moved Permanently", "Location: http://other.es/page\r\n", b"")));
+        let apex_addr: std::net::SocketAddr = apex.trim_start_matches("http://").parse().expect("an address");
+        let client = resolving(&[("klm.es", apex_addr), ("other.es", refusing_addr())]);
+        let read = Mutex::new(Vec::new());
+        let start = Url::parse("http://klm.es/").expect("a URL");
+        let err = start_with_alternate(&start, false, async |u| read_through(&client, &read, u).await)
+            .await
+            .err()
+            .expect("refused");
+        let text = format!("{err:#}");
+        assert!(text.contains("other.es") && !text.contains("was tried too"), "{text}");
+        assert_eq!(read.lock().expect("the log").len(), 1, "the redirect's host is not the start's");
+    }
+
+    #[tokio::test]
+    async fn a_refused_connection_on_the_browser_client_is_unreached_too() {
+        let url = format!("http://{}/page", refusing_addr());
+        let start = Url::parse(&url).expect("a URL");
+        let client = wreq::Client::builder().no_proxy().build().expect("a client");
+        let err = client.get(&url).send().await.expect_err("refused");
+        assert!(unreached(&anyhow::Error::new(err), &start), "the browser client's refusal is no answer either");
     }
 
     /// The path a request head asks for.
