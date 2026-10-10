@@ -1,6 +1,7 @@
 //! The values a page gives in its JSON-LD (schema.org): an event's dates, an offer's price, a course's duration. A precise
 //! answer may be one of them, when the page's text gives none (see `structured_or` in blocks.rs). Each is a block of its own
 //! that names its source, so the quote shows the field: "Event VivaTech 2027 (JSON-LD): startDate 2027-06-16, endDate 2027-06-19."
+//! A product's photos are not text: `product_images` gives them to the image candidates instead.
 
 use scraper::{Html, Selector};
 use serde_json::{Map, Value};
@@ -109,6 +110,64 @@ fn types(map: &Map<String, Value>) -> Vec<String> {
     }
 }
 
+/// The most product photos one page gives from its JSON-LD: a listing of many products stays short.
+const MAX_IMAGES: usize = 8;
+
+/// The photos a page's JSON-LD gives its products: the `image` of each Product or Offer, as a URL, a list of URLs, or an
+/// ImageObject. They are image candidates, not text: `html` reads them after og:image.
+pub fn product_images(doc: &Html) -> Vec<String> {
+    let script = Selector::parse(r#"script[type="application/ld+json"]"#).expect("static selector");
+    let mut out: Vec<String> = Vec::new();
+    for el in doc.select(&script) {
+        let body: String = el.text().collect();
+        if let Ok(value) = serde_json::from_str::<Value>(&body) {
+            visit_images(&value, &mut out);
+        }
+        if out.len() >= MAX_IMAGES {
+            break;
+        }
+    }
+    out.truncate(MAX_IMAGES);
+    out
+}
+
+/// Walks a JSON-LD value depth first, and takes the `image` of each Product or Offer it finds. An image counts where it is
+/// written: nothing is inherited from a product downwards, since a product's review has an author with an avatar of their
+/// own, and that is not a photo of the product.
+fn visit_images(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Array(items) => items.iter().for_each(|v| visit_images(v, out)),
+        Value::Object(map) => {
+            if types(map).iter().any(|t| matches!(t.as_str(), "Product" | "Offer"))
+                && let Some(image) = map.get("image")
+            {
+                image_values(image, out);
+            }
+            for (key, child) in map {
+                if key != "@type" && matches!(child, Value::Object(_) | Value::Array(_)) {
+                    visit_images(child, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The URLs of an `image` value: a string, a list of them, or an ImageObject. An ImageObject's `contentUrl` is the file
+/// itself, and its `url` may be the page that shows the file, so `contentUrl` is read first.
+fn image_values(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) => out.push(s.trim().to_string()),
+        Value::Array(items) => items.iter().for_each(|v| image_values(v, out)),
+        Value::Object(map) => {
+            if let Some(url) = map.get("contentUrl").or_else(|| map.get("url")).and_then(Value::as_str) {
+                out.push(url.trim().to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +208,48 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].i, 7);
         assert_eq!(blocks[0].text, "Event X (JSON-LD): startDate 2027-01-01.");
+    }
+
+    fn photos(html: &str) -> Vec<String> {
+        product_images(&Html::parse_document(html))
+    }
+
+    #[test]
+    fn a_products_image_is_a_candidate_as_a_string_a_list_or_an_image_object() {
+        let html = r#"<script type="application/ld+json">{"@type":"Product","name":"Asana","image":"https://cdn.example.test/a.jpg"}</script>
+            <script type="application/ld+json">{"@type":"Product","name":"Mug","image":["https://cdn.example.test/b.jpg","https://cdn.example.test/c.jpg"]}</script>
+            <script type="application/ld+json">{"@graph":[{"@type":"Product","name":"Desk","image":{"@type":"ImageObject","contentUrl":"https://cdn.example.test/d.jpg"}}]}</script>"#;
+        assert_eq!(
+            photos(html),
+            [
+                "https://cdn.example.test/a.jpg",
+                "https://cdn.example.test/b.jpg",
+                "https://cdn.example.test/c.jpg",
+                "https://cdn.example.test/d.jpg"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_image_object_gives_its_file_and_otherwise_its_url() {
+        // The page that shows a photo is the ImageObject's `url`; its file is the `contentUrl`, which is read first.
+        let html = r#"<script type="application/ld+json">{"@type":"Product","image":{"@type":"ImageObject","url":"https://cdn.example.test/page.html","contentUrl":"https://cdn.example.test/file.jpg"}}</script>
+            <script type="application/ld+json">{"@type":"Product","image":{"@type":"ImageObject","url":"https://cdn.example.test/only.jpg"}}</script>"#;
+        assert_eq!(photos(html), ["https://cdn.example.test/file.jpg", "https://cdn.example.test/only.jpg"]);
+    }
+
+    #[test]
+    fn an_offers_image_counts_but_a_reviewers_avatar_does_not() {
+        let html = r#"<script type="application/ld+json">{"@type":"Product","name":"Asana","image":"https://cdn.example.test/a.jpg",
+            "review":{"@type":"Review","author":{"@type":"Person","name":"Ana","image":"https://cdn.example.test/avatar.jpg"}},
+            "offers":{"@type":"Offer","price":10,"image":"https://cdn.example.test/offer.jpg"}}</script>"#;
+        assert_eq!(photos(html), ["https://cdn.example.test/a.jpg", "https://cdn.example.test/offer.jpg"]);
+    }
+
+    #[test]
+    fn the_image_of_anything_but_a_product_or_an_offer_is_not_a_product_photo() {
+        let html = r#"<script type="application/ld+json">{"@type":"Article","image":"https://cdn.example.test/news.jpg"}</script>"#;
+        assert!(photos(html).is_empty());
     }
 
     #[test]
