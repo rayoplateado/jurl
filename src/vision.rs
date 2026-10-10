@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use futures::future::join_all;
 use reqwest::Client;
@@ -99,9 +99,10 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     // One HTTP/1 connection per Clef call: multiplexing them all over a single HTTP/2
     // connection measured ~2x slower at the tail.
     let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
+    let retry = fetch::Retry::for_run(ctx.args.no_browser_retry, ctx.args.timing, &ctx.args.reach, &ctx.args.cookies);
     let req = clef_keys.as_ref().map(|keys| LookRequest {
-        http: ctx.client,
-        reach: &ctx.args.reach,
+        retry,
+        page: ctx.url,
         clef: &clef_client,
         keys,
         title: &ex.title,
@@ -119,7 +120,10 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     if let Some(notice) = text_only_notice(&looks, ex.images.len()) {
         eprintln!("{notice}");
     }
-    Ok(render(ctx, ex, &kept))
+    if let Some(notice) = refused_notice(&kept, &looks) {
+        eprintln!("{notice}");
+    }
+    Ok(render(ctx, ex, &kept, &looks, req.is_some()))
 }
 
 /// Jev's items for the text-only judgement of each image.
@@ -260,14 +264,42 @@ fn text_only_notice(looks: &Looks, total: usize) -> Option<String> {
     ))
 }
 
+/// The stderr line for kept images that their hosts refused: their p is from text only. None when no kept image was refused.
+fn refused_notice(kept: &[(&Image, f64)], looks: &Looks) -> Option<String> {
+    let refused = kept.iter().filter(|(i, _)| pixels_state(looks.get(i.i)) == "refused").count();
+    (refused > 0).then(|| {
+        format!(
+            "jurl: {refused} of the {} kept images were refused by their hosts, so their p is from text only (-t shows why)",
+            kept.len()
+        )
+    })
+}
+
 /// The result: each kept image's URL on its own line, and the same images as JSON.
-fn render(ctx: &Ctx<'_>, ex: &Extracted, kept: &[(&Image, f64)]) -> Rendered {
-    let v: Vec<_> = kept
-        .iter()
-        .map(|(i, p)| json!({ "url": i.url.as_str(), "alt": i.alt, "caption": i.caption, "p": p }))
-        .collect();
+fn render(ctx: &Ctx<'_>, ex: &Extracted, kept: &[(&Image, f64)], looks: &Looks, looked: bool) -> Rendered {
+    let v: Vec<_> = kept.iter().map(|(i, p)| image_json(i, *p, looks, looked)).collect();
     let text = kept.iter().map(|(i, _)| format!("{}\n", i.url)).collect();
     Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "images": v }) }
+}
+
+/// One kept image in the result: its URL, alt, caption and p. `pixels` says what became of the image's look (see
+/// [`pixels_state`]). It is left out when no look ran (--image).
+fn image_json(img: &Image, p: f64, looks: &Looks, looked: bool) -> Value {
+    let mut out = json!({ "url": img.url.as_str(), "alt": img.alt, "caption": img.caption, "p": p });
+    if looked {
+        out["pixels"] = json!(pixels_state(looks.get(img.i)));
+    }
+    out
+}
+
+/// The `pixels` of an image: "looked" when Clef looked at its pixels; "refused" when its host refused the image; "skipped"
+/// when it was not looked at (past the look cap, after its host refused an earlier image, or a look that failed otherwise).
+fn pixels_state(look: Option<&Result<f64>>) -> &'static str {
+    match look {
+        Some(Ok(_)) => "looked",
+        Some(Err(e)) if e.downcast_ref::<fetch::ImageRefused>().is_some() => "refused",
+        _ => "skipped",
+    }
 }
 
 /// How many images Clef looks at: --find (a query) looks at more.
@@ -336,11 +368,12 @@ impl Looks {
     }
 }
 
-/// What the looks of one `images` call share: the clients, Clef's keys, the page title and the --find question.
+/// What the looks of one `images` call share: the run's downloads, Clef's keys, the page title and the --find question.
 struct LookRequest<'a> {
-    /// Downloads each thumbnail: the page's own client, under the run's reach.
-    http: &'a Client,
-    reach: &'a crate::reach::Reach,
+    /// Downloads each thumbnail, under the run's reach and cookies (see `fetch::image_bytes`).
+    retry: fetch::Retry<'a>,
+    /// The page the images are on: their Referer, and the Sec-Fetch-Site of each download.
+    page: &'a url::Url,
     /// Calls Clef: one HTTP/1 connection per call.
     clef: &'a Client,
     keys: &'a ClefKeys,
@@ -348,13 +381,35 @@ struct LookRequest<'a> {
     query: Option<&'a str>,
 }
 
-/// Clef on several images at once, each bounded by the vision deadline.
+/// Clef on several images at once, each bounded by the vision deadline. The images are grouped by the origin they are
+/// downloaded from, and each group's first image is asked before the rest of its group. A host that refuses that image gets
+/// no more requests in this run: a refusal costs one or two requests, not one per image, and the rest are skipped.
 async fn look_all(req: Option<&LookRequest<'_>>, imgs: Vec<&Image>) -> Looks {
     let Some(req) = req else { return Looks::default() };
     let deadline = vision_deadline();
-    let answers =
-        join_all(imgs.into_iter().map(|img| async move { (img.i, within(deadline, look(req, img)).await) })).await;
-    Looks(answers.into_iter().collect())
+    let mut groups: Vec<(String, Vec<&Image>)> = Vec::new();
+    for img in imgs {
+        let origin = img.preview.origin().ascii_serialization();
+        match groups.iter_mut().find(|(o, _)| *o == origin) {
+            Some((_, group)) => group.push(img),
+            None => groups.push((origin, vec![img])),
+        }
+    }
+    let answers = join_all(groups.into_iter().map(|(_, group)| async move {
+        let mut group = group.into_iter();
+        let mut answers = Vec::new();
+        let Some(first) = group.next() else { return answers };
+        let first_answer = (first.i, within(deadline, look(req, first)).await);
+        let refused = first_answer.1.as_ref().err().is_some_and(|e| e.downcast_ref::<fetch::ImageRefused>().is_some());
+        answers.push(first_answer);
+        if !refused {
+            let rest = group.map(|img| async move { (img.i, within(deadline, look(req, img)).await) });
+            answers.extend(join_all(rest).await);
+        }
+        answers
+    }))
+    .await;
+    Looks(answers.into_iter().flatten().collect())
 }
 
 /// `fut`'s answer, or a [`Timeout`] once `deadline` has passed.
@@ -389,7 +444,7 @@ fn clef_ask(title: &str, img: &Image, query: Option<&str>) -> (Value, Value) {
 
 /// Clef's view of one image: with a query, P(it shows that); without, P(it is content, not chrome).
 async fn look(req: &LookRequest<'_>, img: &Image) -> Result<f64> {
-    let data = thumbnail(req.http, req.reach, &img.preview).await?;
+    let data = thumbnail(req.retry, req.page, &img.preview).await?;
     let (state, question) = clef_ask(req.title, img, req.query);
     let qs = Map::from_iter([("q".to_string(), question)]);
     let call =
@@ -427,11 +482,8 @@ where
 }
 
 /// Download and shrink to a small JPEG: fewer vision tokens, faster Clef. An image past `IMAGE_MAX` is not read.
-async fn thumbnail(client: &Client, reach: &crate::reach::Reach, url: &url::Url) -> Result<String> {
-    let mut res = crate::fetch::send_get(client, url.as_str(), reach, None, None).await?.error_for_status()?;
-    let Some(bytes) = fetch::read_capped(&mut res, IMAGE_MAX).await? else {
-        bail!("{url}: image larger than {}", fetch::size_label(IMAGE_MAX));
-    };
+async fn thumbnail(retry: crate::fetch::Retry<'_>, page: &url::Url, url: &url::Url) -> Result<String> {
+    let bytes = fetch::image_bytes(page, url, retry, IMAGE_MAX).await?;
     tokio::task::spawn_blocking(move || -> Result<String> {
         let img = image::load_from_memory(&bytes)?;
         let img =
@@ -613,11 +665,76 @@ mod tests {
         );
     }
 
+    /// An image of the site at `base`, the `i`th on its page.
+    fn sample_image(i: usize, base: &str) -> Image {
+        let url = url::Url::parse(&format!("{base}/{i}.png")).expect("a URL");
+        Image {
+            i,
+            url: url.clone(),
+            preview: url,
+            alt: String::new(),
+            caption: String::new(),
+            width: None,
+            height: None,
+        }
+    }
+
+    #[test]
+    fn an_image_says_whether_clef_looked_at_its_pixels() {
+        let img = sample_image(0, "https://site.test");
+        let looked = Looks(BTreeMap::from([(0, Ok(0.8))]));
+        assert_eq!(image_json(&img, 0.7, &looked, true)["pixels"], json!("looked"));
+        let refused = Looks(BTreeMap::from([(0, Err(anyhow::Error::new(fetch::ImageRefused("HTTP 403".into()))))]));
+        assert_eq!(image_json(&img, 0.4, &refused, true)["pixels"], json!("refused"));
+        let failed = Looks(BTreeMap::from([(0, Err(anyhow!("Clef: HTTP 500")))]));
+        assert_eq!(image_json(&img, 0.4, &failed, true)["pixels"], json!("skipped"));
+        assert_eq!(image_json(&img, 0.4, &Looks::default(), true)["pixels"], json!("skipped"), "past the look cap");
+        assert!(image_json(&img, 0.4, &looked, false).get("pixels").is_none(), "--image looks at nothing");
+    }
+
+    #[test]
+    fn the_notice_counts_the_kept_images_their_hosts_refused() {
+        let imgs: Vec<Image> = (0..3).map(|i| sample_image(i, "https://site.test")).collect();
+        let kept: Vec<(&Image, f64)> = imgs.iter().map(|i| (i, 0.5)).collect();
+        let looks = Looks(BTreeMap::from([
+            (0, Err(anyhow::Error::new(fetch::ImageRefused("HTTP 403".into())))),
+            (1, Ok(0.9)),
+            (2, Err(anyhow::Error::new(fetch::ImageRefused("HTTP 429".into())))),
+        ]));
+        let notice = refused_notice(&kept, &looks).expect("two were refused");
+        assert!(notice.starts_with("jurl: 2 of the 3 kept images were refused"), "{notice}");
+        assert!(refused_notice(&kept[1..2], &looks).is_none(), "an image that was looked at is not refused");
+    }
+
+    #[tokio::test]
+    async fn a_host_that_refuses_its_first_image_gets_no_more_requests_from_the_run() {
+        let (base, served) =
+            fetch::test_server::serve_routed(|_| Some(fetch::test_server::reply("403 Forbidden", "", b"")));
+        let images: Vec<Image> = (0..3).map(|i| sample_image(i, &base)).collect();
+        let keys = ClefKeys { account: "account".into(), token: "token".into() };
+        let clef = Client::new();
+        let memo = fetch::Memo::default();
+        let page = url::Url::parse(&base).expect("a URL");
+        let req = LookRequest {
+            retry: fetch::test_server::retry_on(&memo),
+            page: &page,
+            clef: &clef,
+            keys: &keys,
+            title: "A page",
+            query: None,
+        };
+        let looks = look_all(Some(&req), images.iter().collect()).await;
+        assert!(matches!(looks.get(0), Some(Err(e)) if e.downcast_ref::<fetch::ImageRefused>().is_some()));
+        assert!(looks.get(1).is_none() && looks.get(2).is_none(), "the rest of the host's images are skipped");
+        // The first image: one plain request and the browser client's retry. Nothing else reaches the host.
+        assert_eq!(served.count(), 2);
+    }
+
     #[tokio::test]
     async fn an_image_past_its_cap_is_not_read() {
         let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_string();
         let url = url::Url::parse(&fetch::test_server::serve(head, vec![0u8; IMAGE_MAX + 1], true)).unwrap();
-        let err = thumbnail(&fetch::test_server::client(), &crate::reach::Reach::Private, &url).await.unwrap_err();
+        let err = thumbnail(fetch::test_server::retry_at(&crate::reach::Reach::Private), &url, &url).await.unwrap_err();
         assert!(format!("{err:#}").ends_with("image larger than 15 MB"), "{err:#}");
     }
 
@@ -628,7 +745,7 @@ mod tests {
             allowed: std::collections::HashSet::from([std::net::IpAddr::from([127, 0, 0, 1])]),
         };
         let url = url::Url::parse("http://127.0.0.2:1/photo.png").unwrap();
-        let err = thumbnail(&fetch::test_server::client(), &reach, &url).await.unwrap_err();
+        let err = thumbnail(fetch::test_server::retry_at(&reach), &url, &url).await.unwrap_err();
         assert_eq!(format!("{err:#}"), "not a public address");
     }
 
@@ -639,7 +756,7 @@ mod tests {
         let png = cursor.into_inner();
         let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", png.len());
         let url = url::Url::parse(&fetch::test_server::serve(head, png, false)).unwrap();
-        let data = thumbnail(&fetch::test_server::client(), &crate::reach::Reach::Private, &url).await.unwrap();
+        let data = thumbnail(fetch::test_server::retry_at(&crate::reach::Reach::Private), &url, &url).await.unwrap();
         assert!(data.starts_with("data:image/jpeg;base64,"), "{}", data.chars().take(40).collect::<String>());
     }
 

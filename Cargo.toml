@@ -19,7 +19,7 @@ futures = "0.3.34"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 psl = "2.1.241"
 pulldown-cmark = { version = "0.13.4", default-features = false }
-reqwest ={ version = "0.13.5", default-features = false, features = ["rustls", "json", "gzip", "brotli", "http2", "charset"] }
+reqwest ={ version = "0.13.5", default-features = false, features = ["rustls", "json", "gzip", "brotli", "http2", "charset", "cookies"] }
 rpassword = "7.5.4"
 scraper = "0.27.0"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -29,6 +29,11 @@ tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time", "
 url = "2.5.8"
 wreq = { version = "0.16.1", default-features = false, features = ["webpki-roots", "tokio-rt", "stream", "gzip", "brotli", "deflate", "zstd"] }
 wreq-util = "0.2.0"
+
+[dev-dependencies]
+bytes = "1"
+h2 = "0.4"
+http = "1"
 
 [profile.release]
 lto = "fat"

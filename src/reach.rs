@@ -203,6 +203,12 @@ pub(crate) fn required_by_env(value: Option<&str>) -> bool {
     value.is_some_and(|v| v.trim() == "1")
 }
 
+/// Whether `JURL_RENDER_SANDBOXED` is set to 1: the network outside jurl confines the browser, so a public run may render under
+/// `JURL_PUBLIC_ONLY` (see `fetch::render_allowed`). The cloud runner's host firewall is that network.
+pub(crate) fn sandboxed_by_env(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v.trim() == "1")
+}
+
 /// The reach of a run from `start`. With `required` (see [`required_by_env`]) a start that is not public is an error, so the
 /// run reads public addresses or nothing.
 pub(crate) async fn decide(start: &Url, required: bool) -> Result<Reach> {
@@ -217,6 +223,7 @@ pub(crate) async fn decide(start: &Url, required: bool) -> Result<Reach> {
 /// given the URL its scheme. A start that is not a URL keeps the private reach, and the run fails where it always has.
 pub(crate) async fn set_reach(args: &mut crate::cli::Args) -> Result<()> {
     let env = |name: &str| std::env::var(name).ok();
+    args.render_sandboxed = sandboxed_by_env(env("JURL_RENDER_SANDBOXED").as_deref());
     set_reach_with(args, required_by_env(env("JURL_PUBLIC_ONLY").as_deref()), proxy_configured(env)).await
 }
 
@@ -569,6 +576,15 @@ mod tests {
         let named = Url::parse("http://localhost:8080/x").unwrap();
         assert!(format!("{:#}", check(&named, &public).await.unwrap_err()) == "not a public address");
         check(&named, &Reach::Private).await.expect("a private run checks nothing");
+    }
+
+    #[test]
+    fn the_render_sandbox_is_set_by_one_only() {
+        assert!(sandboxed_by_env(Some("1")));
+        assert!(sandboxed_by_env(Some(" 1 ")));
+        assert!(!sandboxed_by_env(Some("0")));
+        assert!(!sandboxed_by_env(Some("true")));
+        assert!(!sandboxed_by_env(None));
     }
 
     #[tokio::test]

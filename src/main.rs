@@ -111,8 +111,13 @@ async fn no_args() -> Result<ExitCode> {
     }
 }
 
+/// The largest header list a response may have over HTTP/2, which the client advertises. hyper's default is 16 KB, and some
+/// pages send more: backmarket's /es-es sends 31 KB, mostly a Link of preloads, and the stream was reset as a protocol
+/// error before the page was read. 256 KB is what Chrome advertises, so the browser client (see `fetch.rs`) matches it.
+const HTTP2_MAX_HEADER_LIST: u32 = 256 * 1024;
+
 /// What every jurl client starts from: a browser's user agent, with jurl's version on the end, the Accept-Language a run
-/// names, and the time limits.
+/// names, the time limits, and the HTTP/2 header limit above.
 pub(crate) fn client_builder() -> reqwest::ClientBuilder {
     Client::builder()
         .user_agent(concat!(
@@ -122,6 +127,7 @@ pub(crate) fn client_builder() -> reqwest::ClientBuilder {
         .default_headers(fetch::language_headers())
         .timeout(HTTP_TIMEOUT)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .http2_max_header_list_size(HTTP2_MAX_HEADER_LIST)
 }
 
 /// The client for the APIs (Jev, Clef, jurl cloud, the sign-in) and the requests before a run's pages. It is never guarded:
@@ -253,7 +259,7 @@ async fn read(
         let _ = warm.await;
         return follow::run(args, cfg, client, key, target, t).await;
     }
-    let (url, ex) = load(args, cfg, client, &target, t).await?;
+    let (url, ex) = load(args, cfg, &target, t).await?;
     let _ = warm.await;
 
     let ctx = Ctx::new(args, client, key, &url, &ex);
@@ -267,23 +273,17 @@ async fn read(
 }
 
 /// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images.
-pub(crate) async fn load(
-    args: &Args,
-    cfg: &Config,
-    client: &Client,
-    target: &url::Url,
-    t: &mut Timer,
-) -> Result<(url::Url, Extracted)> {
+pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut Timer) -> Result<(url::Url, Extracted)> {
     let page = if args.render {
-        fetch::render_allowed(target, &args.reach, args.public_only).await?;
+        fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
         let page = fetch::render(&bin, target).await?;
         t.lap("render");
         page
     } else {
         // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
-        let retry = fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach);
-        let page = fetch::fetch(client, target.as_str(), retry).await?;
+        let retry = fetch::Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies);
+        let page = fetch::fetch(target.as_str(), retry).await?;
         t.lap("fetch");
         if page.via_browser {
             decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -307,7 +307,7 @@ pub(crate) async fn load(
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
     let shell = ex.app_shell && text < APP_SHELL_TEXT;
     if !args.render && (shell || placeholders) {
-        if let Err(e) = fetch::render_allowed(&page.url, &args.reach, args.public_only).await {
+        if let Err(e) = fetch::render_allowed(&page.url, &args.reach, args.public_only, args.render_sandboxed).await {
             // An app shell has nothing to read without its render. A page with placeholders is readable as it is.
             if shell {
                 return Err(e);

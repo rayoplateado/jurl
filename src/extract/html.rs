@@ -99,11 +99,16 @@ fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool) -> Vec<Block> {
     w.blocks
 }
 
-/// The images of the page: `og:image` first, then the `<img>`s of the content root that a reader can see.
+/// The images of the page: `og:image` first, then a product's photos from its JSON-LD, then the `<img>`s of the content root
+/// that a reader can see, then its `<picture>` sources. `push_image` keeps each URL once, so a picture's `<img>` and its
+/// `<source>` that name one file are one candidate.
 fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Vec<Image> {
     let mut images = Vec::new();
     if let Some(og) = meta(doc, "meta[property='og:image']") {
         push_image(&mut images, base, &og, None, String::new(), String::new(), None, None);
+    }
+    for src in super::json_ld::product_images(doc) {
+        push_image(&mut images, base, &src, None, String::new(), String::new(), None, None);
     }
     for img in root.select(&sel("img")) {
         if image_skipped(img, in_body) {
@@ -121,7 +126,41 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
         push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
     }
+    // A responsive picture's banner is often only in its <source> srcsets, with the <img> as the fallback. Its sources are
+    // renditions of one image for several breakpoints, so the picture is one candidate: the largest rendition of any of its
+    // sources that the decoder reads, with that source's small preview and the picture's alt text. Renditions differ by
+    // their URLs (a query string each), so exact-URL dedup would keep all of them, and they would take the slots of others.
+    for picture in root.select(&sel("picture")) {
+        if image_skipped(picture, in_body) {
+            continue;
+        }
+        let best = picture
+            .select(&sel("source"))
+            .filter(|s| decodable_type(s.value().attr("type")))
+            .filter_map(|s| {
+                let srcset = s.value().attr("srcset")?;
+                let (src, scale) = best_candidate(srcset)?;
+                Some((src, scale, srcset))
+            })
+            .reduce(|a, b| if b.1 > a.1 { b } else { a });
+        let Some((src, _, srcset)) = best else { continue };
+        let preview = small_srcset(srcset);
+        let alt = picture
+            .select(&sel("img"))
+            .next()
+            .map(|img| collapse(img.value().attr("alt").unwrap_or("")))
+            .unwrap_or_default();
+        push_image(&mut images, base, &src, preview.as_deref(), alt, String::new(), None, None);
+    }
     images
+}
+
+/// Whether a `<source>`'s type is one the image decoder reads, by the decoder's own list of MIME types, so a type it has no
+/// feature for (AVIF, say) is left out. A type may carry parameters after a `;`. A source with no type is read as it is.
+fn decodable_type(t: Option<&str>) -> bool {
+    let Some(t) = t else { return true };
+    let essence = t.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+    image::ImageFormat::from_mime_type(essence).is_some_and(|f| f.reading_enabled())
 }
 
 /// The first of these attributes that the element has.
@@ -558,11 +597,28 @@ fn chrome(el: ElementRef) -> bool {
         || v.id().is_some_and(|id| CHROME_NAMES.contains(&id))
 }
 
+/// Whether a reader can't see the element itself: its `hidden` attribute, or an inline style that hides it. An ancestor's
+/// are checked where the walk reaches the ancestor. `aria-hidden` is not one of them: it hides the element from assistive
+/// technology, and the page still shows it.
 fn hidden(el: ElementRef) -> bool {
     let v = el.value();
-    (v.attr("hidden").is_some() && !segment(el))
-        || v.attr("aria-hidden") == Some("true")
-        || v.attr("style").is_some_and(|s| s.replace(' ', "").contains("display:none"))
+    (v.attr("hidden").is_some() && !segment(el)) || v.attr("style").is_some_and(style_hides)
+}
+
+/// Whether an inline style hides its element: `display: none`, or `visibility: hidden`. `visibility: collapse` hides a
+/// non-table element the same way. CSS reads property names and keywords without case, and `!important` ends a value.
+fn style_hides(style: &str) -> bool {
+    style.split(';').any(|decl| {
+        let Some((name, value)) = decl.split_once(':') else { return false };
+        let value = match value.rsplit_once('!') {
+            Some((v, flag)) if flag.trim().eq_ignore_ascii_case("important") => v,
+            _ => value,
+        };
+        let (name, value) = (name.trim(), value.trim());
+        (name.eq_ignore_ascii_case("display") && value.eq_ignore_ascii_case("none"))
+            || (name.eq_ignore_ascii_case("visibility")
+                && (value.eq_ignore_ascii_case("hidden") || value.eq_ignore_ascii_case("collapse")))
+    })
 }
 
 fn figcaption(img: ElementRef) -> String {
@@ -575,32 +631,62 @@ fn figcaption(img: ElementRef) -> String {
         .unwrap_or_default()
 }
 
+/// The candidates of a `srcset`, split as the HTML standard splits them. A candidate is a URL, a run of characters with no
+/// space in it (a CDN's URL may hold commas, as in `c_scale,w_400`), then an optional descriptor, `640w` or `2x`, which runs
+/// to the next comma. Splitting on every comma would cut such a URL in two.
+fn srcset_candidates(srcset: &str) -> Vec<(&str, Option<&str>)> {
+    let mut out = Vec::new();
+    let mut rest = srcset;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ',');
+        let end = rest.find(|c: char| c.is_ascii_whitespace()).unwrap_or(rest.len());
+        let (url, after) = rest.split_at(end);
+        if url.is_empty() {
+            return out;
+        }
+        let bare = url.trim_end_matches(',');
+        if bare.len() < url.len() {
+            // Commas right after the URL end the candidate, so it has no descriptor.
+            out.push((bare, None));
+            rest = after;
+        } else {
+            let stop = after.find(',').unwrap_or(after.len());
+            let descriptor = after[..stop].trim();
+            out.push((url, Some(descriptor).filter(|d| !d.is_empty())));
+            rest = &after[stop..];
+        }
+    }
+}
+
+/// What a descriptor gives: `640w` is 640 and `2x` is 2. No descriptor, or one it cannot read, counts as 1x.
+fn scale(descriptor: Option<&str>) -> f32 {
+    descriptor
+        .and_then(|d| d.split_whitespace().next())
+        .and_then(|d| d.trim_end_matches(['w', 'x']).parse::<f32>().ok())
+        .unwrap_or(1.0)
+}
+
+/// The largest candidate of a srcset, with its scale: one picture at several sizes, so the largest is the one to look at.
+fn best_candidate(srcset: &str) -> Option<(String, f32)> {
+    srcset_candidates(srcset).into_iter().map(|(url, d)| (url.to_string(), scale(d))).max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// The URL of [`best_candidate`].
 fn best_srcset(srcset: &str) -> Option<String> {
-    srcset
-        .split(',')
-        .filter_map(|c| {
-            let mut parts = c.split_whitespace();
-            let url = parts.next()?;
-            let w = parts.next().and_then(|d| d.trim_end_matches(['w', 'x']).parse::<f32>().ok()).unwrap_or(1.0);
-            Some((url.to_string(), w))
-        })
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(u, _)| u)
+    best_candidate(srcset).map(|(url, _)| url)
 }
 
 /// Smallest srcset candidate that is still big enough to recognise (≥320w).
 fn small_srcset(srcset: &str) -> Option<String> {
-    srcset
-        .split(',')
-        .filter_map(|c| {
-            let mut parts = c.split_whitespace();
-            let url = parts.next()?;
-            let w = parts.next()?.strip_suffix('w')?.parse::<u32>().ok()?;
-            Some((url.to_string(), w))
+    srcset_candidates(srcset)
+        .into_iter()
+        .filter_map(|(url, d)| {
+            let w = d?.split_whitespace().next()?.strip_suffix('w')?.parse::<u32>().ok()?;
+            Some((url, w))
         })
         .filter(|(_, w)| *w >= 320)
         .min_by_key(|(_, w)| *w)
-        .map(|(u, _)| u)
+        .map(|(u, _)| u.to_string())
 }
 
 /// A link in a footnote mark (`<sup>`), or an image with no text: see [`Link::marginal`].
@@ -787,6 +873,120 @@ mod tests {
         let urls: Vec<&str> = ex.images.iter().map(|i| i.url.as_str()).collect();
         assert!(urls.contains(&"https://example.com/amatriciana.jpg"), "{urls:?}");
         assert!(!urls.contains(&"https://example.com/tracker-banner.jpg"), "{urls:?}");
+    }
+
+    #[test]
+    fn aria_hidden_alone_keeps_the_content() {
+        // aria-hidden hides content from assistive technology only. A banner marked that way is on the page, so a reader
+        // sees it and the walk keeps it.
+        let page = r#"<body><article><p>The store opens at nine every morning.</p>
+            <div aria-hidden="true"><p>Summer sale, up to 50% off.</p><img src="/banner.jpg" alt="Sale"></div></article></body>"#;
+        let ex = html(page, &base());
+        assert!(ex.blocks.iter().any(|b| b.text.contains("Summer sale")), "{:?}", ex.blocks);
+        assert!(ex.images.iter().any(|i| i.url.path() == "/banner.jpg"), "{:?}", ex.images);
+    }
+
+    #[test]
+    fn a_hidden_attribute_drops_the_content_below_it() {
+        let page = r#"<body><article><p>The store opens at nine every morning.</p>
+            <div hidden><p>Hidden promotion text.</p><img src="/banner.jpg" alt="Sale"></div></article></body>"#;
+        let ex = html(page, &base());
+        assert!(ex.blocks.iter().all(|b| !b.text.contains("Hidden promotion")), "{:?}", ex.blocks);
+        assert!(ex.images.is_empty(), "{:?}", ex.images);
+    }
+
+    #[test]
+    fn inline_display_none_on_an_ancestor_drops_the_content_below_it() {
+        let page = r#"<body><article><p>The store opens at nine every morning.</p>
+            <section style="display: none"><p>Hidden promotion text.</p><img src="/banner.jpg" alt="Sale"></section></article></body>"#;
+        let ex = html(page, &base());
+        assert!(ex.blocks.iter().all(|b| !b.text.contains("Hidden promotion")), "{:?}", ex.blocks);
+        assert!(ex.images.is_empty(), "{:?}", ex.images);
+    }
+
+    #[test]
+    fn visibility_hidden_on_an_ancestor_drops_the_content_below_it() {
+        let page = r#"<body><article><p>The store opens at nine every morning.</p>
+            <div style="visibility:hidden"><p>Hidden promotion text.</p><img src="/banner.jpg" alt="Sale"></div></article></body>"#;
+        let ex = html(page, &base());
+        assert!(ex.blocks.iter().all(|b| !b.text.contains("Hidden promotion")), "{:?}", ex.blocks);
+        assert!(ex.images.is_empty(), "{:?}", ex.images);
+    }
+
+    #[test]
+    fn an_inline_style_hides_as_css_reads_it() {
+        assert!(style_hides("DISPLAY: None !important"));
+        assert!(style_hides("color: red; visibility : hidden"));
+        assert!(style_hides("visibility:collapse"));
+        assert!(!style_hides("display: block; color: red"));
+        assert!(!style_hides("visibility: visible"));
+        // A property name inside a value is not a declaration.
+        assert!(!style_hides("content: \"display:none\""));
+    }
+
+    #[test]
+    fn a_picture_source_is_a_candidate_at_its_largest_size_and_its_smallest_big_one_is_the_preview() {
+        let page = r#"<body><main><picture><source srcset="/s/banner-160.webp 160w, /s/banner-320.webp 320w, /s/banner-1280.webp 1280w" type="image/webp"><img src="/fallback.jpg" alt="Banner"></picture></main></body>"#;
+        let ex = html(page, &base());
+        let banner = ex.images.iter().find(|i| i.url.path() == "/s/banner-1280.webp").expect("the largest source");
+        assert_eq!(banner.preview.path(), "/s/banner-320.webp");
+        assert_eq!(banner.alt, "Banner");
+        assert!(ex.images.iter().any(|i| i.url.path() == "/fallback.jpg"), "{:?}", ex.images);
+    }
+
+    #[test]
+    fn a_picture_is_one_candidate_however_many_renditions_its_sources_give() {
+        // Renditions of one banner differ by their query strings, so exact-URL dedup would keep every one of them.
+        let page = r#"<body><main><picture><source media="(min-width: 1024px)" srcset="/banner.webp?w=1280 1280w, /banner.webp?w=960 960w" type="image/webp"><source media="(max-width: 1023px)" srcset="/banner.webp?w=640 640w, /banner.webp?w=320 320w" type="image/webp"><img src="/banner.jpg" alt="Sale"></picture></main></body>"#;
+        let ex = html(page, &base());
+        let renditions: Vec<&str> =
+            ex.images.iter().map(|i| i.url.as_str()).filter(|u| u.contains("banner.webp")).collect();
+        assert_eq!(renditions.len(), 1, "{:?}", ex.images);
+        assert!(renditions[0].ends_with("w=1280"), "{renditions:?}");
+        assert!(ex.images.iter().any(|i| i.url.path() == "/banner.jpg"), "the <img> fallback is its own candidate");
+    }
+
+    #[test]
+    fn a_picture_source_and_its_img_naming_one_file_are_one_candidate() {
+        let page = r#"<body><main><picture><source srcset="/banner.webp 1x" type="image/webp"><img src="/banner.webp" alt="Banner"></picture></main></body>"#;
+        let ex = html(page, &base());
+        let urls: Vec<&str> = ex.images.iter().map(|i| i.url.path()).collect();
+        assert_eq!(urls, ["/banner.webp"]);
+        assert_eq!(ex.images[0].alt, "Banner");
+    }
+
+    #[test]
+    fn a_picture_source_of_a_type_the_decoder_cannot_read_is_not_a_candidate() {
+        let page = r#"<body><main><picture><source srcset="/banner.avif 1x" type="image/avif"><source srcset="/banner.webp 1x" type="image/webp"><img src="/fallback.jpg" alt="Banner"></picture></main></body>"#;
+        let ex = html(page, &base());
+        let urls: Vec<&str> = ex.images.iter().map(|i| i.url.path()).collect();
+        assert!(urls.contains(&"/banner.webp") && urls.contains(&"/fallback.jpg"), "{urls:?}");
+        assert!(!urls.iter().any(|u| u.ends_with(".avif")), "{urls:?}");
+    }
+
+    #[test]
+    fn a_srcset_splits_into_its_urls_and_descriptors_as_the_standard_does() {
+        assert_eq!(
+            srcset_candidates("a.jpg, b.jpg 2x,c.jpg,d.jpg 640w"),
+            [("a.jpg", None), ("b.jpg", Some("2x")), ("c.jpg,d.jpg", Some("640w"))]
+        );
+        // A CDN's transform list holds commas: each URL is still one candidate, and the largest one is chosen.
+        let cdn =
+            "https://cdn.example.test/c_scale,w_400/a.jpg 400w, https://cdn.example.test/c_scale,w_800/a.jpg 800w";
+        assert_eq!(best_srcset(cdn).as_deref(), Some("https://cdn.example.test/c_scale,w_800/a.jpg"));
+        assert_eq!(small_srcset(cdn).as_deref(), Some("https://cdn.example.test/c_scale,w_400/a.jpg"));
+    }
+
+    #[test]
+    fn a_products_photo_is_an_image_candidate_after_og_image() {
+        let page = r#"<html><head><meta property="og:image" content="https://example.com/og.jpg"><script type="application/ld+json">{"@type":"Product","name":"Asana","image":"https://cdn.example.test/product.jpg"}</script></head>
+            <body><article><p>Asana is a to-do app for teams.</p><img src="/in-page.jpg" alt="Screenshot"></article></body></html>"#;
+        let ex = html(page, &base());
+        let urls: Vec<&str> = ex.images.iter().map(|i| i.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            ["https://example.com/og.jpg", "https://cdn.example.test/product.jpg", "https://example.com/in-page.jpg"]
+        );
     }
 
     #[test]

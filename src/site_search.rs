@@ -5,7 +5,6 @@
 
 use std::time::{Duration, Instant};
 
-use reqwest::Client;
 use scraper::{Html, Selector};
 use serde_json::Value;
 use url::Url;
@@ -22,27 +21,25 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(6);
 /// The candidate pages the site's own search gives for `question`: the WordPress results as pages of their own, and the
 /// results page of an OpenSearch description or a SearchAction, as one page (its links are then leads like any page's).
 /// Only --precise asks it, and only with a question.
-pub async fn candidates(client: &Client, start: &Url, question: &str, precise: bool, retry: Retry<'_>) -> Vec<Link> {
+pub async fn candidates(start: &Url, question: &str, precise: bool, retry: Retry<'_>) -> Vec<Link> {
     if !precise || question.trim().is_empty() {
         return Vec::new();
     }
-    let Ok(page) = fetch::fetch(client, start.as_str(), retry).await else { return Vec::new() };
+    let Ok(page) = fetch::fetch(start.as_str(), retry).await else { return Vec::new() };
     let html = Html::parse_document(&page.body);
     let mut found: Vec<(Url, String)> = Vec::new();
     let api = wp_root(&html, start)
         .and_then(|root| root.join(&format!("wp/v2/search?search={}&per_page={MAX_RESULTS}", encode(question))).ok());
     let wp = match api {
-        Some(api) => fetch::fetch_small(client, &api, SEARCH_MAX, SEARCH_TIMEOUT, retry, Instant::now()).await,
+        Some(api) => fetch::fetch_small(&api, SEARCH_MAX, SEARCH_TIMEOUT, retry, Instant::now()).await,
         None => None,
     };
     found.extend(wp.map(|body| wp_results(&body)).unwrap_or_default());
     let results = match opensearch_description(&html, start) {
-        Some(description) => {
-            fetch::fetch_small(client, &description, SEARCH_MAX, SEARCH_TIMEOUT, retry, Instant::now())
-                .await
-                .and_then(|xml| opensearch_template(&xml))
-                .map(|t| (t, "searchTerms".to_string()))
-        }
+        Some(description) => fetch::fetch_small(&description, SEARCH_MAX, SEARCH_TIMEOUT, retry, Instant::now())
+            .await
+            .and_then(|xml| opensearch_template(&xml))
+            .map(|t| (t, "searchTerms".to_string())),
         None => search_action_template(&html),
     };
     if let Some((template, name)) = results {
@@ -242,8 +239,14 @@ mod tests {
         );
         let reach = public_run();
         let memo = crate::fetch::Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach };
-        let found = candidates(&crate::fetch::test_server::client(), &start, "pricing", true, retry).await;
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &reach,
+            cookies: &crate::fetch::test_server::NO_COOKIES,
+        };
+        let found = candidates(&start, "pricing", true, retry).await;
         assert!(found.is_empty(), "{found:?}");
         assert_eq!(served.count(), 1, "only the start page is asked");
     }
@@ -254,12 +257,24 @@ mod tests {
         let (start, _served) = site_with_head(head);
         let reach = public_run();
         let memo = crate::fetch::Memo::default();
-        let public = Retry { on: true, memo: &memo, timing: false, reach: &reach };
-        let found = candidates(&crate::fetch::test_server::client(), &start, "pricing", true, public).await;
+        let public = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &reach,
+            cookies: &crate::fetch::test_server::NO_COOKIES,
+        };
+        let found = candidates(&start, "pricing", true, public).await;
         assert!(found.is_empty(), "the public run lists no result at 127.0.0.2: {found:?}");
         // The same site under a private run lists its result, so the empty list above is the guard's doing.
-        let private = Retry { on: true, memo: &memo, timing: false, reach: &crate::fetch::test_server::PRIVATE };
-        let found = candidates(&crate::fetch::test_server::client(), &start, "pricing", true, private).await;
+        let private = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &crate::fetch::test_server::PRIVATE,
+            cookies: &crate::fetch::test_server::NO_COOKIES,
+        };
+        let found = candidates(&start, "pricing", true, private).await;
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].url.as_str(), "http://127.0.0.2:1/search?q=pricing");
     }
