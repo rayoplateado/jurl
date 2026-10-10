@@ -428,9 +428,7 @@ where
 
 /// Download and shrink to a small JPEG: fewer vision tokens, faster Clef. An image past `IMAGE_MAX` is not read.
 async fn thumbnail(client: &Client, reach: &crate::reach::Reach, url: &url::Url) -> Result<String> {
-    crate::reach::admit(url, reach)?;
-    let client = crate::fetch::plain_for(reach, client);
-    let mut res = client.get(url.as_str()).send().await?.error_for_status()?;
+    let mut res = crate::fetch::send_get(client, url.as_str(), reach, None, None).await?.error_for_status()?;
     let Some(bytes) = fetch::read_capped(&mut res, IMAGE_MAX).await? else {
         bail!("{url}: image larger than {}", fetch::size_label(IMAGE_MAX));
     };

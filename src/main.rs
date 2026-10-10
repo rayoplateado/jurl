@@ -274,7 +274,7 @@ pub(crate) async fn load(
     t: &mut Timer,
 ) -> Result<(url::Url, Extracted)> {
     let page = if args.render {
-        lightpanda_allowed(&args.reach)?;
+        fetch::render_allowed(target, &args.reach, args.public_only).await?;
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
         let page = fetch::render(&bin, target).await?;
         t.lap("render");
@@ -303,7 +303,7 @@ pub(crate) async fn load(
     let text: usize = ex.blocks.iter().filter(|b| b.kind != Kind::Heading).map(|b| b.text.len()).sum();
     let shell = ex.app_shell && text < APP_SHELL_TEXT;
     if !args.render && (shell || placeholders) {
-        if let Err(e) = lightpanda_allowed(&args.reach) {
+        if let Err(e) = fetch::render_allowed(&page.url, &args.reach, args.public_only).await {
             // An app shell has nothing to read without its render. A page with placeholders is readable as it is.
             if shell {
                 return Err(e);
@@ -330,15 +330,4 @@ pub(crate) async fn load(
         }
     }
     Ok((page.url, ex))
-}
-
-/// Rendering runs a browser, which makes requests of its own (its DNS, its redirects, the page's scripts) that the address
-/// check cannot see. So a run from a public address does not render; a run from a private one may.
-fn lightpanda_allowed(reach: &crate::reach::Reach) -> Result<()> {
-    match reach {
-        crate::reach::Reach::Private => Ok(()),
-        crate::reach::Reach::Public { .. } => {
-            bail!("rendering is off in a run from a public address: the browser's own requests are not checked")
-        }
-    }
 }

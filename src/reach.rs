@@ -7,7 +7,9 @@
 //!
 //! The check is at the connection, not only at the URL: [`GlobalOnly`] is the DNS resolver of the guarded clients, so the
 //! address a connection goes to is the one checked, and a name that rebinds to a private address after the start is refused
-//! too. A literal address never reaches a resolver, so it is checked in [`admit`] and by the redirect policy instead.
+//! too. A literal address never reaches a resolver, so it is checked before each request ([`check`]), and so is each redirect's
+//! target: the guarded clients follow no redirects of their own (see `fetch::send_get`). Under a proxy the proxy connects, so
+//! the check before each request is what covers it; the README says what that does not cover.
 
 use std::{
     collections::HashSet,
@@ -16,11 +18,11 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use url::{Host, Url};
 
 /// How many redirects a page's request may follow, as the normal client has always allowed.
-const MAX_REDIRECTS: usize = 10;
+pub(crate) const MAX_REDIRECTS: usize = 10;
 
 /// What a run may read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -102,29 +104,6 @@ pub(crate) fn admit(url: &Url, reach: &Reach) -> Result<(), NotPublic> {
     }
 }
 
-/// The guarded clients' redirect policy: at most [`MAX_REDIRECTS`] hops, and no hop to a literal address that is not public.
-pub(crate) fn redirect(attempt: reqwest::redirect::Attempt) -> reqwest::redirect::Action {
-    if attempt.previous().len() >= MAX_REDIRECTS {
-        return attempt.error("too many redirects");
-    }
-    match literal(attempt.url()) {
-        Some(ip) if !is_global(ip) => attempt.error(NotPublic),
-        _ => attempt.follow(),
-    }
-}
-
-/// The browser client's redirect policy, the same rule as [`redirect`].
-pub(crate) fn browser_redirect(attempt: wreq::redirect::Attempt) -> wreq::redirect::Action {
-    if attempt.previous.len() >= MAX_REDIRECTS {
-        return attempt.error("too many redirects");
-    }
-    let target = Url::parse(&attempt.uri.to_string());
-    match target.ok().as_ref().and_then(literal) {
-        Some(ip) if !is_global(ip) => attempt.error(NotPublic),
-        _ => attempt.follow(),
-    }
-}
-
 /// The addresses in `found` that are public, or the refusal when none are.
 pub(crate) fn public_only(found: impl IntoIterator<Item = SocketAddr>) -> Result<Vec<SocketAddr>, NotPublic> {
     let public: Vec<SocketAddr> = found.into_iter().filter(|a| is_global(a.ip())).collect();
@@ -133,21 +112,35 @@ pub(crate) fn public_only(found: impl IntoIterator<Item = SocketAddr>) -> Result
 
 /// The DNS resolver of the guarded clients: the system's answers for a name, with the addresses that are not public removed.
 /// A name with no public answer fails, so a connection is never made to a private address. reqwest and the browser client
-/// ask it for each new connection, so the address checked is the address connected to.
-pub(crate) struct GlobalOnly;
+/// ask it for each new connection, so the address checked is the address connected to. The names in `exempt` are a proxy's
+/// own host (see [`proxy_hosts`]): a connection to the proxy is not a page's address, so those names resolve as the system does.
+pub(crate) struct GlobalOnly {
+    exempt: Vec<String>,
+}
 
-async fn lookup_public(name: &str) -> Result<Vec<SocketAddr>, Box<dyn Error + Send + Sync>> {
+impl GlobalOnly {
+    pub(crate) fn new(exempt: Vec<String>) -> Self {
+        GlobalOnly { exempt }
+    }
+
+    fn is_exempt(&self, name: &str) -> bool {
+        self.exempt.iter().any(|e| e.eq_ignore_ascii_case(name))
+    }
+}
+
+async fn lookup(name: &str, exempt: bool) -> Result<Vec<SocketAddr>, Box<dyn Error + Send + Sync>> {
     // Port 0: the client sets the URL's own port on each address.
     let found = tokio::net::lookup_host((name, 0)).await?;
-    Ok(public_only(found)?)
+    if exempt { Ok(found.collect()) } else { Ok(public_only(found)?) }
 }
 
 impl reqwest::dns::Resolve for GlobalOnly {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_string();
+        let exempt = self.is_exempt(&host);
         Box::pin(async move {
-            let public = lookup_public(&host).await?;
-            Ok(Box::new(public.into_iter()) as reqwest::dns::Addrs)
+            let addrs = lookup(&host, exempt).await?;
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
 }
@@ -155,11 +148,54 @@ impl reqwest::dns::Resolve for GlobalOnly {
 impl wreq::dns::Resolve for GlobalOnly {
     fn resolve(&self, name: wreq::dns::Name) -> wreq::dns::Resolving {
         let host = name.as_str().to_string();
+        let exempt = self.is_exempt(&host);
         Box::pin(async move {
-            let public = lookup_public(&host).await?;
-            Ok(Box::new(public.into_iter()) as wreq::dns::Addrs)
+            let addrs = lookup(&host, exempt).await?;
+            Ok(Box::new(addrs.into_iter()) as wreq::dns::Addrs)
         })
     }
+}
+
+/// The variables a proxy is read from, in the order reqwest reads them (both spellings).
+const PROXY_VARS: [&str; 6] = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"];
+
+/// Whether a proxy is set, as `get` reads the environment. An empty value is not a proxy.
+pub(crate) fn proxy_configured(get: impl Fn(&str) -> Option<String>) -> bool {
+    PROXY_VARS.iter().any(|name| get(name).is_some_and(|v| !v.trim().is_empty()))
+}
+
+/// The host names of the proxies `get` reads: the first names a connection goes to, when a proxy is used.
+pub(crate) fn proxy_hosts(get: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    PROXY_VARS
+        .iter()
+        .filter_map(|name| get(name))
+        .filter_map(|value| {
+            let value = value.trim();
+            let url = if value.contains("://") { value.to_string() } else { format!("http://{value}") };
+            Url::parse(&url).ok()?.host_str().map(str::to_ascii_lowercase)
+        })
+        .collect()
+}
+
+/// Checks the address `url` will be read from, before a request for it, under `reach`. A literal must be admitted (see
+/// [`admit`]); a name must resolve to public addresses only, since the request may connect to any of them. A private run
+/// checks nothing. Under a proxy the proxy resolves the name itself, so this check is what covers the request (see README).
+pub(crate) async fn check(url: &Url, reach: &Reach) -> Result<()> {
+    if matches!(reach, Reach::Private) {
+        return Ok(());
+    }
+    admit(url, reach)?;
+    if literal(url).is_some() {
+        return Ok(());
+    }
+    let Some(host) = url.host_str() else { bail!("{url}: no host to check") };
+    let port = url.port_or_known_default().unwrap_or(80);
+    let answers: Vec<SocketAddr> =
+        tokio::net::lookup_host((host, port)).await.with_context(|| format!("resolving {host}"))?.collect();
+    if answers.is_empty() {
+        bail!("{host}: no address to check");
+    }
+    if answers.iter().all(|a| is_global(a.ip())) { Ok(()) } else { Err(NotPublic.into()) }
 }
 
 /// Whether `JURL_PUBLIC_ONLY` is set to 1: the start URL must then be public, or the run is refused. The cloud runner sets it.
@@ -177,21 +213,29 @@ pub(crate) async fn decide(start: &Url, required: bool) -> Result<Reach> {
     Ok(reach)
 }
 
-/// Sets `args`' reach from its start URL and `JURL_PUBLIC_ONLY`, once per run, after `prepare` has given the URL its scheme.
-/// A start that is not a URL keeps the private reach, and the run fails where it always has.
+/// Sets `args`' reach from its start URL, and the public-only flag from `JURL_PUBLIC_ONLY`, once per run, after `prepare` has
+/// given the URL its scheme. A start that is not a URL keeps the private reach, and the run fails where it always has.
 pub(crate) async fn set_reach(args: &mut crate::cli::Args) -> Result<()> {
-    set_reach_with(args, required_by_env(std::env::var("JURL_PUBLIC_ONLY").ok().as_deref())).await
+    let env = |name: &str| std::env::var(name).ok();
+    set_reach_with(args, required_by_env(env("JURL_PUBLIC_ONLY").as_deref()), proxy_configured(env)).await
 }
 
-/// [`set_reach`] with `required` given: a start that is not a URL is not public, so it is an error when public-only is required.
-async fn set_reach_with(args: &mut crate::cli::Args, required: bool) -> Result<()> {
+/// [`set_reach`] with the environment given. Under `public_only` a proxy is refused, and so is a start that is not a public
+/// address or not a URL.
+async fn set_reach_with(args: &mut crate::cli::Args, public_only: bool, proxy: bool) -> Result<()> {
+    args.public_only = public_only;
+    if public_only && proxy {
+        bail!(
+            "JURL_PUBLIC_ONLY=1 refuses a proxy: HTTP_PROXY, HTTPS_PROXY or ALL_PROXY is set, and a proxy resolves the page's name itself, outside the address check"
+        );
+    }
     let Ok(start) = Url::parse(&args.url) else {
-        if required {
+        if public_only {
             bail!("{}: not a URL, and JURL_PUBLIC_ONLY=1 allows only public addresses", args.url);
         }
         return Ok(());
     };
-    args.reach = decide(&start, required).await?;
+    args.reach = decide(&start, public_only).await?;
     Ok(())
 }
 
@@ -458,7 +502,8 @@ mod tests {
     async fn a_name_that_resolves_only_to_loopback_is_refused_by_the_guarded_client() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
         let port = listener.local_addr().expect("the address").port();
-        let client = reqwest::Client::builder().no_proxy().dns_resolver(GlobalOnly).build().expect("a client");
+        let client =
+            reqwest::Client::builder().no_proxy().dns_resolver(GlobalOnly::new(Vec::new())).build().expect("a client");
         let err = client.get(format!("http://localhost:{port}/")).send().await.expect_err("refused");
         assert!(refused(&err), "the refusal is in the chain: {err:?}");
     }
@@ -477,18 +522,53 @@ mod tests {
         use clap::Parser;
         let parse = |url: &str| crate::cli::Args::try_parse_from(["jurl", url]).expect("args");
         let mut private = parse("http://127.0.0.1:8080/");
-        assert!(set_reach_with(&mut private, true).await.is_err(), "a private start is refused when required");
+        assert!(set_reach_with(&mut private, true, false).await.is_err(), "a private start is refused when required");
         let mut private = parse("http://127.0.0.1:8080/");
-        set_reach_with(&mut private, false).await.expect("a private run");
+        set_reach_with(&mut private, false, false).await.expect("a private run");
         assert_eq!(private.reach, Reach::Private);
         let mut public = parse("http://93.184.216.34/");
-        set_reach_with(&mut public, true).await.expect("a public run");
+        set_reach_with(&mut public, true, false).await.expect("a public run");
         assert!(matches!(public.reach, Reach::Public { .. }));
         let mut broken = parse("http://93.184.216.34/");
         broken.url = "https://exa mple.com".to_string();
-        assert!(set_reach_with(&mut broken, true).await.is_err(), "a start that is not a URL is not public");
+        assert!(set_reach_with(&mut broken, true, false).await.is_err(), "a start that is not a URL is not public");
         broken.reach = Reach::Private;
-        set_reach_with(&mut broken, false).await.expect("without the requirement it is left to the fetch");
+        set_reach_with(&mut broken, false, false).await.expect("without the requirement it is left to the fetch");
+    }
+
+    #[test]
+    fn a_proxy_is_read_from_the_environment_and_its_host_is_named() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string())
+        };
+        assert!(proxy_configured(env(&[("HTTPS_PROXY", "http://proxy.corp:3128")])));
+        assert!(!proxy_configured(env(&[("HTTP_PROXY", "  ")])), "an empty value is no proxy");
+        assert!(!proxy_configured(env(&[("NO_PROXY", "localhost")])));
+        assert_eq!(proxy_hosts(env(&[("HTTP_PROXY", "http://Proxy.Corp:3128")])), ["proxy.corp"]);
+        assert_eq!(proxy_hosts(env(&[("ALL_PROXY", "proxy2.corp:3128")])), ["proxy2.corp"], "a bare host and port");
+    }
+
+    #[tokio::test]
+    async fn public_only_refuses_a_configured_proxy() {
+        use clap::Parser;
+        let parse = || crate::cli::Args::try_parse_from(["jurl", "http://93.184.216.34/"]).expect("args");
+        let mut refused = parse();
+        assert!(set_reach_with(&mut refused, true, true).await.is_err(), "a proxy is refused under JURL_PUBLIC_ONLY");
+        assert!(refused.public_only);
+        let mut allowed = parse();
+        set_reach_with(&mut allowed, false, true).await.expect("a proxy is used without the requirement");
+        assert!(matches!(allowed.reach, Reach::Public { .. }));
+    }
+
+    #[tokio::test]
+    async fn the_pre_check_admits_a_public_address_and_refuses_a_name_that_is_not_public() {
+        let public = Reach::Public { allowed: HashSet::new() };
+        check(&Url::parse("http://93.184.216.34/x").unwrap(), &public).await.expect("a public literal");
+        let private = Url::parse("http://10.0.0.1/x").unwrap();
+        assert!(format!("{:#}", check(&private, &public).await.unwrap_err()) == "not a public address");
+        let named = Url::parse("http://localhost:8080/x").unwrap();
+        assert!(format!("{:#}", check(&named, &public).await.unwrap_err()) == "not a public address");
+        check(&named, &Reach::Private).await.expect("a private run checks nothing");
     }
 
     #[tokio::test]
