@@ -378,6 +378,35 @@ async fn site_files(client: &Client, start: &Url, site: &Site, retry: Retry<'_>)
     SiteFiles { robots, links: without_language_copies(start, out) }
 }
 
+/// The pages the sitemaps of each of `hosts` list (see [`crate::hosts::linked_hosts`]): the host's /sitemap.xml and the
+/// sitemaps its robots.txt names, read as the start site's own are (see [`site_files`]). Kept when they share the start
+/// page's registrable domain.
+async fn linked_sitemaps(client: &Client, start: &Url, hosts: &[Url], retry: Retry<'_>) -> Vec<Link> {
+    let per_host = join_all(hosts.iter().map(|origin| async move {
+        let own = origin.join("/sitemap.xml").ok();
+        let robots = match origin.join("/robots.txt") {
+            Ok(url) => small_text(client, &url, retry).await,
+            Err(_) => None,
+        };
+        let mut urls: Vec<String> = Vec::new();
+        if let Some(own) = &own {
+            urls.extend(sitemap_pages(client, own, retry).await);
+        }
+        for listed in robots_sitemap_urls(robots.as_deref().unwrap_or_default(), origin, own.as_ref()) {
+            urls.extend(sitemap_pages(client, &listed, retry).await);
+        }
+        urls
+    }))
+    .await;
+    per_host
+        .into_iter()
+        .flatten()
+        .filter_map(|u| Url::parse(&u).ok())
+        .filter(|u| crate::hosts::same_registrable(start, u))
+        .map(|url| Link { i: 0, text: url.path().to_string(), url, context: String::new(), marginal: false })
+        .collect()
+}
+
 /// The llms.txt of each of `hosts` (see [`crate::hosts::linked_hosts`]): the pages it lists, kept when they share the start
 /// page's registrable domain. Read as the start site's own llms.txt is (see [`site_files`]).
 async fn linked_llms(client: &Client, start: &Url, hosts: &[Url], retry: Retry<'_>) -> Vec<Link> {
@@ -754,7 +783,12 @@ impl Search {
         let (known0, field0) = (HashSet::new(), FieldScores::new());
         let (first, hints) =
             tokio::join!(judge(args, client, api_key, url, ex, &site, &known0, &field0, &read_before), async {
-                map.extend(linked_llms(client, start, &linked, retry).await);
+                let (llms, sitemaps) = tokio::join!(
+                    linked_llms(client, start, &linked, retry),
+                    linked_sitemaps(client, start, &linked, retry),
+                );
+                map.extend(llms);
+                map.extend(sitemaps);
                 site_hints(args, client, api_key, start, &site, map).await
             },);
         let mut first = first?;
@@ -1768,6 +1802,18 @@ mod tests {
         assert!(Site::reachable(&u("https://shopify.dev/docs")));
         assert!(!Site::reachable(&u("https://shopify.dev/report.pdf")));
         assert!(!Site::reachable(&u("mailto:a@shopify.com")));
+    }
+
+    #[tokio::test]
+    async fn a_linked_hosts_sitemap_is_read_through_its_robots_txt_and_its_pages_are_kept() {
+        let (linked, _) = site_at(vec![
+            ("/robots.txt", "User-agent: *\nSitemap: http://{host}/feeds/docs.xml\n"),
+            ("/feeds/docs.xml", "<urlset><url><loc>http://{host}/rate-limits</loc></url></urlset>"),
+        ]);
+        let start = Url::parse(&format!("http://127.0.0.1:{}/", linked.port().unwrap())).unwrap();
+        let links = linked_sitemaps(&test_server::client(), &start, std::slice::from_ref(&linked), retry_off()).await;
+        let urls: Vec<String> = links.iter().map(|l| l.url.path().to_string()).collect();
+        assert_eq!(urls, ["/rate-limits"]);
     }
 
     #[test]
