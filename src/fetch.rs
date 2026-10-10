@@ -38,12 +38,16 @@ async fn fetch_capped(client: &Client, url: &str, max: usize) -> Result<Page> {
     }
     let final_url = res.url().clone();
     let ct = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    let links: Vec<String> =
+        res.headers().get_all(header::LINK).iter().filter_map(|v| v.to_str().ok()).map(String::from).collect();
     let Some(bytes) = read_capped(&mut res, max).await? else {
         bail!("{url}: page larger than {}", size_label(max));
     };
     let body = decode(&ct, &bytes);
     let is_markdown = served_markdown(&ct, &body);
-    Ok(Page { url: final_url, body, is_markdown })
+    // The body is read as its markdown, but the page a person reads is the HTML page it is the alternate of.
+    let url = if is_markdown { html_twin(client, &final_url, &links).await.unwrap_or(final_url) } else { final_url };
+    Ok(Page { url, body, is_markdown })
 }
 
 /// The body of `res`, or None once it is larger than `max` bytes. The Content-Length is checked first, but the bytes
@@ -98,6 +102,71 @@ fn served_markdown(content_type: &str, body: &str) -> bool {
     content_type.contains("markdown") || (content_type.starts_with("text/plain") && !body.trim_start().starts_with('<'))
 }
 
+/// How long a check that a page's HTML twin exists may take. It reads the response's headers and no more.
+const TWIN_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// The HTML page a markdown page is the alternate of, if there is one. A `Link: <…>; rel="canonical"` header names it
+/// (RFC 8288; RFC 6596 defines the relation). Failing that, a `…/x.md` URL is the markdown of `…/x`, as the llms.txt
+/// proposal (llmstxt.org) has it: a page's markdown is at the same URL with `.md` appended, and a directory's at
+/// `index.md`. A candidate counts only if it answers with an HTML page on the same host, so a page the site doesn't
+/// have is never named.
+async fn html_twin(client: &Client, url: &Url, links: &[String]) -> Option<Url> {
+    let canonical = links.iter().filter_map(|l| canonical_link(l)).filter_map(|c| url.join(c).ok());
+    for candidate in canonical.chain(md_stem(url)) {
+        if candidate == *url || candidate.host_str() != url.host_str() {
+            continue;
+        }
+        if let Some(page) = serves_html(client, &candidate).await {
+            return Some(page);
+        }
+    }
+    None
+}
+
+/// The target of the first link in a `Link` header value whose `rel` is `canonical`. A link is `<uri>` and then its
+/// `;`-separated parameters; links are separated by commas.
+fn canonical_link(value: &str) -> Option<&str> {
+    let mut rest = value;
+    while let Some(open) = rest.find('<') {
+        let after = &rest[open + 1..];
+        let close = after.find('>')?;
+        let params = after[close + 1..].split(',').next().unwrap_or_default();
+        let canonical = params.split(';').any(|p| {
+            p.split_once('=').is_some_and(|(name, rel)| {
+                name.trim().eq_ignore_ascii_case("rel")
+                    && rel.trim().trim_matches('"').split_whitespace().any(|r| r.eq_ignore_ascii_case("canonical"))
+            })
+        });
+        if canonical {
+            return Some(&after[..close]);
+        }
+        rest = &after[close + 1..];
+    }
+    None
+}
+
+/// The page a `…/x.md` URL is the markdown of: `…/x`, or for `…/index.md` the directory `…/`. None for any other URL.
+fn md_stem(url: &Url) -> Option<Url> {
+    let path = url.path().strip_suffix(".md").filter(|p| !p.is_empty() && !p.ends_with('/'))?;
+    let stem = match path.rsplit_once('/') {
+        Some((dir, last)) if last == "index" || last == "index.html" => format!("{dir}/"),
+        _ => path.to_string(),
+    };
+    let mut page = url.clone();
+    page.set_path(&stem);
+    Some(page)
+}
+
+/// The URL of the page at `url` if it answers with an HTML page on the same host, after any redirects. The request asks
+/// for HTML outright: a site that answers every request with its markdown must not pass for its own HTML.
+async fn serves_html(client: &Client, url: &Url) -> Option<Url> {
+    let res = client.get(url.as_str()).header(header::ACCEPT, "text/html").timeout(TWIN_TIMEOUT).send().await.ok()?;
+    let ct = res.headers().get(header::CONTENT_TYPE)?.to_str().ok()?;
+    let html = ct.starts_with("text/html") || ct.starts_with("application/xhtml+xml");
+    let same_host = res.url().host_str() == url.host_str();
+    (res.status().is_success() && html && same_host).then(|| res.url().clone())
+}
+
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.
 /// Waits for the network to settle and for real visible text to appear, capped at 8s:
 /// SPAs keep background traffic going and often paint content after the network calms down.
@@ -139,7 +208,7 @@ pub async fn render(bin: &Path, url: &Url) -> Result<Page> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test_server::{client, serve};
+    use test_server::{client, serve, serve_routes};
 
     #[test]
     fn markdown_served_as_plain_text_is_markdown() {
@@ -232,6 +301,82 @@ mod tests {
         assert_eq!(size_label(1 << 10), "1 KB");
         assert_eq!(size_label(1500), "1500 bytes");
     }
+
+    /// A 200 response for `path`: its Content-Type, any extra header lines (each ending in CRLF), and its body.
+    fn route(path: &'static str, content_type: &str, extra: &str, body: &str) -> (&'static str, String, Vec<u8>) {
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n",
+            body.len()
+        );
+        (path, head, body.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn a_canonical_link_is_found_among_the_others() {
+        let preload = "</fonts/a.woff2>; rel=preload; as=font, </x.css>; rel=preload";
+        assert_eq!(canonical_link(preload), None);
+        let both = format!("{preload}, <https://site.test/page>; rel=\"alternate canonical\"");
+        assert_eq!(canonical_link(&both), Some("https://site.test/page"));
+    }
+
+    #[test]
+    fn a_md_url_names_the_page_it_is_the_markdown_of() {
+        let stem = |u: &str| md_stem(&Url::parse(u).unwrap()).map(|s| s.to_string());
+        assert_eq!(stem("https://linear.app/docs/saml.md").as_deref(), Some("https://linear.app/docs/saml"));
+        assert_eq!(stem("https://site.test/docs/page.html.md").as_deref(), Some("https://site.test/docs/page.html"));
+        assert_eq!(stem("https://site.test/docs/index.md").as_deref(), Some("https://site.test/docs/"));
+        assert_eq!(stem("https://site.test/docs/saml"), None);
+        assert_eq!(stem("https://site.test/.md"), None);
+    }
+
+    #[tokio::test]
+    async fn a_markdown_page_at_md_is_read_as_the_html_page_it_is_the_alternate_of() {
+        let md = "# Pricing\n\nThe Enterprise plan includes SSO.\n";
+        let base = serve_routes(
+            vec![
+                route("/docs/saml.md", "text/markdown; charset=utf-8", "", md),
+                route("/docs/saml", "text/html", "", "<h1>Pricing</h1>"),
+            ],
+            2,
+        );
+        let page =
+            fetch_capped(&client(), &format!("{base}/docs/saml.md"), SMALL).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(page.is_markdown);
+        assert_eq!(page.url.as_str(), format!("{base}/docs/saml"));
+        assert_eq!(page.body, md);
+    }
+
+    #[tokio::test]
+    async fn a_markdown_page_whose_twin_is_missing_or_not_html_keeps_its_md_url() {
+        // `a`'s twin is missing (404); `b`'s answers with markdown again, which is not an HTML page.
+        let base = serve_routes(
+            vec![
+                route("/docs/a.md", "text/markdown", "", "# A\n"),
+                route("/docs/b.md", "text/markdown", "", "# B\n"),
+                route("/docs/b", "text/markdown", "", "# B\n"),
+            ],
+            4,
+        );
+        for path in ["/docs/a.md", "/docs/b.md"] {
+            let url = format!("{base}{path}");
+            let page = fetch_capped(&client(), &url, SMALL).await.unwrap_or_else(|e| panic!("{e:#}"));
+            assert_eq!(page.url.as_str(), url);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_canonical_link_names_the_html_page() {
+        let base = serve_routes(
+            vec![
+                route("/docs/one", "text/markdown", "Link: </docs/canon>; rel=\"canonical\"\r\n", "# One\n"),
+                route("/docs/canon", "text/html", "", "<p>One</p>"),
+            ],
+            2,
+        );
+        let page =
+            fetch_capped(&client(), &format!("{base}/docs/one"), SMALL).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.url.as_str(), format!("{base}/docs/canon"));
+    }
 }
 
 /// A one-shot server on 127.0.0.1, for the tests that need a body of a given size or shape.
@@ -270,6 +415,33 @@ pub(crate) mod test_server {
             let _ = conn.write_all(b"0\r\n\r\n");
         });
         format!("http://{addr}/page")
+    }
+
+    /// Answers each request with the route for its path (its head and body), or a 404 for a path with no route; it
+    /// serves `requests` requests and then stops. Returns the base URL to fetch from.
+    pub(crate) fn serve_routes(routes: Vec<(&'static str, String, Vec<u8>)>, requests: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the loopback address");
+        thread::spawn(move || {
+            for _ in 0..requests {
+                let Ok((mut conn, _)) = listener.accept() else { return };
+                let mut request = [0u8; 4096];
+                let n = conn.read(&mut request).unwrap_or(0);
+                let line = String::from_utf8_lossy(&request[..n]).to_string();
+                let path = line.split_whitespace().nth(1).unwrap_or_default();
+                let (head, body) = match routes.iter().find(|(p, _, _)| *p == path) {
+                    Some((_, head, body)) => (head.clone(), body.clone()),
+                    None => (
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+                        Vec::new(),
+                    ),
+                };
+                if conn.write_all(head.as_bytes()).is_ok() {
+                    let _ = conn.write_all(&body);
+                }
+            }
+        });
+        format!("http://{addr}")
     }
 
     /// A client for the loopback server, which ignores any proxy in the environment.
