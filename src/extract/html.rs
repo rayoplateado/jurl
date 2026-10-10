@@ -126,19 +126,28 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
         push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
     }
-    // A responsive picture's banner is often only in its <source> srcsets, with the <img> as the fallback. Each source of a
-    // type the decoder reads is a candidate at its largest size, as an <img>'s srcset is read, with the picture's alt text.
-    for source in root.select(&sel("picture > source")) {
-        if image_skipped(source, in_body) || !decodable_type(source.value().attr("type")) {
+    // A responsive picture's banner is often only in its <source> srcsets, with the <img> as the fallback. Its sources are
+    // renditions of one image for several breakpoints, so the picture is one candidate: the largest rendition of any of its
+    // sources that the decoder reads, with that source's small preview and the picture's alt text. Renditions differ by
+    // their URLs (a query string each), so exact-URL dedup would keep all of them, and they would take the slots of others.
+    for picture in root.select(&sel("picture")) {
+        if image_skipped(picture, in_body) {
             continue;
         }
-        let Some(srcset) = source.value().attr("srcset") else { continue };
-        let Some(src) = best_srcset(srcset) else { continue };
+        let best = picture
+            .select(&sel("source"))
+            .filter(|s| decodable_type(s.value().attr("type")))
+            .filter_map(|s| {
+                let srcset = s.value().attr("srcset")?;
+                let (src, scale) = best_candidate(srcset)?;
+                Some((src, scale, srcset))
+            })
+            .reduce(|a, b| if b.1 > a.1 { b } else { a });
+        let Some((src, _, srcset)) = best else { continue };
         let preview = small_srcset(srcset);
-        let alt = source
-            .parent()
-            .and_then(ElementRef::wrap)
-            .and_then(|picture| picture.select(&sel("img")).next())
+        let alt = picture
+            .select(&sel("img"))
+            .next()
             .map(|img| collapse(img.value().attr("alt").unwrap_or("")))
             .unwrap_or_default();
         push_image(&mut images, base, &src, preview.as_deref(), alt, String::new(), None, None);
@@ -657,13 +666,14 @@ fn scale(descriptor: Option<&str>) -> f32 {
         .unwrap_or(1.0)
 }
 
-/// The largest candidate of a srcset: one picture at several sizes, so the largest is the one to look at.
+/// The largest candidate of a srcset, with its scale: one picture at several sizes, so the largest is the one to look at.
+fn best_candidate(srcset: &str) -> Option<(String, f32)> {
+    srcset_candidates(srcset).into_iter().map(|(url, d)| (url.to_string(), scale(d))).max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// The URL of [`best_candidate`].
 fn best_srcset(srcset: &str) -> Option<String> {
-    srcset_candidates(srcset)
-        .into_iter()
-        .map(|(url, d)| (url, scale(d)))
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(u, _)| u.to_string())
+    best_candidate(srcset).map(|(url, _)| url)
 }
 
 /// Smallest srcset candidate that is still big enough to recognise (≥320w).
@@ -922,6 +932,18 @@ mod tests {
         assert_eq!(banner.preview.path(), "/s/banner-320.webp");
         assert_eq!(banner.alt, "Banner");
         assert!(ex.images.iter().any(|i| i.url.path() == "/fallback.jpg"), "{:?}", ex.images);
+    }
+
+    #[test]
+    fn a_picture_is_one_candidate_however_many_renditions_its_sources_give() {
+        // Renditions of one banner differ by their query strings, so exact-URL dedup would keep every one of them.
+        let page = r#"<body><main><picture><source media="(min-width: 1024px)" srcset="/banner.webp?w=1280 1280w, /banner.webp?w=960 960w" type="image/webp"><source media="(max-width: 1023px)" srcset="/banner.webp?w=640 640w, /banner.webp?w=320 320w" type="image/webp"><img src="/banner.jpg" alt="Sale"></picture></main></body>"#;
+        let ex = html(page, &base());
+        let renditions: Vec<&str> =
+            ex.images.iter().map(|i| i.url.as_str()).filter(|u| u.contains("banner.webp")).collect();
+        assert_eq!(renditions.len(), 1, "{:?}", ex.images);
+        assert!(renditions[0].ends_with("w=1280"), "{renditions:?}");
+        assert!(ex.images.iter().any(|i| i.url.path() == "/banner.jpg"), "the <img> fallback is its own candidate");
     }
 
     #[test]
