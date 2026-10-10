@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::{HashMap, HashSet, hash_map::Entry},
     path::Path,
     process::Stdio,
     sync::{LazyLock, Mutex, MutexGuard, PoisonError, atomic::Ordering::Relaxed},
@@ -37,15 +37,29 @@ const PAGE_MAX: usize = 8 << 20;
 pub(crate) const STICKY_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// The hosts that need the browser client, each with the moment a retry first showed it. One memo per process, so the hops
-/// of a `--follow` search and the calls of a `jurl mcp` server share it.
+/// of a `--follow` search and the calls of a `jurl mcp` server share it. The stealth sidecar keeps its own memo per run (see
+/// `stealth.rs`), of the hosts whose call failed: that is the other half of this type.
 #[derive(Default)]
 pub(crate) struct Memo {
     learned: Mutex<HashMap<String, Instant>>,
+    /// The hosts whose stealth-sidecar call failed. Kept for the memo's whole life, with no window: a run's memo lives as long as
+    /// the run.
+    sidecar_failed: Mutex<HashSet<String>>,
 }
 
 impl Memo {
     fn entries(&self) -> MutexGuard<'_, HashMap<String, Instant>> {
         self.learned.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether the stealth sidecar's call for `host` failed in this memo's run.
+    pub(crate) fn sidecar_failed(&self, host: &str) -> bool {
+        self.sidecar_failed.lock().unwrap_or_else(PoisonError::into_inner).contains(host)
+    }
+
+    /// Records that the stealth sidecar's call for `host` failed: the host is not asked again in this memo's run.
+    pub(crate) fn fail_sidecar(&self, host: &str) {
+        self.sidecar_failed.lock().unwrap_or_else(PoisonError::into_inner).insert(host.to_string());
     }
 
     /// Whether `host` is on the browser client at `now`. Entries older than STICKY_TTL are dropped first.
@@ -120,7 +134,7 @@ impl Retry<'_> {
 }
 
 /// The memo's name for a host: the host, with the port when the URL names one.
-fn host_key(url: &Url) -> Option<String> {
+pub(crate) fn host_key(url: &Url) -> Option<String> {
     let host = url.host_str()?;
     Some(match url.port() {
         Some(port) => format!("{host}:{port}"),
