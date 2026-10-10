@@ -50,7 +50,7 @@ pub(crate) struct Args {
     /// What the run may read, set from the start URL once it is known (see `reach.rs`). Not a flag.
     #[arg(skip)]
     pub(crate) reach: crate::reach::Reach,
-    /// Whether `JURL_PUBLIC_ONLY=1` is set (see `reach.rs`): it refuses a proxy and rendering as well. Not a flag.
+    /// Whether `JURL_PUBLIC_ONLY=1` is set (see `reach.rs`): it refuses an environment proxy and rendering as well. Not a flag.
     #[arg(skip)]
     pub(crate) public_only: bool,
     /// Whether `JURL_RENDER_SANDBOXED=1` is set (see `reach.rs`): a public run may render under `JURL_PUBLIC_ONLY`. Not a flag.
@@ -64,6 +64,10 @@ pub(crate) struct Args {
     /// memo and its budget are this run's own. Not a flag.
     #[arg(skip)]
     pub(crate) stealth: Option<crate::stealth::Sidecar>,
+    /// The fallback proxy this run is set up with (see `fallback.rs`), when `JURL_FALLBACK_PROXY` names one. The hosts it puts on
+    /// the proxy are this run's own. Not a flag.
+    #[arg(skip)]
+    pub(crate) fallback: crate::fallback::Fallback,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,

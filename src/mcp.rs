@@ -405,6 +405,7 @@ async fn run(client: &Client, argv: &[String]) -> Value {
             args.render_sandboxed,
             args.timing,
         );
+        args.fallback = crate::fallback::Fallback::configured(|key| cfg.get(key))?;
         let access = crate::setup::saved_access(&cfg)?;
         crate::page(&args, &cfg, client, &access, &mut Timer::new()).await
     }

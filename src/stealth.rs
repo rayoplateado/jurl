@@ -1,6 +1,6 @@
 //! Rung 5 of the read ladder: a stealth sidecar that loads one public page in a stealth browser (Camoufox, MPL-2.0) and
 //! returns the rendered HTML, with its own verdict on what it found. jurl asks it only for a page that a host still refuses
-//! with 401, 403 or 429 after rungs 1–2 (see `fetch::fetch_capped`), and only when `JURL_STEALTH_URL` and
+//! with 401, 403 or 429 after rungs 1–3 (see `fetch::fetch_capped`), and only when `JURL_STEALTH_URL` and
 //! `JURL_STEALTH_TOKEN` are both set. jurl decides nothing from the page's text: the sidecar says `content`, `captcha`,
 //! `blocked`, `challenge` or `error`. A CAPTCHA is never solved: the page is an error, and it goes to human review.
 //!
@@ -390,7 +390,8 @@ mod tests {
 
     use crate::{
         fetch::{
-            Memo, Retry, test_server::NO_COOKIES, test_server::PRIVATE, test_server::reply, test_server::serve_routed,
+            Memo, Retry, test_server::NO_COOKIES, test_server::NO_FALLBACK, test_server::PRIVATE, test_server::reply,
+            test_server::serve_routed,
         },
         mock,
     };
@@ -427,7 +428,7 @@ mod tests {
 
     /// The retry of a test run: the browser retry on, the run's reach, and `stealth` as its sidecar.
     fn retry_for<'a>(memo: &'a Memo, reach: &'a Reach, stealth: Option<&'a Sidecar>) -> Retry<'a> {
-        Retry { on: true, memo, timing: false, reach, cookies: &NO_COOKIES, stealth }
+        Retry { on: true, memo, timing: false, reach, cookies: &NO_COOKIES, stealth, fallback: &NO_FALLBACK }
     }
 
     /// A reach that reads loopback, as a run from a public address reads only public ones and the start's own.

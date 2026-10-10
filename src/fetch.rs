@@ -19,6 +19,7 @@ use tokio::process::Command;
 use url::Url;
 
 use crate::{
+    fallback::{self, Fallback},
     reach::{self, NotPublic, Reach},
     stealth::{self, Sidecar},
 };
@@ -38,22 +39,24 @@ impl Page {
     }
 }
 
-/// The rung of the read ladder a page was read on (see the README): the plain client, the browser client's retry, or the
-/// stealth sidecar. The usage's `route` names it.
+/// The rung of the read ladder a page was read on (see the README): the plain client, the browser client's retry, the fallback
+/// proxy, or the stealth sidecar. The usage's `route` names it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Route {
     #[default]
     Direct,
     Browser,
+    Proxy,
     Stealth,
 }
 
 impl Route {
-    /// The route's name in the usage: `direct`, `browser` or `stealth`.
+    /// The route's name in the usage: `direct`, `browser`, `proxy` or `stealth`.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Route::Direct => "direct",
             Route::Browser => "browser",
+            Route::Proxy => "proxy",
             Route::Stealth => "stealth",
         }
     }
@@ -149,22 +152,25 @@ pub(crate) struct Retry<'a> {
     pub(crate) cookies: &'a Jar,
     /// The run's stealth sidecar, when it is set up (see `stealth.rs`). Asked only for a page a host refuses, last of all.
     pub(crate) stealth: Option<&'a Sidecar>,
+    /// The run's fallback proxy (see `fallback.rs`): the hosts on it, and the client that goes through it.
+    pub(crate) fallback: &'a Fallback,
 }
 
 static MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
 
 impl<'a> Retry<'a> {
     /// The retry for a run: on unless the run opts out with `--no-browser-retry` or `JURL_NO_BROWSER_RETRY`. The reach, the
-    /// cookies and the stealth sidecar are the run's own.
+    /// cookies, the stealth sidecar and the fallback proxy are the run's own.
     pub(crate) fn for_run(
         flag: bool,
         timing: bool,
         reach: &'a Reach,
         cookies: &'a Jar,
         stealth: Option<&'a Sidecar>,
+        fallback: &'a Fallback,
     ) -> Self {
         let env_set = std::env::var_os("JURL_NO_BROWSER_RETRY").is_some();
-        Retry { on: browser_retry_allowed(flag, env_set), memo: &MEMO, timing, reach, cookies, stealth }
+        Retry { on: browser_retry_allowed(flag, env_set), memo: &MEMO, timing, reach, cookies, stealth, fallback }
     }
 }
 
@@ -198,8 +204,9 @@ pub(crate) fn host_key(url: &Url) -> Option<String> {
 
 /// The page at `url`. When the normal client is refused and the retry is on, the same URL is asked once more by the
 /// browser client, whose TLS and HTTP/2 fingerprint some bot protection accepts where it refuses the normal client. A host
-/// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried. A page still
-/// refused with 401, 403 or 429 is last asked of the stealth sidecar, when the run has one (see `refused_page`).
+/// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried. A page that a host
+/// refuses with 401, 403 or 429 is read again through the fallback proxy, when the run has one (rung 3), and a page still refused
+/// with 401, 403 or 429 is last asked of the stealth sidecar, when the run has one (see `refused_page`).
 pub(crate) async fn fetch(url: &str, retry: Retry<'_>) -> Result<Page> {
     fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
 }
@@ -223,12 +230,21 @@ fn retried(status: StatusCode, retry_after: bool) -> bool {
 /// What the error of a refusal says about the client that refused, when it says anything.
 const VIA_BROWSER: &str = "with a browser's TLS fingerprint";
 const VIA_BROWSER_TOO: &str = "also with a browser's TLS fingerprint";
+const VIA_PROXY: &str = "through the proxy";
 
 /// `fetch`, refusing a page larger than `max` bytes, and judging the host's memo as of `now`.
 async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> Result<Page> {
     let parsed = Url::parse(url).ok();
     if let Some(u) = &parsed {
         reach::admit(u, retry.reach)?;
+    }
+    // A host on the fallback proxy is read through it from its first request, and only through it (rung 3). Its refusal is the
+    // page's, and `refused_page` decides what follows it.
+    if parsed.as_ref().is_some_and(|u| retry.fallback.uses(u)) {
+        return match get(plain_for(retry.reach), url, max, retry).await? {
+            Reply::Page { page, .. } => Ok(page),
+            Reply::Refused(refused) => refused_page(url, refused, None, max, retry).await,
+        };
     }
     if parsed.as_ref().is_some_and(|u| retry.sticky(u, now)) {
         // This host needed the browser client within STICKY_TTL: ask only that. Its refusal is the page's refusal.
@@ -241,7 +257,8 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
         Reply::Page { page, .. } => return Ok(page),
         Reply::Refused(refused) => refused,
     };
-    if !retry.on || !retried(refused.status, refused.retry_after.is_some()) {
+    // A refusal that came through the proxy is not retried with the browser client: it is the proxy's answer.
+    if refused.via_proxy || !retry.on || !retried(refused.status, refused.retry_after.is_some()) {
         return refused_page(url, refused, None, max, retry).await;
     }
     let res = match browser_send(url, retry).await {
@@ -258,16 +275,53 @@ async fn fetch_capped(url: &str, max: usize, retry: Retry<'_>, now: Instant) -> 
         retry.learn(parsed, now);
     }
     // Once the browser client has a reply, that reply is the answer: a page too large to read is an error, not a fallback.
-    match browser_reply(res, url, max).await? {
+    match browser_reply(res, url, max, retry).await? {
         Reply::Page { page, .. } => Ok(Page { route: Route::Browser, ..page }),
         Reply::Refused(again) => refused_page(url, again, Some(VIA_BROWSER_TOO), max, retry).await,
     }
 }
 
-/// The last step for a page that a host refused, once rungs 1–2 are done: rung 5, the stealth sidecar, or else the refusal as
-/// the error. The fallback proxy (rung 3) will slot in before this step: refused → proxy → sidecar. Only 401, 403 and 429 are
-/// asked of the sidecar (see [`stealth::asked_for`]), and a run with no sidecar never asks.
+/// What a page that a host refused is answered with, once the direct clients (and the browser client's retry, where it
+/// applies) have refused it. A direct refusal with 401, 403 or 429 puts the page's host on the fallback proxy, and the page is
+/// read again through it (rung 3): that is the host's switch, said on stderr under `-t`. A refusal through the proxy, or one
+/// that does not switch a host, goes to the sidecar (rung 5) and else stands as the error (see `sidecar_or_error`).
 async fn refused_page(url: &str, refused: Refusal, via: Option<&str>, max: usize, retry: Retry<'_>) -> Result<Page> {
+    if let Some(target) = Url::parse(url).ok().filter(|_| retry.fallback.has_proxy())
+        && !refused.via_proxy
+        && fallback::refused_enough(refused.status)
+    {
+        retry.fallback.put_on_proxy(&target, &switch_why(refused.status, via), retry.timing);
+        return match get(plain_for(retry.reach), url, max, retry).await? {
+            Reply::Page { page, .. } => Ok(page),
+            Reply::Refused(again) => {
+                let via = again.via_proxy.then_some(VIA_PROXY);
+                sidecar_or_error(url, again, via, max, retry).await
+            }
+        };
+    }
+    let via = if refused.via_proxy { Some(VIA_PROXY) } else { via };
+    sidecar_or_error(url, refused, via, max, retry).await
+}
+
+/// Why a host is put on the proxy, for the `-t` line: the status that refused it, and which client did.
+fn switch_why(status: StatusCode, via: Option<&str>) -> String {
+    let from = match via {
+        Some(VIA_BROWSER) => "browser",
+        Some(VIA_BROWSER_TOO) => "direct and browser",
+        _ => "direct",
+    };
+    format!("{} from {from}", status.as_u16())
+}
+
+/// The stealth sidecar's answer to a refused page (rung 5), or else the refusal as the error. Only 401, 403 and 429 are asked of
+/// the sidecar (see [`stealth::asked_for`]), and a run with no sidecar never asks.
+async fn sidecar_or_error(
+    url: &str,
+    refused: Refusal,
+    via: Option<&str>,
+    max: usize,
+    retry: Retry<'_>,
+) -> Result<Page> {
     if let Some(sidecar) = retry.stealth
         && stealth::asked_for(refused.status)
         && let Ok(target) = Url::parse(url)
@@ -282,7 +336,8 @@ async fn refused_page(url: &str, refused: Refusal, via: Option<&str>, max: usize
 /// memo: a host on the browser client is read from there alone; otherwise the plain client is asked first, and a refusal the
 /// rule retries (a 403, or a 503 without a Retry-After) is asked once more of the browser client, whose success teaches the
 /// host. Its body is decoded as a page is; which bodies count as the site's file is for the caller to say. It never asks the
-/// stealth sidecar: rung 5 is for pages, and these files are not pages.
+/// stealth sidecar: rung 5 is for pages, and these files are not pages. A host on the fallback proxy has its files read through
+/// it, as its pages are, and a refused file does not put a host on the proxy: only a refused page does (see `refused_page`).
 pub(crate) async fn fetch_small(
     url: &Url,
     max: usize,
@@ -293,16 +348,16 @@ pub(crate) async fn fetch_small(
     if reach::admit(url, retry.reach).is_err() {
         return small_refused(url, retry.timing);
     }
-    if retry.sticky(url, now) {
+    if !retry.fallback.uses(url) && retry.sticky(url, now) {
         let res = match send_browser_get(url, retry, Some(timeout), &[]).await {
             Ok(res) => res,
             Err(e) if e.downcast_ref::<NotPublic>().is_some() => return small_refused(url, retry.timing),
             Err(_) => return None,
         };
-        return small_from_browser(res, max).await;
+        return small_from_browser(res, max, retry).await;
     }
-    let mut res = match send_get(plain_for(retry.reach), url.as_str(), retry, &[], Some(timeout)).await {
-        Ok(res) => res,
+    let (mut res, via_proxy) = match send_get(plain_for(retry.reach), url.as_str(), retry, &[], Some(timeout)).await {
+        Ok(sent) => sent,
         Err(e) if e.downcast_ref::<NotPublic>().is_some() => return small_refused(url, retry.timing),
         Err(_) => return None,
     };
@@ -311,11 +366,12 @@ pub(crate) async fn fetch_small(
         let content_type =
             res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
         let bytes = read_capped(&mut res, max).await.ok().flatten()?;
+        retry.fallback.count(via_proxy, bytes.len());
         return Some(decode(&content_type, &bytes));
     }
     crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
     let retry_after = res.headers().get(header::RETRY_AFTER).is_some();
-    if !retry.on || !retried(status, retry_after) {
+    if via_proxy || !retry.on || !retried(status, retry_after) {
         return None;
     }
     let res = match send_browser_get(url, retry, Some(timeout), &[]).await {
@@ -326,7 +382,7 @@ pub(crate) async fn fetch_small(
     if res.status().is_success() {
         retry.learn(url, now);
     }
-    small_from_browser(res, max).await
+    small_from_browser(res, max, retry).await
 }
 
 /// A small file the guard refused: None, said on stderr under `-t` as a refused page is.
@@ -339,13 +395,14 @@ fn small_refused(url: &Url, timing: bool) -> Option<String> {
 
 /// The body of a small file from a browser client's reply: decoded as a page is, or None on a refusal or a body larger than
 /// `max`.
-async fn small_from_browser(res: wreq::Response, max: usize) -> Option<String> {
+async fn small_from_browser(res: wreq::Response, max: usize, retry: Retry<'_>) -> Option<String> {
     if !res.status().is_success() {
         return None;
     }
     let content_type =
         res.headers().get(wreq::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
     let bytes = read_stream_capped(res.content_length(), res.bytes_stream(), max).await.ok().flatten()?;
+    retry.fallback.count(false, bytes.len());
     Some(decode(&content_type, &bytes))
 }
 
@@ -360,10 +417,12 @@ enum Reply {
     Refused(Refusal),
 }
 
-/// A reply that is not a success: its status, and its Retry-After when it has one (in either form, as text).
+/// A reply that is not a success: its status, its Retry-After when it has one (in either form, as text), and whether the request
+/// went through the fallback proxy.
 struct Refusal {
     status: StatusCode,
     retry_after: Option<String>,
+    via_proxy: bool,
 }
 
 impl Refusal {
@@ -386,25 +445,28 @@ fn retry_after_text(value: &header::HeaderValue) -> String {
     String::from_utf8_lossy(value.as_bytes()).into_owned()
 }
 
-/// One GET of `url` with the plain `client`, under the run's reach and cookies.
+/// One GET of `url` with the plain `client`, or through the fallback proxy where its host is on it (see `send_get`): the page,
+/// or the refusal.
 async fn get(client: &Client, url: &str, max: usize, retry: Retry<'_>) -> Result<Reply> {
-    let mut res =
+    let (mut res, via_proxy) =
         send_get(client, url, retry, &[("accept", "text/markdown, text/html;q=0.9, */*;q=0.5".to_string())], None)
             .await?;
     let status = res.status();
     if !status.is_success() {
         crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
         let retry_after = res.headers().get(header::RETRY_AFTER).map(retry_after_text);
-        return Ok(Reply::Refused(Refusal { status, retry_after }));
+        return Ok(Reply::Refused(Refusal { status, retry_after, via_proxy }));
     }
     let final_url = res.url().clone();
     let ct = res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
     let links: Vec<String> =
         res.headers().get_all(header::LINK).iter().filter_map(|v| v.to_str().ok()).map(String::from).collect();
-    let Some(bytes) = read_capped(&mut res, max).await? else {
+    let Some(bytes) = read_capped(&mut res, max).await.map_err(|e| retry.fallback.scrubbed(via_proxy, e))? else {
         bail!("{url}: page larger than {}", size_label(max));
     };
+    retry.fallback.count(via_proxy, bytes.len());
     let mut page = to_page(final_url, &ct, &bytes);
+    page.route = if via_proxy { Route::Proxy } else { Route::Direct };
     // The body is read as its markdown, but the page a person reads is the HTML page it is the alternate of.
     if page.is_markdown {
         let md = page.url.clone();
@@ -416,7 +478,7 @@ async fn get(client: &Client, url: &str, max: usize, retry: Retry<'_>) -> Result
 /// One GET of `url` with the browser client, which asks with its own headers: the page, or the refusal. No reply at all,
 /// or a reply that cannot be read, is an error.
 async fn get_browser(url: &str, max: usize, retry: Retry<'_>) -> Result<Reply> {
-    browser_reply(browser_send(url, retry).await?, url, max).await
+    browser_reply(browser_send(url, retry).await?, url, max, retry).await
 }
 
 /// The browser client's request for `url`, sent. An error here means no reply came; the guard's refusal is its own error.
@@ -426,11 +488,11 @@ async fn browser_send(url: &str, retry: Retry<'_>) -> Result<wreq::Response> {
 }
 
 /// The browser client's reply to `url`: the page, or the refusal. A reply that cannot be read is an error.
-async fn browser_reply(res: wreq::Response, url: &str, max: usize) -> Result<Reply> {
+async fn browser_reply(res: wreq::Response, url: &str, max: usize, retry: Retry<'_>) -> Result<Reply> {
     let status = res.status();
     if !status.is_success() {
         let retry_after = res.headers().get(wreq::header::RETRY_AFTER).map(retry_after_text);
-        return Ok(Reply::Refused(Refusal { status, retry_after }));
+        return Ok(Reply::Refused(Refusal { status, retry_after, via_proxy: false }));
     }
     let final_url = Url::parse(&res.uri().to_string()).with_context(|| format!("the address {url} ended at"))?;
     let ct =
@@ -438,6 +500,7 @@ async fn browser_reply(res: wreq::Response, url: &str, max: usize) -> Result<Rep
     let Some(bytes) = read_stream_capped(res.content_length(), res.bytes_stream(), max).await? else {
         bail!("{url}: page larger than {}", size_label(max));
     };
+    retry.fallback.count(false, bytes.len());
     Ok(Reply::Page { status, page: to_page(final_url, &ct, &bytes) })
 }
 
@@ -534,21 +597,33 @@ fn redirect_target(status: u16, location: Option<&str>, from: &Url) -> Option<Ur
     }
 }
 
-/// One GET of `url` with the plain `client`, under the run's reach and cookies. Every hop is made here, so each one carries the
-/// cookies its address is due and stores the Set-Cookie of its reply: a site that sets a cookie and redirects until the cookie
-/// comes back is followed. Under a public run each address is checked before its request (see [`reach::check`]), and so is
-/// each redirect target, because a proxy resolves names itself.
+/// One GET of `url` under the run's reach and cookies, with the plain `client`, or through the fallback proxy where its host is on
+/// it (see [`fallback::Fallback::uses`]). Every hop is made here, so each one carries the cookies its address is due and stores
+/// the Set-Cookie of its reply: a site that sets a cookie and redirects until the cookie comes back is followed. Under a public
+/// run each address is checked before its request (see [`reach::check`]), and so is each redirect target, because a proxy
+/// resolves names itself. A chain keeps the client it started with, and a hop to a host on the proxy switches the rest of the
+/// chain to it. The bool is whether the final reply came through the proxy.
 pub(crate) async fn send_get(
     client: &Client,
     url: &str,
     retry: Retry<'_>,
     headers: &[(&str, String)],
     timeout: Option<Duration>,
-) -> Result<Response> {
+) -> Result<(Response, bool)> {
     let mut target = Url::parse(url).map_err(|e| anyhow!("{url}: {e}"))?;
+    let mut via_proxy = false;
     for _ in 0..=reach::MAX_REDIRECTS {
         reach::check(&target, retry.reach).await?;
-        let mut request = client.get(target.as_str());
+        if retry.fallback.uses(&target) {
+            // A host that `JURL_PROXY_FIRST` puts on the proxy is said once; a host already on it is not news.
+            retry.fallback.put_on_proxy(&target, "JURL_PROXY_FIRST=1", retry.timing);
+            via_proxy = true;
+        }
+        let hop = match retry.fallback.client().filter(|_| via_proxy) {
+            Some(proxied) => proxied,
+            None => client,
+        };
+        let mut request = hop.get(target.as_str());
         for (name, value) in headers {
             request = request.header(*name, value.as_str());
         }
@@ -561,19 +636,24 @@ pub(crate) async fn send_get(
         let res = match request.send().await {
             Ok(res) => res,
             Err(e) if reach::refused(&e) => return Err(NotPublic.into()),
-            Err(e) => return Err(anyhow::Error::new(e).context(format!("fetching {target}"))),
+            Err(e) => {
+                let err = anyhow::Error::new(e).context(format!("fetching {target}"));
+                return Err(retry.fallback.scrubbed(via_proxy, err));
+            }
         };
         retry.cookies.set_cookies(&mut res.headers().get_all(header::SET_COOKIE).iter(), &target);
         let location = res.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).map(str::to_string);
         match redirect_target(res.status().as_u16(), location.as_deref(), &target) {
             Some(next) => target = next,
-            None => return Ok(res),
+            None => return Ok((res, via_proxy)),
         }
     }
     bail!("{url}: too many redirects")
 }
 
-/// [`send_get`] for the browser client: the same rules, and each request it makes is counted.
+/// [`send_get`] for the browser client: the same rules, and each request it makes is counted. The browser client has no proxy,
+/// so a hop to a host on the fallback proxy is not made with it: the browser's request fails, and the refusal it was retrying
+/// stands (see `fetch_capped`).
 async fn send_browser_get(
     url: &Url,
     retry: Retry<'_>,
@@ -584,6 +664,9 @@ async fn send_browser_get(
     let mut target = url.clone();
     for _ in 0..=reach::MAX_REDIRECTS {
         reach::check(&target, retry.reach).await?;
+        if retry.fallback.uses(&target) {
+            bail!("{target}: on the fallback proxy, which the browser client does not use");
+        }
         crate::decide::USAGE.browser_requests.fetch_add(1, Relaxed);
         let mut request = client.get(target.as_str());
         for (name, value) in headers {
@@ -655,28 +738,37 @@ impl std::error::Error for ImageRefused {}
 
 /// The bytes of the image `url` that `page` shows, at most `max`, asked the way a browser's `<img>` asks (see
 /// [`image_headers`]). A 401, 403 or 429 from the plain client is asked once more of the browser client, as the page is,
-/// and a host that such a retry showed needs the browser client is asked there first, through the memo pages share. A
-/// refusal is an [`ImageRefused`]. A guard refusal, an image too large to read, and no reply are ordinary errors.
+/// and a host that such a retry showed needs the browser client is asked there first, through the memo pages share. A host on
+/// the fallback proxy has its images read through it, and a refusal is not retried. An image never puts a host on the proxy: only
+/// a page does. A refusal is an [`ImageRefused`]. A guard refusal, an image too large to read, and no reply are ordinary errors.
 pub(crate) async fn image_bytes(page: &Url, url: &Url, retry: Retry<'_>, max: usize) -> Result<Vec<u8>> {
     let now = Instant::now();
     let headers = image_headers(page, url);
-    if retry.sticky(url, now) {
+    if !retry.fallback.uses(url) && retry.sticky(url, now) {
         let res = send_browser_get(url, retry, None, &headers).await?;
-        return browser_image(res, url, max, VIA_BROWSER).await;
+        return browser_image(res, url, max, VIA_BROWSER, retry).await;
     }
-    let mut res = send_get(plain_for(retry.reach), url.as_str(), retry, &headers, None).await?;
+    let (mut res, via_proxy) = send_get(plain_for(retry.reach), url.as_str(), retry, &headers, None).await?;
     if res.status().is_success() {
-        return read_capped(&mut res, max)
-            .await?
-            .ok_or_else(|| anyhow!("{url}: image larger than {}", size_label(max)));
+        let bytes = read_capped(&mut res, max)
+            .await
+            .map_err(|e| retry.fallback.scrubbed(via_proxy, e))?
+            .ok_or_else(|| anyhow!("{url}: image larger than {}", size_label(max)))?;
+        retry.fallback.count(via_proxy, bytes.len());
+        return Ok(bytes);
     }
     crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
-    let refused =
-        Refusal { status: res.status(), retry_after: res.headers().get(header::RETRY_AFTER).map(retry_after_text) };
+    let refused = Refusal {
+        status: res.status(),
+        retry_after: res.headers().get(header::RETRY_AFTER).map(retry_after_text),
+        via_proxy,
+    };
     let asked_again =
         matches!(refused.status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS);
-    if !retry.on || !asked_again {
-        return Err(ImageRefused(refused.error(url.as_str(), None).to_string()).into());
+    // A refusal through the proxy is the answer too: an image never puts a host on the proxy, and is not retried with the browser.
+    if via_proxy || !retry.on || !asked_again {
+        let via = via_proxy.then_some(VIA_PROXY);
+        return Err(ImageRefused(refused.error(url.as_str(), via).to_string()).into());
     }
     let res = match send_browser_get(url, retry, None, &headers).await {
         Ok(res) => res,
@@ -689,19 +781,21 @@ pub(crate) async fn image_bytes(page: &Url, url: &Url, retry: Retry<'_>, max: us
     if res.status().is_success() {
         retry.learn(url, now);
     }
-    browser_image(res, url, max, VIA_BROWSER_TOO).await
+    browser_image(res, url, max, VIA_BROWSER_TOO, retry).await
 }
 
 /// The bytes of an image from a browser client's reply, or its refusal, which says `via` in its error.
-async fn browser_image(res: wreq::Response, url: &Url, max: usize, via: &str) -> Result<Vec<u8>> {
+async fn browser_image(res: wreq::Response, url: &Url, max: usize, via: &str, retry: Retry<'_>) -> Result<Vec<u8>> {
     if !res.status().is_success() {
         let retry_after = res.headers().get(wreq::header::RETRY_AFTER).map(retry_after_text);
-        let refused = Refusal { status: res.status(), retry_after };
+        let refused = Refusal { status: res.status(), retry_after, via_proxy: false };
         return Err(ImageRefused(refused.error(url.as_str(), Some(via)).to_string()).into());
     }
-    read_stream_capped(res.content_length(), res.bytes_stream(), max)
+    let bytes = read_stream_capped(res.content_length(), res.bytes_stream(), max)
         .await?
-        .ok_or_else(|| anyhow!("{url}: image larger than {}", size_label(max)))
+        .ok_or_else(|| anyhow!("{url}: image larger than {}", size_label(max)))?;
+    retry.fallback.count(false, bytes.len());
+    Ok(bytes)
 }
 
 /// Whether `url` may be rendered under `reach`, checked before the browser starts (see the README). A private run renders as
@@ -898,7 +992,7 @@ fn md_stem(url: &Url) -> Option<Url> {
 /// The URL of the page at `url` if it answers with an HTML page on the same host, after any redirects. The request asks
 /// for HTML outright: a site that answers every request with its markdown must not pass for its own HTML.
 async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url> {
-    let res =
+    let (res, _) =
         send_get(client, url.as_str(), retry, &[("accept", "text/html".to_string())], Some(TWIN_TIMEOUT)).await.ok()?;
     let ct = res.headers().get(header::CONTENT_TYPE)?.to_str().ok()?;
     let html = ct.starts_with("text/html") || ct.starts_with("application/xhtml+xml");
@@ -909,10 +1003,27 @@ async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.
 /// Waits for the network to settle and for real visible text to appear, capped at 8s:
 /// SPAs keep background traffic going and often paint content after the network calms down.
-pub async fn render(bin: &Path, url: &Url) -> Result<Page> {
+/// A host on the fallback proxy is rendered through it: Lightpanda is given the proxy, and every request of the render goes
+/// through it, the page's scripts and images included (see the README). An error of such a render is scrubbed of the proxy.
+pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> {
+    let proxy = fallback.lightpanda_args(url);
+    let proxied = !proxy.is_empty();
+    if proxied {
+        // A render is billed by the proxy whatever it returns, so it is counted as it starts.
+        fallback.count_render();
+    }
+    let body = dom_of(bin, url, &proxy).await.map_err(|e| fallback.scrubbed(proxied, e))?;
+    // The render's own requests (its scripts, its images) are not counted: only the DOM it returned is.
+    fallback.count(proxied, body.len());
+    Ok(Page { url: url.clone(), body, is_markdown: false, route: if proxied { Route::Proxy } else { Route::Direct } })
+}
+
+/// The DOM Lightpanda returns for `url`, run with the arguments `proxy` (none for a direct render).
+async fn dom_of(bin: &Path, url: &Url, proxy: &[String]) -> Result<String> {
     let run = Command::new(bin)
         .args(["fetch", "--json", "--dump", "html", "--wait-until", "networkalmostidle", "--wait-ms", "8000"])
         .args(["--wait-script", "document.body && (document.body.innerText || '').trim().length > 1500"])
+        .args(proxy)
         .arg(url.as_str())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -941,7 +1052,7 @@ pub async fn render(bin: &Path, url: &Url) -> Result<Page> {
         let error = v["error"].as_str().unwrap_or("no output");
         bail!("lightpanda rendered nothing for {url} ({error})");
     }
-    Ok(Page { url: url.clone(), body: body.to_string(), is_markdown: false, route: Route::Direct })
+    Ok(body.to_string())
 }
 
 #[cfg(test)]
@@ -950,8 +1061,8 @@ mod tests {
 
     use super::*;
     use test_server::{
-        Kind, NO_COOKIES, PRIVATE, chunked_reply, client, reply, retry_at, retry_off, retry_on, serve, serve_replies,
-        serve_routed,
+        Kind, NO_COOKIES, NO_FALLBACK, PRIVATE, chunked_reply, client, reply, retry_at, retry_off, retry_on, serve,
+        serve_replies, serve_routed,
     };
 
     /// `<p>Hello, page.</p>` as gzip, as a server sends it under Content-Encoding: gzip.
@@ -1377,8 +1488,15 @@ mod tests {
         let now = Instant::now();
         // The host is on the browser client, as a retry would have left it; the run has opted out.
         assert!(memo.learn_url(&Url::parse(&url).unwrap(), now));
-        let retry =
-            Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None };
+        let retry = Retry {
+            on: false,
+            memo: &memo,
+            timing: false,
+            reach: &PRIVATE,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         let err = fetch_capped(&url, PAGE_MAX, retry, now).await.err().expect("refused");
         assert!(format!("{err:#}").ends_with("returned HTTP 403 Forbidden"), "{err:#}");
         assert_eq!(served.kinds(), [Kind::Plain]);
@@ -1446,7 +1564,15 @@ mod tests {
         let now = Instant::now();
         // The host is on the memo, but the run has opted out: the memo is not read, and the file is not retried.
         assert!(memo.learn_url(&Url::parse(&base).unwrap(), now));
-        let off = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None };
+        let off = Retry {
+            on: false,
+            memo: &memo,
+            timing: false,
+            reach: &PRIVATE,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         assert_eq!(fetch_small(&file_at(&base, "/robots.txt"), PAGE_MAX, WAIT, off, now).await, None);
         assert_eq!(served.kinds(), [Kind::Plain]);
     }
@@ -1634,7 +1760,15 @@ mod tests {
     async fn a_public_run_refuses_a_literal_private_address_before_asking_it() {
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &reach,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         for url in ["http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/", "http://[::ffff:127.0.0.2]/"] {
             let err = fetch_capped(url, PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
             assert_eq!(format!("{err:#}"), "not a public address", "{url}");
@@ -1653,7 +1787,15 @@ mod tests {
         });
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &reach,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         let page = fetch_capped(&format!("{base}/page"), PAGE_MAX, retry, Instant::now())
             .await
             .unwrap_or_else(|e| panic!("{e:#}"));
@@ -1696,8 +1838,15 @@ mod tests {
         let image = Url::parse(&format!("{base}/photo.png")).expect("a URL");
         let memo = Memo::default();
         let now = Instant::now();
-        let retry =
-            Retry { on: true, memo: &memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None };
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &PRIVATE,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         let bytes = image_bytes(&image, &image, retry, PAGE_MAX).await.unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(bytes, b"PNG");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
@@ -1734,7 +1883,15 @@ mod tests {
         let named = base.replacen("127.0.0.1", "localhost", 1);
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &reach,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         let err = fetch_capped(&format!("{named}/x"), PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
         assert_eq!(format!("{err:#}"), "not a public address", "{err:#}");
     }
@@ -1753,7 +1910,15 @@ mod tests {
         });
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &reach,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         let err = fetch_capped(&format!("{base}/start"), PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
         assert_eq!(format!("{err:#}"), "not a public address", "{err:#}");
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
@@ -1763,7 +1928,15 @@ mod tests {
     async fn a_public_run_reads_no_small_file_at_a_private_address() {
         let reach = public_run();
         let memo = Memo::default();
-        let retry = Retry { on: true, memo: &memo, timing: false, reach: &reach, cookies: &NO_COOKIES, stealth: None };
+        let retry = Retry {
+            on: true,
+            memo: &memo,
+            timing: false,
+            reach: &reach,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         let private = Url::parse("http://127.0.0.2:1/robots.txt").unwrap();
         assert_eq!(fetch_small(&private, PAGE_MAX, WAIT, retry, Instant::now()).await, None);
     }
@@ -1821,6 +1994,385 @@ mod tests {
             assert_eq!(format!("{err:#}"), "not a public address", "{url}");
         }
         assert_eq!(served.count(), 1, "the proxy is never asked for those");
+    }
+
+    // The fallback proxy (rung 3). The test server standing for the proxy is sent each request with its absolute address (see
+    // `path_of`), and answers by it. A site that refuses direct requests is refused with the status a test names.
+
+    /// The proxy's URL for the test server at `base`, with a credential in it.
+    fn proxy_url(base: &str) -> String {
+        base.replacen("http://", "http://user:s3cret@", 1)
+    }
+
+    /// A proxy that answers every request with `body`, and what it was sent.
+    fn proxy_answering(body: &'static [u8]) -> (String, test_server::Served) {
+        serve_routed(move |_| Some(reply("200 OK", "Content-Type: text/html\r\n", body)))
+    }
+
+    /// A site that refuses every request with `status`, and what it was sent.
+    fn refusing_site(status: &'static str) -> (String, test_server::Served) {
+        serve_routed(move |_| Some(reply(status, "", b"denied")))
+    }
+
+    /// The retry of a run with `fallback` as its proxy, and the reach given.
+    fn proxied<'a>(memo: &'a Memo, reach: &'a Reach, fallback: &'a Fallback) -> Retry<'a> {
+        Retry { on: true, memo, timing: false, reach, cookies: &NO_COOKIES, stealth: None, fallback }
+    }
+
+    /// The memo name of a test server's base address (its host and port).
+    fn name_of(base: &str) -> String {
+        host_of(base)
+    }
+
+    #[tokio::test]
+    async fn a_403_from_direct_and_browser_puts_the_host_on_the_proxy_and_keeps_it_there() {
+        let (site, site_served) = refusing_site("403 Forbidden");
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let retry = proxied(&memo, &PRIVATE, &fallback);
+        let first = fetch(&format!("{site}/precio"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(first.route, Route::Proxy);
+        assert_eq!(first.body, "<p>Via the proxy</p>");
+        // The site was asked directly twice: plain, then with the browser's fingerprint. Never again.
+        assert_eq!(site_served.count(), 2);
+        let second = fetch(&format!("{site}/otra"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(second.route, Route::Proxy);
+        assert_eq!(site_served.count(), 2, "a host on the proxy is not asked directly again");
+        let asked: Vec<String> = proxy_served.heads().iter().map(|h| path_of(h).to_string()).collect();
+        assert_eq!(asked, [format!("{site}/precio"), format!("{site}/otra")]);
+        assert_eq!(fallback.hosts(), [name_of(&site)]);
+    }
+
+    #[tokio::test]
+    async fn a_429_from_direct_also_opens_the_proxy_and_is_not_retried_with_the_browser() {
+        let (site, site_served) = refusing_site("429 Too Many Requests");
+        let (proxy, _) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let page = fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Proxy);
+        assert_eq!(site_served.count(), 1, "a 429 is not retried with the browser: only the plain request was made");
+    }
+
+    #[tokio::test]
+    async fn other_hosts_stay_direct_while_a_refusing_host_is_on_the_proxy() {
+        let (refusing, _) = refusing_site("403 Forbidden");
+        let (open, open_served) =
+            serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Direct</p>")));
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let retry = proxied(&memo, &PRIVATE, &fallback);
+        let proxied_page = fetch(&format!("{refusing}/precio"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(proxied_page.route, Route::Proxy);
+        let direct = fetch(&format!("{open}/pagina"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(direct.route, Route::Direct);
+        assert_eq!(direct.body, "<p>Direct</p>");
+        assert_eq!(open_served.count(), 1);
+        assert_eq!(proxy_served.count(), 1, "the proxy is not asked for the host that reads direct");
+        assert_eq!(fallback.hosts(), [name_of(&refusing)]);
+    }
+
+    #[tokio::test]
+    async fn proxy_first_reads_a_host_through_the_proxy_from_its_first_request() {
+        let (site, site_served) =
+            serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Direct</p>")));
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), true);
+        let memo = Memo::default();
+        let page = fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Proxy);
+        assert_eq!(page.body, "<p>Via the proxy</p>");
+        assert_eq!(site_served.count(), 0, "the site is never asked directly under JURL_PROXY_FIRST");
+        assert_eq!(proxy_served.count(), 1);
+        assert_eq!(fallback.hosts(), [name_of(&site)], "the host is recorded as proxied from its first request");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_through_the_proxy_goes_to_the_sidecar_and_not_back_to_the_browser() {
+        const CONTENT: &str = r#"{"outcome":"content","status":200,"html":"<html><body><p>Precio: 5 €</p></body></html>","text":"Precio: 5 €","title":"Tienda","reason":null,"wall_s":3.1,"robots":"allowed"}"#;
+        let (site, site_served) = refusing_site("403 Forbidden");
+        let (proxy, proxy_served) = refusing_site("403 Forbidden");
+        let (side, side_seen) = crate::mock::serve(vec![(200, "", CONTENT)]);
+        let sidecar = crate::stealth::Sidecar::configured(
+            |key| match key {
+                "JURL_STEALTH_URL" => Some(side.clone()),
+                "JURL_STEALTH_TOKEN" => Some("s3cret-token".to_string()),
+                _ => None,
+            },
+            false,
+            false,
+            false,
+        )
+        .expect("a sidecar");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let retry = Retry { stealth: Some(&sidecar), ..proxied(&memo, &PRIVATE, &fallback) };
+        let page = fetch(&format!("{site}/precio"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Stealth, "the proxy's refusal is the sidecar's to answer");
+        assert!(page.body.contains("Precio: 5"), "{}", page.body);
+        assert_eq!(site_served.count(), 2, "the site: plain, then with the browser's fingerprint");
+        assert_eq!(
+            proxy_served.count(),
+            1,
+            "the proxy is asked once: a refusal through it is not retried with the browser"
+        );
+        assert_eq!(side_seen.lock().unwrap().len(), 1, "the sidecar is asked once");
+    }
+
+    #[tokio::test]
+    async fn a_public_run_refuses_a_private_target_before_the_proxy_is_asked() {
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        // Every host is on the proxy, so each request would go to it if it were not checked first.
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), true);
+        let memo = Memo::default();
+        let reach = Reach::Public { allowed: HashSet::new() };
+        let retry = proxied(&memo, &reach, &fallback);
+        for url in ["http://127.0.0.1:9/page", "http://localhost:9/page"] {
+            let err = fetch(url, retry).await.err().expect("a private target is refused");
+            assert_eq!(format!("{err:#}"), "not a public address", "{url}");
+        }
+        assert_eq!(proxy_served.count(), 0, "the proxy is never asked for a private target");
+    }
+
+    #[tokio::test]
+    async fn a_public_target_is_read_through_the_proxy_once_its_address_is_checked() {
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), true);
+        let memo = Memo::default();
+        let reach = Reach::Public { allowed: HashSet::new() };
+        let page = fetch("http://93.184.216.34/precio", proxied(&memo, &reach, &fallback))
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Proxy);
+        assert_eq!(path_of(&proxy_served.heads()[0]), "http://93.184.216.34/precio");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_from_a_host_on_the_proxy_stays_on_the_proxy() {
+        // The proxy stands for the site here, and answers as the site would: /a redirects to /b. The site is never asked.
+        let (site, site_served) =
+            serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Direct</p>")));
+        let (proxy, proxy_served) = serve_routed(|head| {
+            Some(match path_of(head) {
+                p if p.ends_with("/a") => reply("301 Moved Permanently", "Location: /b\r\n", b""),
+                _ => reply("200 OK", "Content-Type: text/html\r\n", b"<p>Via the proxy</p>"),
+            })
+        });
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), true);
+        let memo = Memo::default();
+        let page =
+            fetch(&format!("{site}/a"), proxied(&memo, &PRIVATE, &fallback)).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Proxy);
+        assert_eq!(page.body, "<p>Via the proxy</p>");
+        assert_eq!(site_served.count(), 0, "the redirect is followed through the proxy");
+        let asked: Vec<String> = proxy_served.heads().iter().map(|h| path_of(h).to_string()).collect();
+        assert_eq!(asked, [format!("{site}/a"), format!("{site}/b")]);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_into_a_host_on_the_proxy_switches_the_rest_of_the_chain_to_it() {
+        let (target, target_served) =
+            serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Target direct</p>")));
+        let target_at = format!("{target}/final");
+        let (start, start_served) =
+            serve_routed(move |_| Some(reply("301 Moved Permanently", &format!("Location: {target_at}\r\n"), b"")));
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        fallback.put_on_proxy(&Url::parse(&target).expect("a URL"), "test", false);
+        let memo = Memo::default();
+        let page =
+            fetch(&format!("{start}/a"), proxied(&memo, &PRIVATE, &fallback)).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page.route, Route::Proxy);
+        assert_eq!(start_served.count(), 1, "the start host is read direct");
+        assert_eq!(target_served.count(), 0, "the host on the proxy is never asked directly");
+        assert_eq!(path_of(&proxy_served.heads()[0]), format!("{target}/final"));
+    }
+
+    #[tokio::test]
+    async fn robots_and_sitemaps_of_a_host_on_the_proxy_go_through_the_proxy() {
+        let (site, site_served) = serve_routed(|_| Some(reply("200 OK", "", b"direct")));
+        let (proxy, proxy_served) = serve_routed(|head| {
+            let body: &[u8] = match path_of(head) {
+                p if p.ends_with("/robots.txt") => b"User-agent: *\nDisallow: /privado\n",
+                p if p.ends_with("/sitemap.xml") => b"<urlset/>",
+                _ => b"",
+            };
+            Some(reply("200 OK", "Content-Type: text/plain\r\n", body))
+        });
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), true);
+        let memo = Memo::default();
+        let retry = proxied(&memo, &PRIVATE, &fallback);
+        let robots = fetch_small(&file_at(&site, "/robots.txt"), PAGE_MAX, WAIT, retry, Instant::now()).await;
+        assert_eq!(robots.as_deref(), Some("User-agent: *\nDisallow: /privado\n"));
+        let sitemap = fetch_small(&file_at(&site, "/sitemap.xml"), PAGE_MAX, WAIT, retry, Instant::now()).await;
+        assert_eq!(sitemap.as_deref(), Some("<urlset/>"));
+        assert_eq!(site_served.count(), 0, "the site's files are read through the proxy");
+        assert_eq!(proxy_served.count(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refused_robots_file_does_not_put_its_host_on_the_proxy() {
+        let (site, _) = refusing_site("403 Forbidden");
+        let (proxy, proxy_served) = proxy_answering(b"should not be asked");
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let retry = proxied(&memo, &PRIVATE, &fallback);
+        assert_eq!(fetch_small(&file_at(&site, "/robots.txt"), PAGE_MAX, WAIT, retry, Instant::now()).await, None);
+        assert!(fallback.hosts().is_empty(), "only a refused page puts a host on the proxy");
+        assert_eq!(proxy_served.count(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_image_of_a_host_on_the_proxy_goes_through_the_proxy_with_its_referer() {
+        let (site, site_served) = serve_routed(|_| Some(reply("200 OK", "Content-Type: image/png\r\n", b"direct")));
+        let (proxy, proxy_served) =
+            serve_routed(|_| Some(reply("200 OK", "Content-Type: image/png\r\n", b"\x89PNG-bytes")));
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), true);
+        let memo = Memo::default();
+        let retry = proxied(&memo, &PRIVATE, &fallback);
+        let page = Url::parse(&format!("{site}/producto")).expect("a URL");
+        let image = Url::parse(&format!("{site}/foto.png")).expect("a URL");
+        let bytes = image_bytes(&page, &image, retry, PAGE_MAX).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(bytes, b"\x89PNG-bytes".to_vec());
+        assert_eq!(site_served.count(), 0, "the image is read through the proxy");
+        assert_eq!(proxy_served.count(), 1);
+        let head = proxy_served.heads().remove(0).to_ascii_lowercase();
+        assert!(head.contains(&format!("referer: {page}")), "{head}");
+    }
+
+    #[tokio::test]
+    async fn the_run_counts_the_bytes_it_read_direct_and_through_the_proxy() {
+        let (site, _) = refusing_site("403 Forbidden");
+        let (proxy, _) = proxy_answering(b"<p>Via the proxy</p>");
+        let (open, _) = serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"<p>Direct</p>")));
+        let fallback = Fallback::with(Some(&proxy_url(&proxy)), false);
+        let memo = Memo::default();
+        let retry = proxied(&memo, &PRIVATE, &fallback);
+        fetch(&format!("{site}/precio"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        fetch(&format!("{open}/pagina"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(fallback.bytes(true), "<p>Via the proxy</p>".len() as u64);
+        assert_eq!(
+            fallback.bytes(false),
+            "<p>Direct</p>".len() as u64,
+            "the refusals' bodies are not read, so not counted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_proxy_first_read_through_load_reports_its_route_bytes_and_hosts() {
+        use clap::Parser;
+        let body = format!("<html><body><p>{}</p></body></html>", "Precio y envío a domicilio. ".repeat(20));
+        let (site, site_served) = serve_routed(|_| Some(reply("200 OK", "Content-Type: text/html\r\n", b"direct")));
+        let (proxy, proxy_served) =
+            serve_routed(move |_| Some(reply("200 OK", "Content-Type: text/html\r\n", body.as_bytes())));
+        let mut args = crate::cli::Args::parse_from(["jurl", &format!("{site}/precio")]);
+        args.fallback = Fallback::with(Some(&proxy_url(&proxy)), true);
+        let target = Url::parse(&args.url).expect("a URL");
+        let mut t = crate::timing::Timer::new();
+        let (_, ex, served) = crate::load(&args, &crate::config::Config::default(), &target, &mut t)
+            .await
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(served.name(), "proxy");
+        assert!(ex.blocks.iter().any(|b| b.text.contains("Precio y envío")), "the proxy's page is what is read");
+        assert_eq!(site_served.count(), 0);
+        assert_eq!(proxy_served.count(), 1);
+        let usage = crate::decide::Usage::new();
+        usage.record_route(served);
+        let json = usage.json(&args.fallback);
+        assert_eq!(json["route"], "proxy");
+        assert_eq!(json["bytes"]["proxy"], serde_json::json!(args.fallback.bytes(true)));
+        assert_eq!(json["bytes"]["direct"], 0);
+        assert_eq!(json["proxied_hosts"], serde_json::json!([name_of(&site)]));
+    }
+
+    /// The proxy's URL for the test server at `base`, with the given credential in it.
+    fn proxy_url_with(base: &str, user: &str, pass: &str) -> String {
+        base.replacen("http://", &format!("http://{user}:{pass}@"), 1)
+    }
+
+    #[tokio::test]
+    async fn a_proxy_that_hangs_up_is_an_error_that_shows_neither_the_credential_nor_the_user() {
+        let (site, site_served) = serve_routed(|_| Some(reply("200 OK", "", b"direct")));
+        let (proxy, proxy_served) = serve_routed(|_| None);
+        let fallback = Fallback::with(Some(&proxy_url_with(&proxy, "jurlcred", "s3cret-pw")), true);
+        let memo = Memo::default();
+        let err = fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .err()
+            .expect("a proxy that hangs up is an error");
+        let text = format!("{err:#}");
+        assert!(!text.contains("s3cret-pw") && !text.contains("jurlcred"), "{text}");
+        assert!(text.contains("fetching"), "the request is still named: {text}");
+        assert_eq!(proxy_served.count(), 1);
+        assert_eq!(site_served.count(), 0, "the site is not asked directly");
+    }
+
+    #[tokio::test]
+    async fn a_407_from_the_proxy_is_a_refusal_through_the_proxy_with_no_credential() {
+        let (site, _) = serve_routed(|_| Some(reply("200 OK", "", b"direct")));
+        let (proxy, _) = serve_routed(|_| {
+            Some(reply("407 Proxy Authentication Required", "Proxy-Authenticate: Basic realm=\"proxy\"\r\n", b""))
+        });
+        let fallback = Fallback::with(Some(&proxy_url_with(&proxy, "jurlcred", "s3cret-pw")), true);
+        let memo = Memo::default();
+        let err = fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback))
+            .await
+            .err()
+            .expect("a 407 is an error");
+        let text = format!("{err:#}");
+        assert!(text.contains("HTTP 407") && text.contains("through the proxy"), "{text}");
+        assert!(!text.contains("s3cret-pw") && !text.contains("jurlcred"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_direct_transport_error_keeps_its_type() {
+        let (site, _) = serve_routed(|_| None);
+        let memo = Memo::default();
+        let err = fetch(&format!("{site}/page"), retry_on(&memo)).await.err().expect("the site hangs up");
+        assert!(err.downcast_ref::<reqwest::Error>().is_some(), "{err:#}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_render_through_the_proxy_whose_error_shows_its_arguments_shows_no_credential() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("jurl-render-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a test directory");
+        let bin = dir.join("lightpanda");
+        // A stand-in Lightpanda that fails and says its arguments, as the browser's own error might.
+        std::fs::write(&bin, "#!/bin/sh\nprintf '{\"http_status\":0,\"content\":\"\",\"error\":\"%s\"}' \"$*\"\n")
+            .expect("the stand-in");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        let fallback = Fallback::with(Some("http://jurlcred:s3cret-pw@proxy.test:8080"), true);
+        let url = Url::parse("http://93.184.216.34/precio").expect("a URL");
+        let err = render(&bin, &url, &fallback).await.err().expect("the stand-in fails");
+        let text = format!("{err:#}");
+        assert!(!text.contains("s3cret-pw") && !text.contains("jurlcred"), "{text}");
+        assert!(text.contains("proxy"), "the proxy is named by its place-holder: {text}");
+        assert_eq!(fallback.renders(), 1, "the render was counted as it started");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_proxied_request_sends_the_decoded_credential_as_basic_auth() {
+        use base64::Engine;
+        let (site, _) = serve_routed(|_| Some(reply("200 OK", "", b"direct")));
+        let (proxy, proxy_served) = proxy_answering(b"<p>Via the proxy</p>");
+        // The runner percent-encodes the credential in the URL: reqwest decodes it again for the proxy's basic auth.
+        let fallback = Fallback::with(Some(&proxy_url_with(&proxy, "jurl%40user", "p%40ss")), true);
+        let memo = Memo::default();
+        fetch(&format!("{site}/precio"), proxied(&memo, &PRIVATE, &fallback)).await.unwrap_or_else(|e| panic!("{e:#}"));
+        let expected = base64::engine::general_purpose::STANDARD.encode("jurl@user:p@ss");
+        let head = proxy_served.heads().remove(0);
+        let auth =
+            head.lines().find(|line| line.to_ascii_lowercase().starts_with("proxy-authorization:")).unwrap_or_default();
+        assert!(auth.ends_with(&format!("Basic {expected}")), "{head}");
     }
 
     #[tokio::test]
@@ -1883,7 +2435,8 @@ mod tests {
     /// Reads `url` with `reach`, the run's cookies being `jar`.
     async fn read_with(url: &str, reach: &Reach, jar: &Jar) -> Result<Page> {
         let memo = Memo::default();
-        let retry = Retry { on: false, memo: &memo, timing: false, reach, cookies: jar, stealth: None };
+        let retry =
+            Retry { on: false, memo: &memo, timing: false, reach, cookies: jar, stealth: None, fallback: &NO_FALLBACK };
         fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
     }
 
@@ -1935,7 +2488,15 @@ mod tests {
         });
         let memo = Memo::default();
         let jar = Jar::default();
-        let retry = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &jar, stealth: None };
+        let retry = Retry {
+            on: false,
+            memo: &memo,
+            timing: false,
+            reach: &PRIVATE,
+            cookies: &jar,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         fetch(&format!("{base}/set"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
         match get_browser(&format!("{base}/browser"), PAGE_MAX, retry).await.unwrap_or_else(|e| panic!("{e:#}")) {
             Reply::Page { page, .. } => assert_eq!(page.body, "<p>Browser saw it</p>"),
@@ -1967,7 +2528,15 @@ mod tests {
         let localhost = base.replacen("127.0.0.1", "localhost", 1);
         let memo = Memo::default();
         let jar = Jar::default();
-        let retry = Retry { on: false, memo: &memo, timing: false, reach: &PRIVATE, cookies: &jar, stealth: None };
+        let retry = Retry {
+            on: false,
+            memo: &memo,
+            timing: false,
+            reach: &PRIVATE,
+            cookies: &jar,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        };
         fetch(&format!("{base}/set"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
         for (url, expected) in [
             (format!("{base}/private/page"), "sent"),
@@ -1993,9 +2562,13 @@ pub(crate) mod test_server {
     };
 
     use super::{Jar, Memo, Reach, Retry};
+    use crate::fallback::Fallback;
 
     /// The reach of a run that reads any address, as a run from a private start does.
     pub(crate) static PRIVATE: Reach = Reach::Private;
+
+    /// A run with no fallback proxy, for the tests that do not use one.
+    pub(crate) static NO_FALLBACK: Fallback = Fallback::new();
 
     /// The cookie store of the tests that involve no cookie: none of their servers sets one.
     pub(crate) static NO_COOKIES: LazyLock<Jar> = LazyLock::new(Jar::default);
@@ -2126,19 +2699,43 @@ pub(crate) mod test_server {
 
     /// The retry on, with `memo` as the run's memo.
     pub(crate) fn retry_on(memo: &Memo) -> Retry<'_> {
-        Retry { on: true, memo, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None }
+        Retry {
+            on: true,
+            memo,
+            timing: false,
+            reach: &PRIVATE,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        }
     }
 
     /// The retry off, for a run that reads with `reach`: no memo is ever read or written.
     pub(crate) fn retry_at(reach: &Reach) -> Retry<'_> {
         static NO_MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
-        Retry { on: false, memo: &NO_MEMO, timing: false, reach, cookies: &NO_COOKIES, stealth: None }
+        Retry {
+            on: false,
+            memo: &NO_MEMO,
+            timing: false,
+            reach,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        }
     }
 
     /// The retry off: no memo is ever read or written.
     pub(crate) fn retry_off() -> Retry<'static> {
         static NO_MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
-        Retry { on: false, memo: &NO_MEMO, timing: false, reach: &PRIVATE, cookies: &NO_COOKIES, stealth: None }
+        Retry {
+            on: false,
+            memo: &NO_MEMO,
+            timing: false,
+            reach: &PRIVATE,
+            cookies: &NO_COOKIES,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+        }
     }
 
     /// Reads a request up to its blank line, so the client has sent all of it before the reply comes. Returns the head.

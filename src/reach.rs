@@ -227,7 +227,7 @@ pub(crate) async fn set_reach(args: &mut crate::cli::Args) -> Result<()> {
     set_reach_with(args, required_by_env(env("JURL_PUBLIC_ONLY").as_deref()), proxy_configured(env)).await
 }
 
-/// [`set_reach`] with the environment given. Under `public_only` a proxy is refused, and so is a start that is not a public
+/// [`set_reach`] with the environment given. Under `public_only` an environment proxy is refused, and so is a start that is not a public
 /// address or not a URL.
 async fn set_reach_with(args: &mut crate::cli::Args, public_only: bool, proxy: bool) -> Result<()> {
     args.public_only = public_only;
