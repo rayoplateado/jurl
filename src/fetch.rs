@@ -48,6 +48,31 @@ pub(crate) enum Route {
     Stealth,
 }
 
+impl Route {
+    /// The route's name in the usage: `direct`, `browser` or `stealth`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Route::Direct => "direct",
+            Route::Browser => "browser",
+            Route::Stealth => "stealth",
+        }
+    }
+}
+
+/// How a page was served, for the usage's `route`: the rung it was read on, and whether Lightpanda rendered it afterwards.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Served {
+    pub(crate) route: Route,
+    pub(crate) rendered: bool,
+}
+
+impl Served {
+    /// The usage's name for the page: its route, with `+render` when it was rendered.
+    pub(crate) fn name(self) -> String {
+        if self.rendered { format!("{}+render", self.route.name()) } else { self.route.name().to_string() }
+    }
+}
+
 /// The largest page read: a body past this is an error, not read on.
 const PAGE_MAX: usize = 8 << 20;
 

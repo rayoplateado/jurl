@@ -22,7 +22,7 @@ use crate::{
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Kind, Link},
-    fetch::Retry,
+    fetch::{Retry, Served},
     judge::{Ctx, Item, is_block_page},
     links::{self, FieldScores},
     load,
@@ -510,6 +510,8 @@ struct Visit {
     menus: HashSet<String>,
     /// The field scores this page asked Jev for, by link (see [`FieldScores`]): the search keeps them for later pages.
     new_field_scores: FieldScores,
+    /// How the page was served, for the usage's `route`.
+    served: Served,
 }
 
 /// What `-t` prints for each page read: how warm the page was, and how sure it is of an answer.
@@ -569,8 +571,8 @@ async fn visit(
     read: &HashSet<String>,
 ) -> Result<Visit> {
     let mut t = Timer::new();
-    let (url, ex) = load(args, cfg, url, &mut t).await?;
-    judge(args, client, api_key, url, ex, site, known, field_scores, read).await
+    let (url, ex, served) = load(args, cfg, url, &mut t).await?;
+    judge(args, client, api_key, url, ex, site, known, field_scores, read, served).await
 }
 
 /// Is the answer on a page that is loaded, and which of its links lead on? Both questions go to Jev at once. `known` holds
@@ -586,6 +588,7 @@ async fn judge(
     known: &HashSet<String>,
     field_scores: &FieldScores,
     read: &HashSet<String>,
+    served: Served,
 ) -> Result<Visit> {
     // A lead can read as a page read already (a markdown lead whose HTML page the search read): it is not judged again.
     if read.contains(&links::key(&url)) {
@@ -675,7 +678,7 @@ async fn judge(
     if let Some(block) = json_block {
         ex.blocks.push(block);
     }
-    Ok(Visit { url, ex, found, score, warmth, links, menus, new_field_scores })
+    Ok(Visit { url, ex, found, score, warmth, links, menus, new_field_scores, served })
 }
 
 /// A page waiting to be opened, and how jurl would get there.
@@ -768,6 +771,8 @@ struct Search {
     log: Vec<Reading>,
     /// The trail went cold before the budget ran out (see [`Stop::Cold`]).
     cold: bool,
+    /// How the start page was served: the usage's `route` when the search misses (see `conclude`).
+    start_served: Served,
 }
 
 impl Search {
@@ -789,7 +794,7 @@ impl Search {
             Retry::for_run(args.no_browser_retry, args.timing, &args.reach, &args.cookies, args.stealth.as_ref());
 
         let (loaded, files) = tokio::join!(load(args, cfg, start, t), site_files(start, &site, retry));
-        let (url, ex) = loaded?;
+        let (url, ex, served) = loaded?;
         let SiteFiles { robots, links: mut map } = files;
         // The hosts the page links to on its own registrable domain (docs.stripe.com from stripe.com): their llms.txt is
         // read too, and their pages are leads like the site's own.
@@ -801,7 +806,7 @@ impl Search {
         let read_before = HashSet::new();
         let (known0, field0) = (HashSet::new(), FieldScores::new());
         let (first, hints) =
-            tokio::join!(judge(args, client, api_key, url, ex, &site, &known0, &field0, &read_before), async {
+            tokio::join!(judge(args, client, api_key, url, ex, &site, &known0, &field0, &read_before, served), async {
                 let (llms, sitemaps) =
                     tokio::join!(linked_llms(start, &linked, retry), linked_sitemaps(start, &linked, retry),);
                 map.extend(llms);
@@ -838,6 +843,7 @@ impl Search {
             closest: None,
             log: Vec::new(),
             cold: false,
+            start_served: served,
         };
         let first_path = vec![first.url.clone()];
         search.absorb(first, start_fit, 1.0, first_path);
@@ -1002,6 +1008,8 @@ impl Search {
             eprintln!("   {pages} pages · {tokens} tokens");
         }
         self.found.sort_by(|a, b| b.rank.total_cmp(&a.rank));
+        // The usage's route is the page that answers, or the start page when the search misses (see `Usage::record_route`).
+        crate::decide::USAGE.record_route(self.found.first().map_or(self.start_served, |best| best.visit.served));
         let (ranked, missed_by) = match self.found.into_iter().next() {
             Some(best) => (best, None),
             None => match self.closest {
@@ -1527,6 +1535,7 @@ mod tests {
             links: links.iter().map(|&(l, p)| ScoredLink { url: u(l), text: String::new(), p }).collect(),
             menus: HashSet::new(),
             new_field_scores: FieldScores::new(),
+            served: crate::fetch::Served::default(),
         }
     }
 
@@ -1548,6 +1557,7 @@ mod tests {
             closest: None,
             log: Vec::new(),
             cold: false,
+            start_served: crate::fetch::Served::default(),
         }
     }
 

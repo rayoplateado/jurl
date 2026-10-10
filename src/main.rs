@@ -262,7 +262,8 @@ async fn read(
         let _ = warm.await;
         return follow::run(args, cfg, client, key, target, t).await;
     }
-    let (url, ex) = load(args, cfg, &target, t).await?;
+    let (url, ex, served) = load(args, cfg, &target, t).await?;
+    decide::USAGE.record_route(served);
     let _ = warm.await;
 
     let ctx = Ctx::new(args, client, key, &url, &ex);
@@ -275,8 +276,14 @@ async fn read(
     }
 }
 
-/// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images.
-pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut Timer) -> Result<(url::Url, Extracted)> {
+/// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images. Also says how the page was
+/// served, for the usage's `route`.
+pub(crate) async fn load(
+    args: &Args,
+    cfg: &Config,
+    target: &url::Url,
+    t: &mut Timer,
+) -> Result<(url::Url, Extracted, fetch::Served)> {
     let page = if args.render {
         fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;
         let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
@@ -299,6 +306,7 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
         }
         page
     };
+    let mut served = fetch::Served { route: page.route, rendered: args.render };
     // --precise may answer with the page's JSON-LD values (see `extract::json_ld`), read from the HTML that was extracted
     // (the rendered one, when the page is rendered); they are added once the render decision is made.
     let mut json_ld_html = (args.precise && !page.is_markdown).then(|| page.body.clone());
@@ -331,6 +339,7 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
                     match fetch::render(&bin, &page.url).await {
                         Ok(rendered) => {
                             ex = extract::html(&rendered.body, &rendered.url);
+                            served.rendered = true;
                             json_ld_html = args.precise.then(|| rendered.body.clone());
                             t.lap("render");
                         }
@@ -346,5 +355,5 @@ pub(crate) async fn load(args: &Args, cfg: &Config, target: &url::Url, t: &mut T
     if let Some(html) = &json_ld_html {
         extract::json_ld::add_to(&mut ex, html);
     }
-    Ok((page.url, ex))
+    Ok((page.url, ex, served))
 }
