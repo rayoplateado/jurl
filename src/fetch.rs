@@ -204,8 +204,9 @@ pub(crate) fn host_key(url: &Url) -> Option<String> {
 
 /// The page at `url`. When the normal client is refused and the retry is on, the same URL is asked once more by the
 /// browser client, whose TLS and HTTP/2 fingerprint some bot protection accepts where it refuses the normal client. A host
-/// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried. A page still
-/// refused with 401, 403 or 429 is last asked of the stealth sidecar, when the run has one (see `refused_page`).
+/// that a retry showed needs the browser client is asked there first, for STICKY_TTL. Nothing else is retried. A page that a host
+/// refuses with 401, 403 or 429 is read again through the fallback proxy, when the run has one (rung 3), and a page still refused
+/// with 401, 403 or 429 is last asked of the stealth sidecar, when the run has one (see `refused_page`).
 pub(crate) async fn fetch(url: &str, retry: Retry<'_>) -> Result<Page> {
     fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
 }
@@ -737,8 +738,9 @@ impl std::error::Error for ImageRefused {}
 
 /// The bytes of the image `url` that `page` shows, at most `max`, asked the way a browser's `<img>` asks (see
 /// [`image_headers`]). A 401, 403 or 429 from the plain client is asked once more of the browser client, as the page is,
-/// and a host that such a retry showed needs the browser client is asked there first, through the memo pages share. A
-/// refusal is an [`ImageRefused`]. A guard refusal, an image too large to read, and no reply are ordinary errors.
+/// and a host that such a retry showed needs the browser client is asked there first, through the memo pages share. A host on
+/// the fallback proxy has its images read through it, and a refusal is not retried. An image never puts a host on the proxy: only
+/// a page does. A refusal is an [`ImageRefused`]. A guard refusal, an image too large to read, and no reply are ordinary errors.
 pub(crate) async fn image_bytes(page: &Url, url: &Url, retry: Retry<'_>, max: usize) -> Result<Vec<u8>> {
     let now = Instant::now();
     let headers = image_headers(page, url);

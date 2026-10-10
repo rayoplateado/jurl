@@ -1,6 +1,6 @@
 //! Rung 5 of the read ladder: a stealth sidecar that loads one public page in a stealth browser (Camoufox, MPL-2.0) and
 //! returns the rendered HTML, with its own verdict on what it found. jurl asks it only for a page that a host still refuses
-//! with 401, 403 or 429 after rungs 1–2 (see `fetch::fetch_capped`), and only when `JURL_STEALTH_URL` and
+//! with 401, 403 or 429 after rungs 1–3 (see `fetch::fetch_capped`), and only when `JURL_STEALTH_URL` and
 //! `JURL_STEALTH_TOKEN` are both set. jurl decides nothing from the page's text: the sidecar says `content`, `captcha`,
 //! `blocked`, `challenge` or `error`. A CAPTCHA is never solved: the page is an error, and it goes to human review.
 //!
