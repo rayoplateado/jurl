@@ -1,0 +1,1498 @@
+{
+ "measured": "2026-10-09",
+ "what": "fetch layer only: normal client, browser client, and fetch() with the retry on; one request per client per site; no model calls",
+ "build": "cargo test --release bench_browser_retry -- --ignored --nocapture (commit of this PR)",
+ "runs": [
+  {
+   "run": 1,
+   "rows": [
+    {
+     "browser": {
+      "bytes": 599770,
+      "status": 200
+     },
+     "browser_ms": 156,
+     "category": "news (Spain)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 113,
+     "retry": {
+      "bytes": 599770,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 197,
+     "url": "https://www.eleconomista.es/"
+    },
+    {
+     "browser": {
+      "bytes": 478946,
+      "status": 200
+     },
+     "browser_ms": 4085,
+     "category": "news (Spain)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 169,
+     "retry": {
+      "error": "https://elpais.com/ returned HTTP 403 Forbidden (also with a browser's TLS fingerprint)",
+      "ok": false
+     },
+     "retry_ms": 257,
+     "url": "https://elpais.com/"
+    },
+    {
+     "browser": {
+      "bytes": 494163,
+      "status": 200
+     },
+     "browser_ms": 84,
+     "category": "news (Spain)",
+     "normal": {
+      "bytes": 494163,
+      "status": 200
+     },
+     "normal_ms": 113,
+     "retry": {
+      "bytes": 494163,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 20,
+     "url": "https://www.elmundo.es/"
+    },
+    {
+     "browser": {
+      "bytes": 932343,
+      "status": 200
+     },
+     "browser_ms": 144,
+     "category": "news (France)",
+     "normal": {
+      "bytes": 932343,
+      "status": 200
+     },
+     "normal_ms": 164,
+     "retry": {
+      "bytes": 932343,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 72,
+     "url": "https://www.lemonde.fr/"
+    },
+    {
+     "browser": {
+      "bytes": 1285892,
+      "status": 200
+     },
+     "browser_ms": 116,
+     "category": "news (France)",
+     "normal": {
+      "bytes": 1285892,
+      "status": 200
+     },
+     "normal_ms": 219,
+     "retry": {
+      "bytes": 1285892,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 43,
+     "url": "https://www.lefigaro.fr/"
+    },
+    {
+     "browser": {
+      "bytes": 1951828,
+      "status": 200
+     },
+     "browser_ms": 386,
+     "category": "news (Germany)",
+     "normal": {
+      "bytes": 1951828,
+      "status": 200
+     },
+     "normal_ms": 358,
+     "retry": {
+      "bytes": 1951828,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 98,
+     "url": "https://www.spiegel.de/"
+    },
+    {
+     "browser": {
+      "bytes": 805242,
+      "status": 200
+     },
+     "browser_ms": 300,
+     "category": "news (Germany)",
+     "normal": {
+      "bytes": 805242,
+      "status": 200
+     },
+     "normal_ms": 711,
+     "retry": {
+      "bytes": 805242,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 83,
+     "url": "https://www.bild.de/"
+    },
+    {
+     "browser": {
+      "bytes": 1015784,
+      "status": 200
+     },
+     "browser_ms": 104,
+     "category": "news (Italy)",
+     "normal": {
+      "bytes": 1015784,
+      "status": 200
+     },
+     "normal_ms": 145,
+     "retry": {
+      "bytes": 1015784,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 32,
+     "url": "https://www.corriere.it/"
+    },
+    {
+     "browser": {
+      "bytes": 282107,
+      "status": 200
+     },
+     "browser_ms": 475,
+     "category": "news (Japan)",
+     "normal": {
+      "bytes": 282107,
+      "status": 200
+     },
+     "normal_ms": 10204,
+     "retry": {
+      "bytes": 282107,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 9787,
+     "url": "https://www.asahi.com/"
+    },
+    {
+     "browser": {
+      "bytes": 1620373,
+      "status": 200
+     },
+     "browser_ms": 372,
+     "category": "news (US/UK)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 138,
+     "retry": {
+      "bytes": 1620373,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 437,
+     "url": "https://www.nytimes.com/"
+    },
+    {
+     "browser": {
+      "status": 401
+     },
+     "browser_ms": 89,
+     "category": "news (US/UK)",
+     "normal": {
+      "status": 401
+     },
+     "normal_ms": 181,
+     "retry": {
+      "error": "https://www.wsj.com/ returned HTTP 401 Unauthorized",
+      "ok": false
+     },
+     "retry_ms": 58,
+     "url": "https://www.wsj.com/"
+    },
+    {
+     "browser": {
+      "status": 401
+     },
+     "browser_ms": 92,
+     "category": "news (US/UK)",
+     "normal": {
+      "status": 401
+     },
+     "normal_ms": 178,
+     "retry": {
+      "error": "https://www.reuters.com/ returned HTTP 401 Unauthorized",
+      "ok": false
+     },
+     "retry_ms": 103,
+     "url": "https://www.reuters.com/"
+    },
+    {
+     "browser": {
+      "bytes": 6990387,
+      "status": 200
+     },
+     "browser_ms": 305,
+     "category": "news (US/UK)",
+     "normal": {
+      "bytes": 6990387,
+      "status": 200
+     },
+     "normal_ms": 3314,
+     "retry": {
+      "bytes": 6990387,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 260,
+     "url": "https://www.bloomberg.com/"
+    },
+    {
+     "browser": {
+      "bytes": 355737,
+      "status": 200
+     },
+     "browser_ms": 194,
+     "category": "news (US/UK)",
+     "normal": {
+      "bytes": 355737,
+      "status": 200
+     },
+     "normal_ms": 261,
+     "retry": {
+      "bytes": 355766,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 245,
+     "url": "https://www.ft.com/"
+    },
+    {
+     "browser": {
+      "bytes": 1062543,
+      "status": 200
+     },
+     "browser_ms": 146,
+     "category": "news (Argentina)",
+     "normal": {
+      "bytes": 1062544,
+      "status": 200
+     },
+     "normal_ms": 156,
+     "retry": {
+      "bytes": 1062544,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 112,
+     "url": "https://www.lanacion.com.ar/"
+    },
+    {
+     "browser": {
+      "bytes": 2141082,
+      "status": 200
+     },
+     "browser_ms": 142,
+     "category": "news (Hong Kong)",
+     "normal": {
+      "bytes": 2139962,
+      "status": 200
+     },
+     "normal_ms": 164,
+     "retry": {
+      "bytes": 2141082,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 61,
+     "url": "https://www.scmp.com/"
+    },
+    {
+     "browser": {
+      "bytes": 2007,
+      "status": 202
+     },
+     "browser_ms": 48,
+     "category": "e-commerce",
+     "normal": {
+      "bytes": 0,
+      "status": 202
+     },
+     "normal_ms": 93,
+     "retry": {
+      "bytes": 0,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 18,
+     "url": "https://www.amazon.com/"
+    },
+    {
+     "browser": {
+      "bytes": 712667,
+      "status": 200
+     },
+     "browser_ms": 375,
+     "category": "e-commerce",
+     "normal": {
+      "bytes": 712667,
+      "status": 200
+     },
+     "normal_ms": 394,
+     "retry": {
+      "bytes": 712667,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 433,
+     "url": "https://www.nike.com/"
+    },
+    {
+     "browser": {
+      "bytes": 389964,
+      "status": 200
+     },
+     "browser_ms": 122,
+     "category": "e-commerce",
+     "normal": {
+      "bytes": 389593,
+      "status": 200
+     },
+     "normal_ms": 129,
+     "retry": {
+      "bytes": 389593,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 49,
+     "url": "https://www.walmart.com/"
+    },
+    {
+     "browser": {
+      "bytes": 73010,
+      "status": 200
+     },
+     "browser_ms": 1681,
+     "category": "airline",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 131,
+     "retry": {
+      "bytes": 73010,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 1786,
+     "url": "https://www.aa.com/"
+    },
+    {
+     "browser": {
+      "bytes": 434864,
+      "status": 200
+     },
+     "browser_ms": 2663,
+     "category": "airline",
+     "normal": {
+      "bytes": 8998,
+      "status": 200
+     },
+     "normal_ms": 100,
+     "retry": {
+      "bytes": 8998,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 48,
+     "url": "https://www.britishairways.com/"
+    },
+    {
+     "browser": {
+      "bytes": 2497,
+      "status": 200
+     },
+     "browser_ms": 214,
+     "category": "airline",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 137,
+     "retry": {
+      "bytes": 2497,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 267,
+     "url": "https://www.easyjet.com/"
+    },
+    {
+     "browser": {
+      "bytes": 511958,
+      "status": 200
+     },
+     "browser_ms": 418,
+     "category": "hotel / booking",
+     "normal": {
+      "bytes": 7033,
+      "status": 202
+     },
+     "normal_ms": 205,
+     "retry": {
+      "bytes": 8410,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 210,
+     "url": "https://www.booking.com/"
+    },
+    {
+     "browser": {
+      "bytes": 562282,
+      "status": 200
+     },
+     "browser_ms": 240,
+     "category": "ticketing",
+     "normal": {
+      "bytes": 562282,
+      "status": 200
+     },
+     "normal_ms": 255,
+     "retry": {
+      "bytes": 562282,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 173,
+     "url": "https://www.ticketmaster.com/"
+    },
+    {
+     "browser": {
+      "status": 403
+     },
+     "browser_ms": 104,
+     "category": "ticketing",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 143,
+     "retry": {
+      "error": "https://www.stubhub.com/ returned HTTP 403 Forbidden (also with a browser's TLS fingerprint)",
+      "ok": false
+     },
+     "retry_ms": 161,
+     "url": "https://www.stubhub.com/"
+    },
+    {
+     "browser": {
+      "bytes": 55056,
+      "status": 200
+     },
+     "browser_ms": 71,
+     "category": "CDN-fronted (guess)",
+     "normal": {
+      "bytes": 55056,
+      "status": 200
+     },
+     "normal_ms": 122,
+     "retry": {
+      "bytes": 55359,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 49,
+     "url": "https://medium.com/"
+    },
+    {
+     "browser": {
+      "status": 403
+     },
+     "browser_ms": 78,
+     "category": "CDN-fronted (guess)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 110,
+     "retry": {
+      "error": "https://www.g2.com/ returned HTTP 403 Forbidden (also with a browser's TLS fingerprint)",
+      "ok": false
+     },
+     "retry_ms": 112,
+     "url": "https://www.g2.com/"
+    },
+    {
+     "browser": {
+      "bytes": 596177,
+      "status": 200
+     },
+     "browser_ms": 475,
+     "category": "CDN-fronted (guess)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 312,
+     "retry": {
+      "bytes": 596179,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 575,
+     "url": "https://www.indeed.com/"
+    },
+    {
+     "browser": {
+      "bytes": 259421,
+      "status": 200
+     },
+     "browser_ms": 147,
+     "category": "control",
+     "normal": {
+      "bytes": 259421,
+      "status": 200
+     },
+     "normal_ms": 189,
+     "retry": {
+      "bytes": 259421,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 66,
+     "url": "https://en.wikipedia.org/"
+    },
+    {
+     "browser": {
+      "bytes": 650133,
+      "status": 200
+     },
+     "browser_ms": 76,
+     "category": "control",
+     "normal": {
+      "bytes": 650133,
+      "status": 200
+     },
+     "normal_ms": 99,
+     "retry": {
+      "bytes": 650133,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 26,
+     "url": "https://www.bbc.com/"
+    },
+    {
+     "browser": {
+      "bytes": 577348,
+      "status": 200
+     },
+     "browser_ms": 232,
+     "category": "control",
+     "normal": {
+      "bytes": 577343,
+      "status": 200
+     },
+     "normal_ms": 574,
+     "retry": {
+      "bytes": 577347,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 51,
+     "url": "https://github.com/"
+    },
+    {
+     "browser": {
+      "bytes": 52765,
+      "status": 200
+     },
+     "browser_ms": 51,
+     "category": "control",
+     "normal": {
+      "bytes": 52765,
+      "status": 200
+     },
+     "normal_ms": 75,
+     "retry": {
+      "bytes": 52765,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 16,
+     "url": "https://www.python.org/"
+    },
+    {
+     "browser": {
+      "bytes": 18594,
+      "status": 200
+     },
+     "browser_ms": 105,
+     "category": "control",
+     "normal": {
+      "bytes": 18594,
+      "status": 200
+     },
+     "normal_ms": 107,
+     "retry": {
+      "bytes": 18594,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 38,
+     "url": "https://www.rust-lang.org/"
+    },
+    {
+     "browser": {
+      "bytes": 577,
+      "status": 200
+     },
+     "browser_ms": 60,
+     "category": "control",
+     "normal": {
+      "bytes": 577,
+      "status": 200
+     },
+     "normal_ms": 96,
+     "retry": {
+      "bytes": 577,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 21,
+     "url": "https://example.com/"
+    },
+    {
+     "browser": {
+      "bytes": 34760,
+      "status": 200
+     },
+     "browser_ms": 548,
+     "category": "control",
+     "normal": {
+      "bytes": 34760,
+      "status": 200
+     },
+     "normal_ms": 732,
+     "retry": {
+      "bytes": 34760,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 176,
+     "url": "https://news.ycombinator.com/"
+    },
+    {
+     "browser": {
+      "bytes": 31601,
+      "status": 200
+     },
+     "browser_ms": 490,
+     "category": "control",
+     "normal": {
+      "bytes": 31601,
+      "status": 200
+     },
+     "normal_ms": 482,
+     "retry": {
+      "bytes": 31601,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 132,
+     "url": "https://www.gnu.org/"
+    },
+    {
+     "browser": {
+      "bytes": 19137,
+      "status": 200
+     },
+     "browser_ms": 51,
+     "category": "control",
+     "normal": {
+      "bytes": 19137,
+      "status": 200
+     },
+     "normal_ms": 76,
+     "retry": {
+      "bytes": 19137,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 15,
+     "url": "https://www.kernel.org/"
+    },
+    {
+     "browser": {
+      "bytes": 15863,
+      "status": 200
+     },
+     "browser_ms": 538,
+     "category": "control",
+     "normal": {
+      "bytes": 15863,
+      "status": 200
+     },
+     "normal_ms": 277,
+     "retry": {
+      "bytes": 15863,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 92,
+     "url": "https://www.debian.org/"
+    }
+   ]
+  },
+  {
+   "run": 2,
+   "rows": [
+    {
+     "browser": {
+      "bytes": 599770,
+      "status": 200
+     },
+     "browser_ms": 195,
+     "category": "news (Spain)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 117,
+     "retry": {
+      "bytes": 599770,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 229,
+     "url": "https://www.eleconomista.es/"
+    },
+    {
+     "browser": {
+      "status": 403
+     },
+     "browser_ms": 166,
+     "category": "news (Spain)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 188,
+     "retry": {
+      "error": "https://elpais.com/ returned HTTP 403 Forbidden (also with a browser's TLS fingerprint)",
+      "ok": false
+     },
+     "retry_ms": 296,
+     "url": "https://elpais.com/"
+    },
+    {
+     "browser": {
+      "bytes": 494529,
+      "status": 200
+     },
+     "browser_ms": 87,
+     "category": "news (Spain)",
+     "normal": {
+      "bytes": 494529,
+      "status": 200
+     },
+     "normal_ms": 118,
+     "retry": {
+      "bytes": 494529,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 21,
+     "url": "https://www.elmundo.es/"
+    },
+    {
+     "browser": {
+      "bytes": 932336,
+      "status": 200
+     },
+     "browser_ms": 137,
+     "category": "news (France)",
+     "normal": {
+      "bytes": 932336,
+      "status": 200
+     },
+     "normal_ms": 194,
+     "retry": {
+      "bytes": 932336,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 70,
+     "url": "https://www.lemonde.fr/"
+    },
+    {
+     "browser": {
+      "bytes": 1261529,
+      "status": 200
+     },
+     "browser_ms": 158,
+     "category": "news (France)",
+     "normal": {
+      "bytes": 1261529,
+      "status": 200
+     },
+     "normal_ms": 144,
+     "retry": {
+      "bytes": 1261529,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 44,
+     "url": "https://www.lefigaro.fr/"
+    },
+    {
+     "browser": {
+      "bytes": 1951721,
+      "status": 200
+     },
+     "browser_ms": 347,
+     "category": "news (Germany)",
+     "normal": {
+      "bytes": 1951721,
+      "status": 200
+     },
+     "normal_ms": 323,
+     "retry": {
+      "bytes": 1951721,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 98,
+     "url": "https://www.spiegel.de/"
+    },
+    {
+     "browser": {
+      "bytes": 805242,
+      "status": 200
+     },
+     "browser_ms": 261,
+     "category": "news (Germany)",
+     "normal": {
+      "bytes": 805242,
+      "status": 200
+     },
+     "normal_ms": 398,
+     "retry": {
+      "bytes": 805242,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 70,
+     "url": "https://www.bild.de/"
+    },
+    {
+     "browser": {
+      "bytes": 999655,
+      "status": 200
+     },
+     "browser_ms": 109,
+     "category": "news (Italy)",
+     "normal": {
+      "bytes": 999655,
+      "status": 200
+     },
+     "normal_ms": 146,
+     "retry": {
+      "bytes": 999655,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 23,
+     "url": "https://www.corriere.it/"
+    },
+    {
+     "browser": {
+      "bytes": 281558,
+      "status": 200
+     },
+     "browser_ms": 634,
+     "category": "news (Japan)",
+     "normal": {
+      "bytes": 281558,
+      "status": 200
+     },
+     "normal_ms": 9155,
+     "retry": {
+      "bytes": 281558,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 8351,
+     "url": "https://www.asahi.com/"
+    },
+    {
+     "browser": {
+      "bytes": 1620373,
+      "status": 200
+     },
+     "browser_ms": 409,
+     "category": "news (US/UK)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 159,
+     "retry": {
+      "bytes": 1620373,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 516,
+     "url": "https://www.nytimes.com/"
+    },
+    {
+     "browser": {
+      "status": 401
+     },
+     "browser_ms": 136,
+     "category": "news (US/UK)",
+     "normal": {
+      "status": 401
+     },
+     "normal_ms": 152,
+     "retry": {
+      "error": "https://www.wsj.com/ returned HTTP 401 Unauthorized",
+      "ok": false
+     },
+     "retry_ms": 79,
+     "url": "https://www.wsj.com/"
+    },
+    {
+     "browser": {
+      "status": 401
+     },
+     "browser_ms": 137,
+     "category": "news (US/UK)",
+     "normal": {
+      "status": 401
+     },
+     "normal_ms": 180,
+     "retry": {
+      "error": "https://www.reuters.com/ returned HTTP 401 Unauthorized",
+      "ok": false
+     },
+     "retry_ms": 103,
+     "url": "https://www.reuters.com/"
+    },
+    {
+     "browser": {
+      "bytes": 6990387,
+      "status": 200
+     },
+     "browser_ms": 338,
+     "category": "news (US/UK)",
+     "normal": {
+      "bytes": 6990387,
+      "status": 200
+     },
+     "normal_ms": 476,
+     "retry": {
+      "bytes": 6990387,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 237,
+     "url": "https://www.bloomberg.com/"
+    },
+    {
+     "browser": {
+      "bytes": 355745,
+      "status": 200
+     },
+     "browser_ms": 187,
+     "category": "news (US/UK)",
+     "normal": {
+      "bytes": 355737,
+      "status": 200
+     },
+     "normal_ms": 204,
+     "retry": {
+      "bytes": 355745,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 158,
+     "url": "https://www.ft.com/"
+    },
+    {
+     "browser": {
+      "bytes": 1062543,
+      "status": 200
+     },
+     "browser_ms": 177,
+     "category": "news (Argentina)",
+     "normal": {
+      "bytes": 1062544,
+      "status": 200
+     },
+     "normal_ms": 215,
+     "retry": {
+      "bytes": 1062544,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 101,
+     "url": "https://www.lanacion.com.ar/"
+    },
+    {
+     "browser": {
+      "bytes": 2141108,
+      "status": 200
+     },
+     "browser_ms": 109,
+     "category": "news (Hong Kong)",
+     "normal": {
+      "bytes": 2141082,
+      "status": 200
+     },
+     "normal_ms": 132,
+     "retry": {
+      "bytes": 2141108,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 59,
+     "url": "https://www.scmp.com/"
+    },
+    {
+     "browser": {
+      "bytes": 2007,
+      "status": 202
+     },
+     "browser_ms": 49,
+     "category": "e-commerce",
+     "normal": {
+      "bytes": 0,
+      "status": 202
+     },
+     "normal_ms": 90,
+     "retry": {
+      "bytes": 0,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 16,
+     "url": "https://www.amazon.com/"
+    },
+    {
+     "browser": {
+      "bytes": 712667,
+      "status": 200
+     },
+     "browser_ms": 600,
+     "category": "e-commerce",
+     "normal": {
+      "bytes": 712666,
+      "status": 200
+     },
+     "normal_ms": 303,
+     "retry": {
+      "bytes": 712666,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 208,
+     "url": "https://www.nike.com/"
+    },
+    {
+     "browser": {
+      "bytes": 389964,
+      "status": 200
+     },
+     "browser_ms": 431,
+     "category": "e-commerce",
+     "normal": {
+      "bytes": 389593,
+      "status": 200
+     },
+     "normal_ms": 157,
+     "retry": {
+      "bytes": 389593,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 42,
+     "url": "https://www.walmart.com/"
+    },
+    {
+     "browser": {
+      "bytes": 73011,
+      "status": 200
+     },
+     "browser_ms": 1961,
+     "category": "airline",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 229,
+     "retry": {
+      "bytes": 73010,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 1971,
+     "url": "https://www.aa.com/"
+    },
+    {
+     "browser": {
+      "bytes": 434864,
+      "status": 200
+     },
+     "browser_ms": 1435,
+     "category": "airline",
+     "normal": {
+      "bytes": 8998,
+      "status": 200
+     },
+     "normal_ms": 121,
+     "retry": {
+      "bytes": 8998,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 64,
+     "url": "https://www.britishairways.com/"
+    },
+    {
+     "browser": {
+      "bytes": 2497,
+      "status": 200
+     },
+     "browser_ms": 291,
+     "category": "airline",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 128,
+     "retry": {
+      "bytes": 2497,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 481,
+     "url": "https://www.easyjet.com/"
+    },
+    {
+     "browser": {
+      "bytes": 8410,
+      "status": 202
+     },
+     "browser_ms": 96,
+     "category": "hotel / booking",
+     "normal": {
+      "bytes": 8410,
+      "status": 202
+     },
+     "normal_ms": 151,
+     "retry": {
+      "bytes": 3962,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 152,
+     "url": "https://www.booking.com/"
+    },
+    {
+     "browser": {
+      "bytes": 562282,
+      "status": 200
+     },
+     "browser_ms": 211,
+     "category": "ticketing",
+     "normal": {
+      "bytes": 562282,
+      "status": 200
+     },
+     "normal_ms": 231,
+     "retry": {
+      "bytes": 562282,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 162,
+     "url": "https://www.ticketmaster.com/"
+    },
+    {
+     "browser": {
+      "status": 403
+     },
+     "browser_ms": 109,
+     "category": "ticketing",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 145,
+     "retry": {
+      "error": "https://www.stubhub.com/ returned HTTP 403 Forbidden (also with a browser's TLS fingerprint)",
+      "ok": false
+     },
+     "retry_ms": 164,
+     "url": "https://www.stubhub.com/"
+    },
+    {
+     "browser": {
+      "bytes": 55359,
+      "status": 200
+     },
+     "browser_ms": 84,
+     "category": "CDN-fronted (guess)",
+     "normal": {
+      "bytes": 55359,
+      "status": 200
+     },
+     "normal_ms": 100,
+     "retry": {
+      "bytes": 55360,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 39,
+     "url": "https://medium.com/"
+    },
+    {
+     "browser": {
+      "status": 403
+     },
+     "browser_ms": 73,
+     "category": "CDN-fronted (guess)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 84,
+     "retry": {
+      "error": "https://www.g2.com/ returned HTTP 403 Forbidden (also with a browser's TLS fingerprint)",
+      "ok": false
+     },
+     "retry_ms": 123,
+     "url": "https://www.g2.com/"
+    },
+    {
+     "browser": {
+      "bytes": 596167,
+      "status": 200
+     },
+     "browser_ms": 519,
+     "category": "CDN-fronted (guess)",
+     "normal": {
+      "status": 403
+     },
+     "normal_ms": 281,
+     "retry": {
+      "bytes": 596513,
+      "ok": true,
+      "refused": 403
+     },
+     "retry_ms": 642,
+     "url": "https://www.indeed.com/"
+    },
+    {
+     "browser": {
+      "bytes": 259421,
+      "status": 200
+     },
+     "browser_ms": 141,
+     "category": "control",
+     "normal": {
+      "bytes": 259421,
+      "status": 200
+     },
+     "normal_ms": 174,
+     "retry": {
+      "bytes": 259421,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 64,
+     "url": "https://en.wikipedia.org/"
+    },
+    {
+     "browser": {
+      "bytes": 650133,
+      "status": 200
+     },
+     "browser_ms": 76,
+     "category": "control",
+     "normal": {
+      "bytes": 650133,
+      "status": 200
+     },
+     "normal_ms": 101,
+     "retry": {
+      "bytes": 650133,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 23,
+     "url": "https://www.bbc.com/"
+    },
+    {
+     "browser": {
+      "bytes": 577348,
+      "status": 200
+     },
+     "browser_ms": 271,
+     "category": "control",
+     "normal": {
+      "bytes": 577342,
+      "status": 200
+     },
+     "normal_ms": 510,
+     "retry": {
+      "bytes": 577342,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 91,
+     "url": "https://github.com/"
+    },
+    {
+     "browser": {
+      "bytes": 52765,
+      "status": 200
+     },
+     "browser_ms": 50,
+     "category": "control",
+     "normal": {
+      "bytes": 52765,
+      "status": 200
+     },
+     "normal_ms": 74,
+     "retry": {
+      "bytes": 52765,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 17,
+     "url": "https://www.python.org/"
+    },
+    {
+     "browser": {
+      "bytes": 18594,
+      "status": 200
+     },
+     "browser_ms": 105,
+     "category": "control",
+     "normal": {
+      "bytes": 18594,
+      "status": 200
+     },
+     "normal_ms": 110,
+     "retry": {
+      "bytes": 18594,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 34,
+     "url": "https://www.rust-lang.org/"
+    },
+    {
+     "browser": {
+      "bytes": 577,
+      "status": 200
+     },
+     "browser_ms": 57,
+     "category": "control",
+     "normal": {
+      "bytes": 577,
+      "status": 200
+     },
+     "normal_ms": 75,
+     "retry": {
+      "bytes": 577,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 20,
+     "url": "https://example.com/"
+    },
+    {
+     "browser": {
+      "bytes": 34760,
+      "status": 200
+     },
+     "browser_ms": 576,
+     "category": "control",
+     "normal": {
+      "bytes": 34760,
+      "status": 200
+     },
+     "normal_ms": 749,
+     "retry": {
+      "bytes": 34760,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 180,
+     "url": "https://news.ycombinator.com/"
+    },
+    {
+     "browser": {
+      "bytes": 31601,
+      "status": 200
+     },
+     "browser_ms": 460,
+     "category": "control",
+     "normal": {
+      "bytes": 31601,
+      "status": 200
+     },
+     "normal_ms": 444,
+     "retry": {
+      "bytes": 31601,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 128,
+     "url": "https://www.gnu.org/"
+    },
+    {
+     "browser": {
+      "bytes": 19137,
+      "status": 200
+     },
+     "browser_ms": 52,
+     "category": "control",
+     "normal": {
+      "bytes": 19137,
+      "status": 200
+     },
+     "normal_ms": 171,
+     "retry": {
+      "bytes": 19137,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 18,
+     "url": "https://www.kernel.org/"
+    },
+    {
+     "browser": {
+      "bytes": 15863,
+      "status": 200
+     },
+     "browser_ms": 278,
+     "category": "control",
+     "normal": {
+      "bytes": 15863,
+      "status": 200
+     },
+     "normal_ms": 276,
+     "retry": {
+      "bytes": 15863,
+      "ok": true,
+      "refused": null
+     },
+     "retry_ms": 91,
+     "url": "https://www.debian.org/"
+    }
+   ]
+  }
+ ]
+}

@@ -107,8 +107,8 @@ async fn no_args() -> Result<ExitCode> {
     }
 }
 
-/// The HTTP client every request goes through: jurl's user agent, and the time limits.
-fn http_client() -> Result<Client> {
+/// The client every request goes through, pages and APIs alike: a browser's user agent, with jurl's version on the end.
+pub(crate) fn http_client() -> Result<Client> {
     Ok(Client::builder()
         .user_agent(concat!(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) jurl/",
@@ -267,8 +267,13 @@ pub(crate) async fn load(
         t.lap("render");
         page
     } else {
-        let page = fetch::fetch(client, target.as_str()).await?;
+        // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
+        let retry = fetch::Retry::for_run(args.no_browser_retry, args.timing);
+        let page = fetch::fetch(client, target.as_str(), retry).await?;
         t.lap("fetch");
+        if page.via_browser {
+            decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         page
     };
     // Only HTML can carry placeholders: a markdown page has no script to have left them.

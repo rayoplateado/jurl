@@ -15,7 +15,7 @@ Any change has to keep these true:
 - **Models choose, they don't write.** Every block, link and image jurl prints comes verbatim from the page. No summaries, no rewording, no generated text in the output.
 - **Output is pipe-friendly.** Results go to stdout as plain text or plain URLs. Progress, warnings and timings go to stderr.
 - **Numbers are measured, not guessed.** If a change affects speed or cost, include before and after `-t` lines on real pages.
-- **Small and dependency-light.** Prefer a few lines in the code that's already here over a new crate.
+- **Small and dependency-light.** Prefer a few lines in the code that's already here over a new crate. Where a crate changes what jurl can do, its cost goes in the PR: the browser-fingerprint retry links BoringSSL, about 3.6 MB on the release binary, and that was accepted.
 
 ## Develop
 
@@ -25,6 +25,8 @@ cargo test        # extraction: layout tables, lazy images, markdown, links, app
 cargo fmt         # CI checks formatting
 cargo clippy --all-targets -- -D warnings
 ```
+
+The build needs Rust 1.98 or newer, and cmake and libclang: jurl links BoringSSL (for the retry with a browser's TLS fingerprint), which is built from source. On macOS, `brew install cmake` and the Xcode Command Line Tools are enough, unless the BoringSSL build fails on `__builtin_clzg`: then the compiler is older than the SDK, and building with Homebrew's LLVM works (`CC=$(brew --prefix llvm)/bin/clang CXX=$(brew --prefix llvm)/bin/clang++ cargo build`). On Debian or Ubuntu: `sudo apt install cmake libclang-dev`. On Windows: NASM and LLVM.
 
 The tests don't need API keys. To try real pages you need a [TypeSafe API key](https://console.typesafe.ai) for Jev. `--vision` and `--find` also need a Cloudflare Workers AI token. Set them in `~/.config/jurl/env` with `jurl init`, or as environment variables (see the README).
 

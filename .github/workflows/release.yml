@@ -47,6 +47,7 @@ on:
       - "Cargo.lock"
       - "dist-workspace.toml"
       - ".github/workflows/release.yml"
+      - ".github/build-setup.yml"
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
@@ -134,6 +135,10 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      # From .github/build-setup.yml (github-build-setup): wreq needs Rust 1.98, and the macOS 14 image has 1.96.
+      - name: "Update the stable Rust toolchain"
+        run: "rustup update stable"
+        shell: "bash"
       - uses: swatinem/rust-cache@v2
         with:
           key: ${{ join(matrix.targets, '-') }}

@@ -1,0 +1,142 @@
+{
+ "measured": "2026-10-09",
+ "site": "https://www.eleconomista.es/ (walled: 403 to the plain client)",
+ "question": "How many Starbucks stores are there worldwide?",
+ "command": "jurl --follow 5 --precise -q \"<question>\" https://www.eleconomista.es/ -t --json",
+ "answer_on_page": "https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html (not on the front page)",
+ "runs": [
+  {
+   "run": "before 1",
+   "binary": "jurl-new (per-hop retry, 85878cd)",
+   "answer": "41.000",
+   "p": 0.97,
+   "pages_read": 3,
+   "path": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "host_switch_lines": [],
+   "phases": "page 1 + site map (1 pages listed) 903ms · next 297ms · 2 more 1017ms · total 2218ms",
+   "jev_requests": 10,
+   "jev_input_tokens": 77288,
+   "usage_browser_retry": true,
+   "pages_detail": [
+    "warmth 0.03 · answer 0.00 · https://www.eleconomista.es/",
+    "warmth 0.01 · answer 0.00 · https://www.eleconomista.es/empresas-finanzas/",
+    "warmth 0.51 · answer 0.97 · https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "retry_lines_on_stderr": 3,
+   "plain_refusals": 3,
+   "plain_refusals_note": "every page read (start page, the front page's second section, the article) was asked plain first and refused, then retried"
+  },
+  {
+   "run": "after 1",
+   "binary": "jurl-sticky (54738cb)",
+   "answer": "41.000",
+   "p": 0.98,
+   "pages_read": 3,
+   "path": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "host_switch_lines": [
+    "jurl: www.eleconomista.es: using the browser client"
+   ],
+   "phases": "page 1 + site map (1 pages listed) 903ms · next 252ms · 2 more 594ms · total 1750ms",
+   "jev_requests": 10,
+   "jev_input_tokens": 77015,
+   "usage_browser_retry": true,
+   "pages_detail": [
+    "warmth 0.03 · answer 0.00 · https://www.eleconomista.es/",
+    "warmth 0.01 · answer 0.00 · https://www.eleconomista.es/empresas-finanzas/",
+    "warmth 0.47 · answer 0.98 · https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "retry_lines_on_stderr": 0,
+   "plain_refusals": 1,
+   "plain_refusals_note": "only the start page was asked plain; the host was then on the browser client, so the two later pages went straight there"
+  },
+  {
+   "run": "before 2",
+   "binary": "jurl-new (per-hop retry, 85878cd)",
+   "answer": "41.000",
+   "p": 0.98,
+   "pages_read": 3,
+   "path": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "host_switch_lines": [],
+   "phases": "page 1 + site map (1 pages listed) 957ms · robots 1 201ms · next 221ms · 2 more 666ms · total 2047ms",
+   "jev_requests": 10,
+   "jev_input_tokens": 76999,
+   "usage_browser_retry": true,
+   "pages_detail": [
+    "warmth 0.03 · answer 0.00 · https://www.eleconomista.es/",
+    "warmth 0.01 · answer 0.00 · https://www.eleconomista.es/empresas-finanzas/",
+    "warmth 0.53 · answer 0.98 · https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "retry_lines_on_stderr": 3,
+   "plain_refusals": 3,
+   "plain_refusals_note": "every page read (start page, the front page's second section, the article) was asked plain first and refused, then retried"
+  },
+  {
+   "run": "after 2",
+   "binary": "jurl-sticky (54738cb)",
+   "answer": "41.000",
+   "p": 0.98,
+   "pages_read": 3,
+   "path": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "host_switch_lines": [
+    "jurl: www.eleconomista.es: using the browser client"
+   ],
+   "phases": "page 1 + site map (1 pages listed) 891ms · next 265ms · 2 more 630ms · total 1787ms",
+   "jev_requests": 10,
+   "jev_input_tokens": 77128,
+   "usage_browser_retry": true,
+   "pages_detail": [
+    "warmth 0.03 · answer 0.00 · https://www.eleconomista.es/",
+    "warmth 0.01 · answer 0.00 · https://www.eleconomista.es/empresas-finanzas/",
+    "warmth 0.58 · answer 0.98 · https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "retry_lines_on_stderr": 0,
+   "plain_refusals": 1,
+   "plain_refusals_note": "only the start page was asked plain; the host was then on the browser client, so the two later pages went straight there"
+  },
+  {
+   "run": "after 3",
+   "binary": "jurl (final commit 54738cb, 10,857,872 bytes)",
+   "answer": "41.000",
+   "p": 0.98,
+   "pages_read": 3,
+   "path": [
+    "https://www.eleconomista.es/",
+    "https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ],
+   "retry_lines_on_stderr": 0,
+   "host_switch_lines": [
+    "jurl: www.eleconomista.es: using the browser client"
+   ],
+   "phases": "page 1 + site map (1 pages listed) 919ms · next 250ms · 2 more 574ms · total 1745ms",
+   "jev_requests": 10,
+   "jev_input_tokens": 77004,
+   "usage_browser_retry": true,
+   "plain_refusals": 1,
+   "plain_refusals_note": "only the start page was asked plain; the host was then on the browser client",
+   "pages_detail": [
+    "warmth 0.03 · answer 0.00 · https://www.eleconomista.es/",
+    "warmth 0.01 · answer 0.00 · https://www.eleconomista.es/empresas-finanzas/",
+    "warmth 0.51 · answer 0.98 · https://www.eleconomista.es/retail-consumo/noticias/14019792/10/26/starbucks-cocina-la-mayor-compra-de-la-historia-de-la-restauracion-al-estudiar-la-adquisicion-de-chipotle.html"
+   ]
+  }
+ ],
+ "jev_input_tokens_total": 385434,
+ "jev_usd_at_0_042_per_million": 0.0162,
+ "incidental_checks": "Three one-page checks against britishairways.com (the pre-retry baseline binary once, the new binary twice) cost 2,171 input tokens together; they are not in jev_input_tokens_total.",
+ "notes": [
+  "The start page's robots.txt and llms.txt/sitemap.xml are read alongside the start page, before its retry can teach the host, so they were plain in both builds; the site map listed no pages in any run.",
+  "Latency: the first page is plain-first in both builds, so 'page 1 + site map' is the same (about 0.9 s); the saving is in the two-page batch that follows."
+ ]
+}

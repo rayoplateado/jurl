@@ -54,7 +54,7 @@ brew install rayoplateado/tap/jurl                                              
 curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.sh | sh   # no Homebrew
 ```
 
-<sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source: `cargo install --git https://github.com/rayoplateado/jurl`</sub>
+<sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source (needs Rust 1.98, cmake and libclang: see [CONTRIBUTING](CONTRIBUTING.md#develop)): `cargo install --git https://github.com/rayoplateado/jurl`</sub>
 
 Then run `jurl`. With nothing set up, it asks how you want to read pages: with your own [TypeSafe API key](https://console.typesafe.ai), which it checks and saves, or with a [jurl cloud](#jurl-cloud) account. Reading a page first asks the same question. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
 
@@ -270,6 +270,7 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | `--vision` | Like `--image`, plus Clef looks at the pixels |
 | `-f, --find "…"` | The image that best matches the description |
 | `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps and unfilled template placeholders) |
+| `--no-browser-retry` | Don't ask a page that answers 403 or 503 again with a browser's TLS fingerprint (see below) |
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
@@ -287,6 +288,12 @@ Keys live in `~/.config/jurl/env`. Environment variables take precedence over th
 `--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. If Clef looks at none of the images, jurl says so on stderr and the result is from text alone. Images over 15 MB aren't read. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
 
 `JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none, and only over https or to localhost: plain http to another host is refused. [bench/models](bench/models) compares such a server's answers with Jev's.
+
+Some bot protection refuses a request by its TLS and HTTP/2 fingerprint, whatever the user agent says. So when a page answers 403, or 503 without a `Retry-After`, jurl asks for the same URL once more, with a client that has Chrome's fingerprint and headers, and reads that answer if it is a page. A 503 with a `Retry-After` is maintenance or backoff and is not retried, and a 429 is a rate limit and is never retried: both are respected.
+
+A host that a retry showed needs that client is asked there first for the next 10 minutes (`STICKY_TTL` in `src/fetch.rs`), with no plain request before it. That covers its later pages (`--follow` hops and `--links`) and its `robots.txt` and sitemaps. If the browser client refuses too, that refusal is the answer. Other hosts are asked plain first, as before. `jurl mcp` is one long-lived process, so the same 10 minutes apply there, and a host is tried plain again after them. A site's `robots.txt`, `llms.txt` and sitemaps follow the same rule, the start page's included: one that the plain client refuses is asked once more of the browser client, and that success teaches the host, so the first search of a blocked site gets its sitemap too.
+
+`--no-browser-retry`, or `JURL_NO_BROWSER_RETRY` set to anything, turns all of this off. `-t` says on stderr once per host when it switches (`jurl: example.com: using the browser client`), and `--json` has `"browser_retry": true` in `usage` when a page was read with the browser client, `"plain_refusals"` for the plain requests that got a refusal, and `"browser_requests"` for the requests sent with the browser client. [bench/browser-retry.md](bench/browser-retry.md) has the numbers.
 
 ### Exit codes
 
@@ -370,7 +377,7 @@ jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, 
 
 With your own keys, jurl has no server and no account of its own. It talks to the model APIs directly with **your** keys:
 
-- **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result says what its run used, a `--precise` miss included: `"usage": {"pages": 3, "jev": {"requests": 6, "input_tokens": 41250}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); a request counts once it has answered.
+- **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result says what its run used, a `--precise` miss included: `"usage": {"pages": 3, "browser_retry": false, "plain_refusals": 0, "browser_requests": 0, "jev": {"requests": 6, "input_tokens": 41250}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); `browser_retry` is true when one of them was read with the browser client (after a retry, or because its host needed it); `plain_refusals` and `browser_requests` count the requests sent with each client, a refusal being any non-success status; a request counts once it has answered.
 - **What leaves your machine:** the text of the page goes to TypeSafe. With `--vision` or `--find`, the images go to Cloudflare too. Keep that in mind for internal or private pages.
 - **What jurl can't read:** it sends no cookies, so pages behind a login are out of reach.
 
@@ -445,7 +452,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
 | `src/extract/mod.rs` · `src/extract/html.rs` · `src/extract/markdown.rs` · `src/extract/join.rs` | HTML and markdown → blocks, links, images |
 | `src/decide.rs` | Jev and Clef clients |
-| `src/fetch.rs` · `src/lightpanda.rs` | Fetching, rendering, the browser download |
+| `src/fetch.rs` · `src/lightpanda.rs` | Fetching (with the retry on a browser's fingerprint), rendering, the browser download |
 | `src/setup.rs` · `src/config.rs` | First-run setup (own keys or jurl cloud), `jurl init`, key storage |
 | `src/cloud.rs` | jurl cloud: which account a run reads with, the read, the usage |
 | `src/account.rs` | `jurl login`, `logout` and `status`: the sign-in in the browser, and signing out |
