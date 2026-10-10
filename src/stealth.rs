@@ -57,6 +57,11 @@ enum Failed {
     Other { reason: String, memo: bool },
 }
 
+/// A failure the host is not asked again for: the sidecar could not read the page, for `reason`.
+fn failure(reason: impl Into<String>) -> Failed {
+    Failed::Other { reason: reason.into(), memo: true }
+}
+
 /// The stealth sidecar a run is set up with (see `cli::Args`): where it is, its token, the language and country a page is read
 /// as, and the run's own memo and budget. Per run, not per process: `fetch::MEMO` lives as long as `jurl mcp`, and the budget of
 /// one run would starve every later call of it.
@@ -108,8 +113,8 @@ impl Sidecar {
         let max_pages = get("JURL_STEALTH_MAX_PAGES").and_then(|v| v.trim().parse().ok()).unwrap_or(MAX_PAGES);
         let client = match Client::builder().no_proxy().timeout(TIMEOUT).build() {
             Ok(client) => client,
-            Err(e) => {
-                note(timing, format!("the stealth sidecar's client could not be built: {e}"));
+            Err(_) => {
+                note(timing, "the stealth sidecar's client could not be built".into());
                 return None;
             }
         };
@@ -153,7 +158,7 @@ impl Sidecar {
                 if memo {
                     self.fail(host.as_deref());
                 }
-                note(timing, format!("{url}: the stealth sidecar could not read it: {reason}"));
+                note(timing, format!("{url}: {reason}"));
                 Ok(None)
             }
         }
@@ -207,7 +212,8 @@ impl Sidecar {
         }
     }
 
-    /// One render call for `url`. The token travels only in the bearer header, and what the sidecar says is shown without it.
+    /// One render call for `url`. The token travels only in the bearer header. What a failure says names no address: reqwest's own
+    /// errors name the request's URL, so only the kind of failure is kept (see [`Sidecar::unreachable`]).
     async fn call(&self, url: &Url, max: usize) -> Result<String, Failed> {
         let mut body = Map::new();
         body.insert("url".into(), json!(url.as_str()));
@@ -225,39 +231,59 @@ impl Sidecar {
         if status != StatusCode::OK {
             // A busy sidecar may have room later: it is not memoized, though its call still counts against the budget.
             let busy = status == StatusCode::SERVICE_UNAVAILABLE;
-            let code = answer["error"].as_str().unwrap_or("no reply");
-            return Err(Failed::Other { reason: self.shown(&format!("HTTP {status}: {code}")), memo: !busy });
+            let said = match answer["error"].as_str() {
+                Some(code) => format!("the stealth sidecar answered HTTP {status} ({})", self.shown(code)),
+                None => format!("the stealth sidecar answered HTTP {status}"),
+            };
+            return Err(Failed::Other { reason: said, memo: !busy });
         }
         match answer["outcome"].as_str() {
             Some("content") => {
                 let html = answer["html"].as_str().unwrap_or_default();
                 if html.trim().is_empty() {
-                    Err(self.other("no content"))
+                    Err(failure("the stealth sidecar read no content"))
                 } else if html.len() > max {
-                    Err(self.other(&format!("larger than {}", fetch::size_label(max))))
+                    Err(failure(format!("the stealth sidecar's page is larger than {}", fetch::size_label(max))))
                 } else {
                     Ok(html.to_string())
                 }
             }
             Some("captcha") => Err(Failed::Captcha),
-            outcome => Err(self.other(answer["reason"].as_str().or(outcome).unwrap_or("no answer"))),
+            Some(outcome) => {
+                let said = match answer["reason"].as_str() {
+                    Some(reason) => format!("the stealth sidecar says {}: {}", self.shown(outcome), self.shown(reason)),
+                    None => format!("the stealth sidecar says {}", self.shown(outcome)),
+                };
+                Err(failure(said))
+            }
+            None => Err(failure("the stealth sidecar gave no outcome")),
         }
     }
 
-    /// A failure the host is not asked again for.
-    fn other(&self, reason: &str) -> Failed {
-        Failed::Other { reason: self.shown(reason), memo: true }
-    }
-
-    /// A call that got no reply: a timeout or a connection error. The error's own text is not shown: it names the sidecar's URL.
+    /// A call that got no reply. reqwest's own error text names the request's URL, which is the sidecar's address, so only the
+    /// kind of failure is said.
     fn unreachable(&self, e: &reqwest::Error) -> Failed {
-        let reason = if e.is_timeout() { "timed out" } else { "unreachable" };
-        Failed::Other { reason: reason.into(), memo: true }
+        let reason = if e.is_timeout() {
+            "the stealth sidecar timed out"
+        } else if e.is_connect() {
+            "the stealth sidecar is unreachable"
+        } else {
+            "the stealth sidecar's call failed"
+        };
+        failure(reason)
     }
 
-    /// `text` as a trace or an error may show it: without the token, and at most [`REASON_CHARS`] characters.
+    /// `text` as a trace or an error may show it: without the token and without the sidecar's address, and at most
+    /// [`REASON_CHARS`] characters.
     fn shown(&self, text: &str) -> String {
-        text.replace(&self.token, "[token]").chars().take(REASON_CHARS).collect()
+        let address = self.base.split_once("://").map_or(self.base.as_str(), |(_, rest)| rest);
+        let mut shown = text.replace(&self.token, "[token]");
+        for secret in [self.base.as_str(), address] {
+            if !secret.is_empty() {
+                shown = shown.replace(secret, "[sidecar]");
+            }
+        }
+        shown.chars().take(REASON_CHARS).collect()
     }
 }
 
@@ -336,6 +362,11 @@ mod tests {
     fn a_reason_shows_no_token_and_at_most_200_characters() {
         let s = sidecar(&[URL, TOKEN]).expect("set up");
         assert_eq!(s.shown("blocked, as s3cret-token says"), "blocked, as [token] says");
+        assert_eq!(
+            s.shown("reached https://sidecar.example:8091/render and sidecar.example:8091 again"),
+            "reached [sidecar]/render and [sidecar] again",
+            "neither the address nor its host and port"
+        );
         let long = "ñ".repeat(500);
         assert_eq!(s.shown(&long).chars().count(), REASON_CHARS, "cut on a character, not a byte");
     }
@@ -726,6 +757,78 @@ mod tests {
             .expect("refused");
         assert!(!format!("{err:#}").contains(SECRET_TOKEN), "{err:#}");
         assert_eq!(sidecar.shown("rejected s3cret-token"), "rejected [token]");
+    }
+
+    #[tokio::test]
+    async fn a_failed_call_never_names_the_sidecars_address() {
+        // The failures a call comes to: no connection, a timeout, a status with its code, a reply with no content, one that says
+        // what it found, and one with no outcome. reqwest's errors name the request's URL, so none of these may name the address.
+        let closed = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+            format!("http://{}", listener.local_addr().expect("the loopback address"))
+        };
+        let slow = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+            let base = format!("http://{}", listener.local_addr().expect("the loopback address"));
+            thread::spawn(move || {
+                for conn in listener.incoming().flatten() {
+                    thread::sleep(Duration::from_secs(3));
+                    drop(conn);
+                }
+            });
+            base
+        };
+        let (answering, _) = mock::serve(vec![
+            (500, "", r#"{"error":"bad_request"}"#),
+            (200, "", r#"{"outcome":"content","html":"  "}"#),
+            (200, "", r#"{"outcome":"blocked","html":"","reason":"datadome wall"}"#),
+            (200, "", r#"{"detail":"no outcome"}"#),
+        ]);
+        let page = Url::parse("https://shop.example/p").expect("a URL");
+        let mut failures = Vec::new();
+        for (base, timeout) in [(closed.clone(), TIMEOUT), (slow.clone(), Duration::from_millis(300))] {
+            match sidecar_with(&base, timeout, MAX_PAGES).call(&page, 1 << 20).await {
+                Err(Failed::Other { reason, .. }) => failures.push((base, reason)),
+                _ => panic!("a call to {base} that gets no answer is a failure"),
+            }
+        }
+        let answers = sidecar_with(&answering, TIMEOUT, MAX_PAGES);
+        for _ in 0..4 {
+            match answers.call(&page, 1 << 20).await {
+                Err(Failed::Other { reason, .. }) => failures.push((answering.clone(), reason)),
+                _ => panic!("a reply that is not a page is a failure"),
+            }
+        }
+        let host_and_port = |base: &str| base.split_once("://").map_or(base, |(_, rest)| rest).to_string();
+        for (base, reason) in &failures {
+            assert!(reason.starts_with("the stealth sidecar"), "{reason}");
+            assert!(!reason.contains(base.as_str()) && !reason.contains(&host_and_port(base)), "{reason} names {base}");
+            assert!(!reason.contains(SECRET_TOKEN), "{reason}");
+        }
+        let said: Vec<&str> = failures.iter().map(|(_, reason)| reason.as_str()).collect();
+        assert_eq!(
+            said,
+            [
+                "the stealth sidecar is unreachable",
+                "the stealth sidecar timed out",
+                "the stealth sidecar answered HTTP 500 Internal Server Error (bad_request)",
+                "the stealth sidecar read no content",
+                "the stealth sidecar says blocked: datadome wall",
+                "the stealth sidecar gave no outcome",
+            ]
+        );
+        // A CAPTCHA is an error too, and it names the page, not the sidecar.
+        let captcha_side = {
+            let (base, _) = mock::serve(vec![(200, "", CAPTCHA_ANSWER)]);
+            base
+        };
+        let err = sidecar_with(&captcha_side, TIMEOUT, MAX_PAGES)
+            .read(&page, &PRIVATE, 1 << 20, false)
+            .await
+            .expect_err("a CAPTCHA is an error");
+        let err = err.to_string();
+        assert_eq!(err, "https://shop.example/p: an interactive CAPTCHA, not solved; for human review");
+        assert!(!err.contains(&host_and_port(&captcha_side)), "{err}");
     }
 
     #[tokio::test]
