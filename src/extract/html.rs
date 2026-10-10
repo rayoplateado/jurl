@@ -39,6 +39,7 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
     let in_body = root.value().name() == "body";
     Extracted {
         title: collapse(&page_title(doc)),
+        lang: declared_lang(doc),
         blocks: join_short(walk(doc, root, in_body)),
         structured: Vec::new(),
         images: collect_images(doc, root, in_body, base),
@@ -54,6 +55,18 @@ fn page_title(doc: &Html) -> String {
         .or_else(|| first_text(doc, "title"))
         .or_else(|| first_text(doc, "h1"))
         .unwrap_or_default()
+}
+
+/// The language the page declares: the `<html>` element's `lang`, else its `xml:lang`, trimmed. An empty value is
+/// none, so `lang=""` with an `xml:lang` still declares the latter.
+fn declared_lang(doc: &Html) -> Option<String> {
+    let el = doc.root_element();
+    ["lang", "xml:lang"]
+        .iter()
+        .filter_map(|name| el.value().attr(name))
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(String::from)
 }
 
 /// The element the content is read from: the first candidate, in order, that holds a fair share of the page's text.
@@ -713,6 +726,18 @@ mod tests {
 
     fn base() -> Url {
         Url::parse("https://example.com/post/").unwrap()
+    }
+
+    #[test]
+    fn the_declared_language_is_the_html_elements_lang_then_xml_lang() {
+        let lang = |page: &str| html(page, &base()).lang;
+        assert_eq!(lang(r#"<html lang="es-ES"><body><p>Hola</p></body></html>"#).as_deref(), Some("es-ES"));
+        assert_eq!(lang(r#"<html xml:lang="pt-BR"><body><p>Olá</p></body></html>"#).as_deref(), Some("pt-BR"));
+        assert_eq!(lang(r#"<html lang=" de " xml:lang="fr"><body><p>Hallo</p></body></html>"#).as_deref(), Some("de"));
+        assert_eq!(lang(r#"<html lang="" xml:lang="pt"><body><p>Olá</p></body></html>"#).as_deref(), Some("pt"));
+        assert_eq!(lang(r#"<html lang="  "><body><p>Text</p></body></html>"#), None);
+        assert_eq!(lang("<body><p>A page with no html element</p></body>"), None);
+        assert_eq!(crate::extract::markdown("# Hola\n\nTexto.", &base()).lang, None, "markdown declares none");
     }
 
     #[test]
