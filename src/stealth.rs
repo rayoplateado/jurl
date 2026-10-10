@@ -268,7 +268,7 @@ pub(crate) fn lang_of(accept_language: Option<&str>) -> Option<String> {
 /// The country a page is read as, when `JURL_STEALTH_COUNTRY` is two uppercase letters (ISO 3166-1 alpha-2). Any other value is
 /// not sent.
 pub(crate) fn country_of(value: Option<&str>) -> Option<String> {
-    let v = value?.trim();
+    let v = value?;
     (v.len() == 2 && v.bytes().all(|b| b.is_ascii_uppercase())).then(|| v.to_string())
 }
 
@@ -329,8 +329,7 @@ mod tests {
     #[test]
     fn a_country_is_sent_only_as_two_uppercase_letters() {
         assert_eq!(country_of(Some("ES")), Some("ES".into()));
-        assert_eq!(country_of(Some(" US ")), Some("US".into()));
-        for bad in ["es", "ESP", "E", "E1", ""] {
+        for bad in ["es", " US ", "ESP", "E", "E1", ""] {
             assert_eq!(country_of(Some(bad)), None, "{bad:?}");
         }
         assert_eq!(country_of(None), None);
