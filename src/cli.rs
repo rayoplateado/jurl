@@ -12,8 +12,8 @@ const DEFAULT_THRESHOLD: f64 = 0.5;
 #[derive(Parser)]
 #[command(version)]
 pub(crate) struct Args {
-    /// The page to read, `init` to set up your API keys, `update` to install the latest jurl, or `mcp` to serve
-    /// jurl's tools to an AI agent (MCP over stdio)
+    /// The page to read, `init` to set up your API keys, `login`, `logout` or `status` for jurl cloud, `update` to
+    /// install the latest jurl, or `mcp` to serve jurl's tools to an AI agent (MCP over stdio)
     pub(crate) url: String,
     /// Keep what helps answer this question instead of a general summary
     #[arg(short = 'q', long)]
@@ -91,6 +91,16 @@ mod tests {
         for arg in Args::command().get_arguments() {
             assert!(arg.get_help().is_some(), "--{} has no help text", arg.get_id());
         }
+    }
+
+    #[test]
+    fn a_flag_without_a_url_is_still_clap_s_usage_error() {
+        // Only `jurl` alone starts the setup or the help (main.rs). A flag without a URL is still an error.
+        for argv in [vec!["jurl"], vec!["jurl", "-q", "why?"], vec!["jurl", "--json"]] {
+            let err = Args::try_parse_from(argv.clone()).err();
+            assert_eq!(err.map(|e| e.kind()), Some(clap::error::ErrorKind::MissingRequiredArgument), "{argv:?}");
+        }
+        assert!(Args::try_parse_from(["jurl", "-q", "why?", "x.com"]).is_ok());
     }
 
     #[test]

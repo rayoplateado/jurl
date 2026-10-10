@@ -1,9 +1,11 @@
 //! The entry point: check the flags, load the page (rendering it when it needs JavaScript), then run the
 //! mode they ask for.
 
+mod account;
 mod answer;
 mod blocks;
 mod cli;
+mod cloud;
 mod config;
 mod decide;
 mod extract;
@@ -13,6 +15,8 @@ mod judge;
 mod lightpanda;
 mod links;
 mod mcp;
+#[cfg(test)]
+mod mock;
 mod output;
 mod precise;
 mod setup;
@@ -20,10 +24,14 @@ mod timing;
 mod update;
 mod vision;
 
-use std::{io::stdout, process::ExitCode, time::Duration};
+use std::{
+    io::{stderr, stdout},
+    process::ExitCode,
+    time::Duration,
+};
 
-use anyhow::{Context, Result, bail};
-use clap::Parser;
+use anyhow::{Context, Result, anyhow, bail};
+use clap::{CommandFactory, Parser};
 use futures::future::join_all;
 use reqwest::Client;
 
@@ -33,6 +41,7 @@ use crate::{
     extract::{Extracted, Kind},
     judge::Ctx,
     output::{Rendered, exit_code, stdout_for, write_out},
+    setup::{Access, NoArgs},
     timing::Timer,
 };
 
@@ -45,6 +54,13 @@ const APP_SHELL_TEXT: usize = 300;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // `jurl` with no arguments at all is the setup, or the help. Anything else goes to clap, as it always has.
+    if std::env::args_os().nth(1).is_none() {
+        return match no_args().await {
+            Ok(code) => code,
+            Err(e) => failed(&e),
+        };
+    }
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(e) => {
@@ -60,9 +76,33 @@ async fn main() -> ExitCode {
     };
     match run(args).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("jurl: {e:#}");
-            ExitCode::from(exit_code(&e))
+        Err(e) => failed(&e),
+    }
+}
+
+/// Says what went wrong, and returns the exit code for it.
+fn failed(e: &anyhow::Error) -> ExitCode {
+    eprintln!("jurl: {e:#}");
+    ExitCode::from(exit_code(e))
+}
+
+/// `jurl` with no arguments. With nothing set up and a terminal to ask in: a welcome, the setup `jurl init` does, and
+/// what to try next. Otherwise the short help as a usage error (exit 2), and a line about `jurl status` if anything is
+/// set up.
+async fn no_args() -> Result<ExitCode> {
+    let mut cfg = Config::load();
+    let client = http_client()?;
+    match setup::no_args_action(setup::is_set_up(&cfg)?, setup::interactive()) {
+        NoArgs::Setup => {
+            setup::first_run(&mut cfg, &client).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        NoArgs::Help { status_hint } => {
+            Args::command().write_help(&mut stderr())?;
+            if status_hint {
+                eprintln!("\nRun `jurl status` to see which account reads go to.");
+            }
+            Ok(ExitCode::from(2))
         }
     }
 }
@@ -88,14 +128,23 @@ async fn run(mut args: Args) -> Result<()> {
     if args.url == "init" {
         return setup::init(&mut cfg, &client).await;
     }
+    if args.url == "login" {
+        return account::login(&mut cfg, &client).await;
+    }
+    if args.url == "logout" {
+        return account::logout(&mut cfg, &client).await;
+    }
+    if args.url == "status" {
+        return account::status(&cfg, &client).await;
+    }
     if args.url == "mcp" {
         return mcp::serve(client).await;
     }
     prepare(&mut args)?;
-    let key = setup::typesafe_key(&mut cfg, &client).await?;
+    let access = setup::access(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
-    let done = page(&args, &cfg, &client, &key, &mut t).await;
+    let done = page(&args, &cfg, &client, &access, &mut t).await;
     // A miss costs tokens too: -t reports them either way.
     if args.timing {
         t.report();
@@ -135,8 +184,31 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
 }
 
 /// The page (or with --follow, the site) read in the mode `args` asks for: what the CLI prints and what `jurl mcp`
-/// answers.
-pub(crate) async fn page(args: &Args, cfg: &Config, client: &Client, key: &str, t: &mut Timer) -> Result<Rendered> {
+/// answers. Through jurl cloud when the run reads with it; a read the cloud doesn't take goes to the own keys, when
+/// they are set up, and otherwise says why it can't be done.
+pub(crate) async fn page(
+    args: &Args,
+    cfg: &Config,
+    client: &Client,
+    access: &Access,
+    t: &mut Timer,
+) -> Result<Rendered> {
+    match access {
+        Access::Cloud(account) => match cloud::unsupported(args) {
+            None => cloud::read(client, account, args, t).await,
+            Some(why) => {
+                let key = setup::saved_key(cfg)
+                    .map_err(|_| anyhow!("{why}. For that, set up your own keys with `jurl init`"))?;
+                eprintln!("jurl: {why}, so this read uses your own keys");
+                own_page(args, cfg, client, &key, t).await
+            }
+        },
+        Access::Own(key) => own_page(args, cfg, client, key, t).await,
+    }
+}
+
+/// The page read with the own keys: fetched (rendered when it needs JavaScript), then read in the mode `args` asks for.
+async fn own_page(args: &Args, cfg: &Config, client: &Client, key: &str, t: &mut Timer) -> Result<Rendered> {
     // Warm the API connections (TLS handshakes) while the page downloads.
     // Jev's host, or the one `JURL_JEV_URL` names.
     let mut hosts: Vec<String> = url::Url::parse(&decide::jev_url())
