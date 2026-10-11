@@ -116,7 +116,7 @@ fn table_cells(text: &str) -> Vec<(Range<usize>, Option<String>)> {
 /// The rows of a table written as `| a | b |`, each as the byte range from its first `|` to its last. A cell can hold line
 /// breaks (a paragraph per line), so a row runs from a line that starts with `|` to the first line after it that ends with
 /// one. markdown's header separator (`|---|:--:|`) is not a row.
-fn table_rows(text: &str) -> Vec<Range<usize>> {
+pub(crate) fn table_rows(text: &str) -> Vec<Range<usize>> {
     let mut rows = Vec::new();
     let mut open: Option<usize> = None;
     let mut start = 0;

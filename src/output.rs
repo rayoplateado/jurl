@@ -134,8 +134,8 @@ mod tests {
         assert_eq!(v["closest"], Value::Null);
         assert_eq!(v["url"], "https://jurl.dev/");
         assert_eq!(v["ask"], "books?");
-        // No block to name: the quote, block, link and the block's kind, level and language are left out, not null.
-        for key in ["quote", "block", "link", "kind", "level", "lang"] {
+        // No block to name: the quote, block, context, link and the block's kind, level and language are left out, not null.
+        for key in ["quote", "block", "context", "context_truncated", "link", "kind", "level", "lang"] {
             assert!(v.get(key).is_none(), "{key} in a miss: {v}");
         }
         // A miss with a closest candidate prints that.
