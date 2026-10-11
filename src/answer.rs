@@ -1,6 +1,9 @@
 //! `--precise`: Jev picks the answer as one span of the best blocks' text, and says how sure it is.
 
-use std::{collections::HashMap, ops::Range};
+use std::{
+    collections::{BTreeSet, HashMap},
+    ops::Range,
+};
 
 use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
@@ -21,6 +24,11 @@ pub(crate) const PRECISE_THRESHOLD: f64 = 0.4;
 pub(crate) const PRECISE_BLOCK_FLOOR: f64 = 0.1;
 /// --precise looks for the answer in the best this many blocks.
 pub(crate) const PRECISE_BLOCKS: usize = 3;
+/// The most rows a precise answer's `context` carries: a table's header and rows, or a list's items. Past this, or past
+/// `CONTEXT_MAX_CHARS`, the context keeps the rows nearest the answer that fit (see `context_of`).
+pub(crate) const CONTEXT_MAX_ROWS: usize = 60;
+/// The most characters a precise answer's `context` carries.
+pub(crate) const CONTEXT_MAX_CHARS: usize = 6_000;
 
 /// The --precise answer: a byte range of one block's text, and how sure Jev is that it's exactly the answer.
 pub(crate) struct Pick {
@@ -267,6 +275,84 @@ fn quoted(block: &Block, range: &Range<usize>) -> (String, String) {
     }
 }
 
+/// The whole table or list a precise answer came from, for the `context` of its JSON: the page's own words, as text.
+pub(crate) struct BlockContext {
+    pub(crate) text: String,
+    /// Whether `text` is less than the whole: the header of a table and the rows nearest the answer that fit.
+    pub(crate) truncated: bool,
+}
+
+/// The context of a precise answer: the table its block is (its header and rows, as the page has them) or the list its block is in
+/// (its items, one per line, a joined run of short items included). A table is a block of two or more rows, whatever its kind: a
+/// markdown page's table is a paragraph. Any other block has none, and so does a table whose answer is in no row, or whose header and
+/// answer's row are over the caps on their own. Past `CONTEXT_MAX_ROWS` rows or `CONTEXT_MAX_CHARS` characters, the context keeps
+/// the rows nearest the answer that fit, above and below in turn, and is marked truncated. Rows are kept whole, never cut.
+pub(crate) fn context_of(ex: &Extracted, pick: &Pick) -> Option<BlockContext> {
+    let block = &ex.blocks[pick.block];
+    if let Some(list) = block.list {
+        let items: Vec<(usize, &str)> = ex
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.list == Some(list))
+            .map(|(i, b)| (i, b.text.as_str()))
+            .collect();
+        let hot = items.iter().position(|&(i, _)| i == pick.block)?;
+        let texts: Vec<&str> = items.iter().map(|&(_, text)| text).collect();
+        let kept = kept_rows(&texts, 0, hot)?;
+        let text = kept.iter().map(|&k| texts[k]).collect::<Vec<_>>().join("\n");
+        return Some(BlockContext { text, truncated: kept.len() < texts.len() });
+    }
+    if matches!(block.kind, Kind::Code | Kind::Structured) {
+        return None;
+    }
+    let spans = precise::table_rows(&block.text);
+    if spans.len() < 2 {
+        return None;
+    }
+    let rows: Vec<&str> = spans.iter().map(|r| &block.text[r.clone()]).collect();
+    let hot = spans.iter().position(|r| r.contains(&pick.range.start))?;
+    let kept = kept_rows(&rows, 1, hot)?;
+    // The table as the page has it, prose lines and all, when it is whole and within the cap.
+    if kept.len() == rows.len() && block.text.chars().count() <= CONTEXT_MAX_CHARS {
+        return Some(BlockContext { text: block.text.clone(), truncated: false });
+    }
+    let text = kept.iter().map(|&k| rows[k]).collect::<Vec<_>>().join("\n");
+    Some(BlockContext { text, truncated: true })
+}
+
+/// The rows a context keeps, as indexes in order: all of them when they fit the caps. Otherwise the first `lead` rows (a table's
+/// header) and the row at `hot`, with the rows next to it added above and below in turn for as long as they fit. None when the
+/// first rows and the row at `hot` are over the caps on their own.
+fn kept_rows(rows: &[&str], lead: usize, hot: usize) -> Option<Vec<usize>> {
+    let (mut lo, mut hi) = (hot, hot);
+    let mut kept = fitting(rows, lead, lo, hi)?;
+    while kept.len() < rows.len() {
+        let mut grew = false;
+        if hi + 1 < rows.len()
+            && let Some(next) = fitting(rows, lead, lo, hi + 1)
+        {
+            (hi, kept, grew) = (hi + 1, next, true);
+        }
+        if lo > lead
+            && let Some(next) = fitting(rows, lead, lo - 1, hi)
+        {
+            (lo, kept, grew) = (lo - 1, next, true);
+        }
+        if !grew {
+            break;
+        }
+    }
+    Some(kept)
+}
+
+/// The rows `0..lead` and `lo..=hi`, in order, when they fit both caps; None when they don't.
+fn fitting(rows: &[&str], lead: usize, lo: usize, hi: usize) -> Option<Vec<usize>> {
+    let kept: BTreeSet<usize> = (0..lead).chain(lo..=hi).collect();
+    let chars = kept.iter().map(|&k| rows[k].chars().count()).sum::<usize>() + kept.len().saturating_sub(1);
+    (kept.len() <= CONTEXT_MAX_ROWS && chars <= CONTEXT_MAX_CHARS).then(|| kept.into_iter().collect())
+}
+
 /// The answer on its own line, then the block it's in and a link to it; JSON says how sure, and below the threshold
 /// has it as `closest` instead of `answer`. It also says the quoted block's `kind`, and its `level` and `lang` when the
 /// block has them, encoded as the block arrays encode them. A table's quote is its header and the answer's row. `path` is
@@ -301,6 +387,13 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
     }
     if let Some(lang) = &block.lang {
         doc["lang"] = json!(lang);
+    }
+    // The table or list the answer came from, as much of it as fits (`context_of`). A miss's closest candidate has it too.
+    if let Some(context) = context_of(ex, pick) {
+        doc["context"] = json!(context.text);
+        if context.truncated {
+            doc["context_truncated"] = json!(true);
+        }
     }
     if let Some(path) = path {
         doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
@@ -486,12 +579,17 @@ mod tests {
 
     /// What a precise answer prints for `block` with `range` of it as the answer: a run's own `Ctx`, no network.
     fn precise_json(block: &Block, range: Range<usize>, p: f64) -> Value {
+        precise_json_in(vec![block.clone()], 0, range, p)
+    }
+
+    /// What a precise answer prints for a page of `blocks`, with `range` of block `at` as the answer.
+    fn precise_json_in(blocks: Vec<Block>, at: usize, range: Range<usize>, p: f64) -> Value {
         let args = Args::parse_from(["jurl", "--precise", "--json", "-q", "Which one?", "example.com"]);
         let client = reqwest::Client::new();
         let url = url::Url::parse("https://example.com/").unwrap();
-        let ex = Extracted { title: "Pricing".into(), blocks: vec![block.clone()], ..Default::default() };
+        let ex = Extracted { title: "Pricing".into(), blocks, ..Default::default() };
         let ctx = Ctx::new(&args, &client, "", &url, &ex);
-        render_precise(&ctx, &ex, &Pick { block: 0, range, p }, None).json
+        render_precise(&ctx, &ex, &Pick { block: at, range, p }, None).json
     }
 
     /// The `kind`, `level` and `lang` keys of a JSON object, `None` where a key is absent. A precise answer's fields for
@@ -542,5 +640,144 @@ mod tests {
         assert_eq!(v["kind"], "heading");
         assert_eq!(v["level"], 2);
         assert!(v.get("lang").is_none());
+    }
+
+    #[test]
+    fn a_table_answer_carries_its_whole_table_as_context() {
+        let text = "| Plan | Price |\n| Free | $0 |\n| Pro | $20 |\n| Team | $30 |";
+        let at = text.find("$20").unwrap();
+        let table = Block::new(0, Kind::Table, text.into());
+        let v = precise_json(&table, at..at + 3, 0.93);
+        assert_eq!(v["quote"], "| Plan | Price |\n| Pro | $20 |");
+        assert_eq!(v["context"], text);
+        assert!(v.get("context_truncated").is_none());
+    }
+
+    #[test]
+    fn a_markdown_table_in_a_paragraph_is_a_table_and_its_context_is_the_whole_block() {
+        // A markdown page's table is a paragraph; the prose line above it is in the block, so it is in the context too.
+        let text = "Prices in USD:\n| Plan | Price |\n| Pro | $20 |\n| Team | $30 |";
+        let at = text.find("$30").unwrap();
+        let para = Block::new(0, Kind::Para, text.into());
+        let v = precise_json(&para, at..at + 3, 0.93);
+        assert_eq!(v["quote"], "| Plan | Price |\n| Team | $30 |");
+        assert_eq!(v["context"], text);
+    }
+
+    #[test]
+    fn a_paragraph_a_code_block_a_structured_value_or_a_single_row_has_no_context() {
+        let para = Block::new(0, Kind::Para, "Pro plan: $8 a month".into());
+        assert!(precise_json(&para, 10..12, 0.93).get("context").is_none());
+        let code = Block::new(0, Kind::Code, "| a | b |\n| c | d |".into());
+        assert!(precise_json(&code, 0..5, 0.93).get("context").is_none());
+        let structured = Block::new(0, Kind::Structured, "Offer Free (JSON-LD, Mistral Vibe): price 0 USD.".into());
+        assert!(precise_json(&structured, 0..5, 0.93).get("context").is_none());
+        let one_row = Block::new(0, Kind::Para, "| Pro | $20 |".into());
+        assert!(precise_json(&one_row, 8..11, 0.93).get("context").is_none());
+    }
+
+    #[test]
+    fn a_list_answer_carries_the_whole_list_one_item_per_line() {
+        let items = ["Free: $0", "Pro: $20", "Team: $30"];
+        let blocks: Vec<Block> = items
+            .iter()
+            .enumerate()
+            .map(|(i, text)| Block { list: Some(0), ..Block::new(i, Kind::Item, text.to_string()) })
+            .collect();
+        let v = precise_json_in(blocks, 1, 0..items[1].len(), 0.93);
+        assert_eq!(v["kind"], "item");
+        assert_eq!(v["context"], "Free: $0\nPro: $20\nTeam: $30");
+        assert!(v.get("context_truncated").is_none());
+    }
+
+    #[test]
+    fn a_joined_run_of_short_items_is_part_of_its_list_and_another_list_is_not() {
+        let blocks = vec![
+            Block { list: Some(0), ..Block::new(0, Kind::Item, "Flour".into()) },
+            Block { list: Some(0), ..Block::new(1, Kind::Para, "1 egg\nSalt".into()) },
+            Block { list: Some(0), ..Block::new(2, Kind::Item, "Milk".into()) },
+            Block::new(3, Kind::Para, "Serves four.".into()),
+            Block { list: Some(1), ..Block::new(4, Kind::Item, "Another list".into()) },
+        ];
+        let v = precise_json_in(blocks.clone(), 2, 0..4, 0.93);
+        assert_eq!(v["context"], "Flour\n1 egg\nSalt\nMilk");
+        // The joined run is a paragraph, and an answer in it has the same list.
+        let v = precise_json_in(blocks, 1, 0..6, 0.93);
+        assert_eq!(v["kind"], "para");
+        assert_eq!(v["context"], "Flour\n1 egg\nSalt\nMilk");
+    }
+
+    #[test]
+    fn a_table_over_the_row_cap_keeps_its_header_and_the_rows_nearest_its_answer() {
+        let rows: Vec<String> = (0..100).map(|i| format!("| Row {i} | {i} units |")).collect();
+        let text = format!("| Name | Units |\n{}", rows.join("\n"));
+        let at = text.find("| Row 50 |").unwrap() + 2;
+        let table = Block::new(0, Kind::Table, text.clone());
+        let v = precise_json(&table, at..at + 6, 0.93);
+        assert_eq!(v["context_truncated"], true);
+        let context = v["context"].as_str().unwrap();
+        let lines: Vec<&str> = context.lines().collect();
+        // The header, then the 59 rows from 21 to 79 (the answer's row, 50, in the middle): 60 rows, each one whole.
+        assert_eq!(lines.len(), CONTEXT_MAX_ROWS);
+        assert_eq!(lines[0], "| Name | Units |");
+        let kept: Vec<usize> = lines[1..].iter().map(|l| l.split(' ').nth(2).unwrap().parse().unwrap()).collect();
+        assert_eq!(kept, (21..=79).collect::<Vec<_>>());
+        assert!(lines.iter().all(|l| text.lines().any(|t| t == *l)));
+    }
+
+    #[test]
+    fn a_table_over_the_character_cap_is_cut_between_rows_never_inside_one() {
+        // Rows of about 157 characters, accents included: the cap is in characters, and a cut falls between rows.
+        let rows: Vec<String> = (0..50).map(|i| format!("| Fila {i} | {} | ñ |", "á".repeat(140))).collect();
+        let text = format!("| Nombre | Notas |\n{}", rows.join("\n"));
+        let at = text.find("| Fila 25 |").unwrap() + 2;
+        let table = Block::new(0, Kind::Table, text.clone());
+        let v = precise_json(&table, at..at + 6, 0.93);
+        assert_eq!(v["context_truncated"], true);
+        let context = v["context"].as_str().unwrap();
+        assert!(context.chars().count() <= CONTEXT_MAX_CHARS, "{} characters", context.chars().count());
+        assert!(context.starts_with("| Nombre | Notas |\n"));
+        assert!(context.contains("| Fila 25 |"));
+        assert!(context.lines().all(|l| text.lines().any(|t| t == l)), "{context}");
+    }
+
+    #[test]
+    fn a_header_and_answer_row_over_the_cap_on_their_own_have_no_context() {
+        let text = format!("| {} |\n| {} |", "h".repeat(3000), "v".repeat(3500));
+        let at = text.find("vvv").unwrap();
+        let table = Block::new(0, Kind::Table, text);
+        let v = precise_json(&table, at..at + 3, 0.93);
+        assert!(v.get("context").is_none());
+        assert!(v["quote"].as_str().unwrap().starts_with("| hhh"));
+    }
+
+    #[test]
+    fn a_list_over_the_row_cap_keeps_the_items_nearest_its_answer() {
+        let items: Vec<Block> =
+            (0..100).map(|i| Block { list: Some(0), ..Block::new(i, Kind::Item, format!("Item {i}")) }).collect();
+        let v = precise_json_in(items, 40, 0..7, 0.93);
+        assert_eq!(v["context_truncated"], true);
+        let kept: Vec<usize> =
+            v["context"].as_str().unwrap().lines().map(|l| l.trim_start_matches("Item ").parse().unwrap()).collect();
+        assert_eq!(kept.len(), CONTEXT_MAX_ROWS);
+        assert!(kept.contains(&40));
+        assert!(kept.windows(2).all(|w| w[1] == w[0] + 1));
+    }
+
+    #[test]
+    fn a_list_item_over_the_character_cap_on_its_own_has_no_context() {
+        let long = Block { list: Some(0), ..Block::new(0, Kind::Item, "x".repeat(7000)) };
+        assert!(precise_json(&long, 0..10, 0.93).get("context").is_none());
+    }
+
+    #[test]
+    fn a_miss_with_a_closest_table_row_carries_its_table_too() {
+        let text = "| Plan | Price |\n| Pro | $20 |\n| Team | $30 |";
+        let at = text.find("$20").unwrap();
+        let table = Block::new(0, Kind::Table, text.into());
+        let v = precise_json(&table, at..at + 3, 0.2);
+        assert_eq!(v["answer"], Value::Null);
+        assert_eq!(v["closest"], "$20");
+        assert_eq!(v["context"], text);
     }
 }

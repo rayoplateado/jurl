@@ -269,7 +269,7 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | --- | --- |
 | `-q, --ask "…"` | Keep what answers the question. Works with every mode |
 | `--follow [N]` | With `-q`: when the page doesn't answer, follow the links the pages give, most promising first, reading up to N pages (default 5) |
-| `-p, --precise` | With `-q`: just the answer, in the page's words (a JSON-LD value is marked as such), then its block and a link to it. A table's answer is quoted with the table's header and its row. Exits 1 when no part of the page is the answer |
+| `-p, --precise` | With `-q`: just the answer, in the page's words (a JSON-LD value is marked as such), then its block and a link to it. A table's answer is quoted with the table's header and its row; `--json` also gives the whole table or list it is in, as `context`. Exits 1 when no part of the page is the answer |
 | `-c, --code` | Code blocks only |
 | `-l, --links` | Content links, best first. With `-q`, the links most likely to lead to the answer, menus included |
 | `-i, --image` | Content images, judged by file name, alt text and caption |
@@ -280,7 +280,7 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
-| `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`, `structured`), and the `level` or `lang` when the block has one |
+| `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`, `structured`), and the `level` or `lang` when the block has one. Its `context` is the whole table or list the answer is in, as the page has it: a table's header and rows, or a list's items one per line. Past 60 rows (a table's header included) or 6,000 characters, `context` keeps a table's header, the answer's row and the rows nearest it that fit, and `context_truncated` is `true`. `context` is left out for other blocks, and a `jurl login` answer doesn't carry it yet |
 | `-t, --timing` | Where the time went, on stderr |
 | `jurl init` | Set or replace your API keys, or sign in to jurl cloud |
 | `jurl login` | Sign this computer in to [jurl cloud](#jurl-cloud) |
