@@ -193,13 +193,13 @@ fn first_segment(u: &Url) -> Option<String> {
 /// `robots.txt` for every crawler (`User-agent: *`) on one host: the paths jurl won't open, decided as RFC 9309 §2.2.2
 /// decides them (see [`Robots::allows`]).
 #[derive(Default)]
-struct Robots {
+pub(crate) struct Robots {
     rules: Vec<Rule>,
 }
 
 impl Robots {
     /// The rules in the `robots.txt` of `u`'s host. No file, or none within 4 s: no rules.
-    async fn load(u: &Url, retry: Retry<'_>) -> Self {
+    pub(crate) async fn load(u: &Url, retry: Retry<'_>) -> Self {
         let Ok(url) = u.join("/robots.txt") else { return Self::default() };
         let Some(body) = small_text(&url, retry).await else { return Self::default() };
         Self::parse(&body)
@@ -236,7 +236,7 @@ impl Robots {
 
     /// Whether the rules allow `u`, as RFC 9309 §2.2.2 says: the rule that matches with the most octets decides, and
     /// an allow wins a tie. No rule matching allows it, and so does `/robots.txt` itself.
-    fn allows(&self, u: &Url) -> bool {
+    pub(crate) fn allows(&self, u: &Url) -> bool {
         if u.path() == "/robots.txt" {
             return true;
         }

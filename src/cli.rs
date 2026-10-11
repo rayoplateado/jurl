@@ -41,6 +41,11 @@ pub(crate) struct Args {
     /// reading up to this many pages in all [default: 5]. A search from a public address reads only public addresses
     #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]
     pub(crate) follow: Option<usize>,
+    /// Read up to this many pages of a list (50 at most): the page's own next-page links (`rel="next"`, or a `?page=2` one
+    /// page on), one after another, judged as one list. The default block count is multiplied by the pages read; -a keeps
+    /// all. Not with --follow, --links, --image or --vision
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub(crate) pages: usize,
     /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text, or unfilled template placeholders)
     #[arg(short, long)]
     pub(crate) render: bool,

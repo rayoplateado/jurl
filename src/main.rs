@@ -22,6 +22,7 @@ mod mcp;
 #[cfg(test)]
 mod mock;
 mod output;
+mod paging;
 mod precise;
 mod reach;
 mod setup;
@@ -33,6 +34,7 @@ mod update;
 mod vision;
 
 use std::{
+    collections::{HashMap, HashSet},
     io::{stderr, stdout},
     path::Path,
     process::ExitCode,
@@ -205,6 +207,14 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.precise && args.ask.is_none() {
         bail!("--precise needs a question: add -q \"…\"");
     }
+    if args.pages == 0 || args.pages > paging::MAX_PAGES {
+        bail!("--pages takes 1 to {}", paging::MAX_PAGES);
+    }
+    if args.pages > 1 && (args.follow.is_some() || args.links || args.image || args.vision) {
+        bail!(
+            "--pages reads the next pages of a list: use it with -q or a plain read, not --follow, --links or --image"
+        );
+    }
     if args.follow.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
         bail!("--follow looks for an answer: use it with -q (and --precise or --code), not images or links");
     }
@@ -274,6 +284,7 @@ async fn read(
     decide::USAGE.record_route(served);
     let _ = warm.await;
 
+    let ex = if args.pages > 1 { list_pages(args, cfg, url.clone(), ex, t).await } else { ex };
     let ctx = Ctx::new(args, client, key, &url, &ex);
     if args.image || args.vision {
         vision::images(&ctx, cfg, &ex, t).await
@@ -282,6 +293,52 @@ async fn read(
     } else {
         blocks::blocks(&ctx, &ex, t).await
     }
+}
+
+/// `--pages`: the start page, and the pages after it one after another, each the next page of the one before (see `paging`),
+/// as one list (`paging::merge`). A page that the site's robots.txt does not let jurl read ends the list, as does a page
+/// already read or one with no text that is new. A page that fails ends it too, with a note on stderr: the pages before it are
+/// judged as they are.
+async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t: &mut Timer) -> Extracted {
+    let retry = fetch::Retry::for_run(
+        args.no_browser_retry,
+        args.timing,
+        &args.reach,
+        &args.cookies,
+        args.stealth.as_ref(),
+        &args.fallback,
+    );
+    let mut robots: HashMap<String, follow::Robots> = HashMap::new();
+    let mut seen: HashSet<String> = ex.blocks.iter().map(|b| b.text.clone()).collect();
+    let mut pages = vec![(start, ex)];
+    while pages.len() < args.pages {
+        let Some(next) = pages.last().and_then(|(_, ex)| ex.next_page.clone()) else { break };
+        if pages.iter().any(|(u, _)| *u == next) {
+            break;
+        }
+        let host = next.host_str().unwrap_or_default().to_string();
+        if !robots.contains_key(&host) {
+            robots.insert(host.clone(), follow::Robots::load(&next, retry).await);
+        }
+        if !robots[&host].allows(&next) {
+            eprintln!("jurl: {next} is not read: its robots.txt does not let jurl read it");
+            break;
+        }
+        match load(args, cfg, &next, t).await {
+            Ok((url, next_ex, _)) => {
+                if next_ex.blocks.iter().all(|b| seen.contains(&b.text)) {
+                    break;
+                }
+                seen.extend(next_ex.blocks.iter().map(|b| b.text.clone()));
+                pages.push((url, next_ex));
+            }
+            Err(e) => {
+                eprintln!("jurl: {next} is not read, so the list is {} pages: {e:#}", pages.len());
+                break;
+            }
+        }
+    }
+    paging::merge(pages)
 }
 
 /// Fetch a page (rendering it when it needs JavaScript) and cut it into blocks, links and images. Also says how the page was
@@ -495,5 +552,22 @@ mod tests {
             "--render renders the proxy's page"
         );
         assert!(!renders_after_fetch(false, served(Route::Direct, false), false, false));
+    }
+
+    #[test]
+    fn pages_is_a_count_from_one_to_the_most_allowed_and_not_for_a_follow_or_a_link() {
+        let check = |argv: &[&str]| prepare(&mut Args::parse_from(argv));
+        assert!(check(&["jurl", "-q", "x?", "--pages", "13", "x.com"]).is_ok());
+        assert!(check(&["jurl", "--pages", "1", "x.com"]).is_ok(), "one page is the default");
+        assert!(check(&["jurl", "-q", "x?", "--pages", "0", "x.com"]).is_err());
+        let too_many = paging::MAX_PAGES + 1;
+        assert!(check(&["jurl", "-q", "x?", "--pages", &too_many.to_string(), "x.com"]).is_err());
+        assert!(check(&["jurl", "-q", "x?", "--pages", "2", "--follow", "5", "x.com"]).is_err());
+        assert!(check(&["jurl", "-q", "x?", "--pages", "2", "--links", "x.com"]).is_err());
+        assert!(check(&["jurl", "--pages", "2", "--image", "x.com"]).is_err());
+        assert!(
+            check(&["jurl", "-q", "x?", "--pages", "2", "--precise", "x.com"]).is_ok(),
+            "a precise answer may be on any page"
+        );
     }
 }

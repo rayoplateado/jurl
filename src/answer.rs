@@ -362,7 +362,9 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
     let threshold = ctx.args.threshold_for(true);
     let block = &ex.blocks[pick.block];
     let answer = answer_text(block, &pick.range);
-    let link = answer_link(ctx.url, block, &pick.range);
+    // An answer from a later page of a list (`--pages`) is a link on that page, not on the start page.
+    let page_url = block.page.and_then(|n| ex.pages.get(n - 1)).unwrap_or(ctx.url);
+    let link = answer_link(page_url, block, &pick.range);
     let source =
         if block.kind == Kind::Structured { " (JSON-LD: the page's structured data, not text it shows)" } else { "" };
     // A table's quote is its header and the answer's row, so a cell says what it is ("Clase Turista"), not the whole table.
@@ -370,7 +372,7 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
     let p = pick.p;
 
     let mut doc = json!({
-        "url": ctx.url.as_str(),
+        "url": page_url.as_str(),
         "title": ex.title,
         "ask": q,
         "answer": (p >= threshold).then_some(answer.as_str()),
@@ -387,6 +389,10 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
     }
     if let Some(lang) = &block.lang {
         doc["lang"] = json!(lang);
+    }
+    // The record of a repeated list the answer is in, numbered as the block arrays number it (see `cards`).
+    if let Some(record) = block.record {
+        doc["record"] = json!(record);
     }
     // The table or list the answer came from, as much of it as fits (`context_of`). A miss's closest candidate has it too.
     if let Some(context) = context_of(ex, pick) {

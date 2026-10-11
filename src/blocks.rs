@@ -26,14 +26,16 @@ pub(crate) async fn blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Resu
     let args = ctx.args;
     let (scores, kind) = score_blocks(ctx, ex, t).await?;
 
-    // Top-N by probability, printed in page order. Headings survive when their section does.
-    let default_max = if args.code {
+    // Top-N by probability, printed in page order. Headings survive when their section does. A list read over several pages
+    // (`--pages`) has the default for each page it read.
+    let per_page = if args.code {
         DEFAULT_CODE_BLOCKS
     } else if args.ask.is_some() {
         DEFAULT_ASK_BLOCKS
     } else {
         DEFAULT_BLOCKS
     };
+    let default_max = per_page * ex.pages.len().max(1);
     // --precise looks inside the best few blocks even when none of them answers on its own: whether a span of
     // them is the answer is decided next, at the span's own threshold.
     if args.precise {
@@ -88,9 +90,13 @@ async fn structured_or(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer, otherwise: 
     }
 }
 
-/// Whether Jev is asked about a block: a paragraph or list item of a sentence or more (not in --code), a code block, and a
-/// heading only when it is a headline (`Block::href`). A section title is shown with the block after it, and never answers.
+/// Whether Jev is asked about a block: a paragraph or list item of a sentence or more (not in --code), a card (however short:
+/// its date or price is its content), a code block, and a heading only when it is a headline (`Block::href`). A section
+/// title is shown with the block after it, and never answers.
 fn is_candidate(code: bool, b: &Block) -> bool {
+    if b.record.is_some() {
+        return !code;
+    }
     match b.kind {
         Kind::Heading => !code && b.href.is_some() && b.text.chars().count() >= extract::SHORT_BLOCK_CHARS,
         Kind::Code => !b.text.trim().is_empty(),
@@ -163,19 +169,18 @@ fn page_questions(precise: bool) -> Map<String, Value> {
     )])
 }
 
-/// The blocks to print, in page order: the kept ones, and the short list items that go with a kept item. A section title
-/// is printed just before the next block that is printed; a kept headline is a block of its own.
+/// The blocks to print, in page order: the kept ones, and the short list items that go with a kept item. The section titles
+/// before a printed block are printed just before it, every one of them and in order: a run of titles with no block between
+/// them loses none. A kept headline is a block of its own.
 fn selected_blocks<'a>(ex: &'a Extracted, kept: &HashSet<usize>) -> Vec<&'a Block> {
-    let mut pending_heading = None;
+    let mut pending_headings = Vec::new();
     let mut selected = Vec::new();
     let items = extract::short_items_of_kept_lists(&ex.blocks, |i| kept.contains(&i));
     for b in &ex.blocks {
         if b.kind == Kind::Heading && !kept.contains(&b.i) {
-            pending_heading = Some(b);
+            pending_headings.push(b);
         } else if kept.contains(&b.i) || items.contains(&b.i) {
-            if let Some(h) = pending_heading.take() {
-                selected.push(h);
-            }
+            selected.append(&mut pending_headings);
             selected.push(b);
         }
     }
@@ -218,6 +223,9 @@ pub(crate) fn render_blocks(
         "kind": kind.as_ref().map(|k| json!({ "choice": k.0, "confidence": k.1 })),
         "blocks": blocks,
     });
+    if ex.pages.len() > 1 {
+        doc["pages"] = json!(ex.pages.iter().map(url::Url::as_str).collect::<Vec<_>>());
+    }
     if let Some(path) = path {
         doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
     }
@@ -227,10 +235,30 @@ pub(crate) fn render_blocks(
     }
     let kind = kind.map(|(k, c)| format!(" · {k} ({c:.2})")).unwrap_or_default();
     text += &format!("<{}>{kind}\n\n", ctx.url);
+    text += &blocks_text(&selected, &ex.pages);
+    Ok(Rendered { text, json: doc })
+}
+
+/// The blocks as the text prints them, in page order, one block to a paragraph. A record (a card of a repeated list, see
+/// `cards`) is marked by a `[record N]` line above it, the number the JSON gives it. A page of a list that is not the first is
+/// marked by its address, where its blocks begin.
+fn blocks_text(selected: &[&Block], pages: &[url::Url]) -> String {
+    let mut text = String::new();
+    let mut on_page = 1;
     for b in selected {
+        if let Some(n) = b.page
+            && n != on_page
+            && let Some(url) = pages.get(n - 1)
+        {
+            on_page = n;
+            text += &format!("<{url}>\n\n");
+        }
+        if let Some(n) = b.record {
+            text += &format!("[record {n}]\n");
+        }
         text += &format!("{}\n\n", b.markdown());
     }
-    Ok(Rendered { text, json: doc })
+    text
 }
 
 /// The `max` best scores at or above `threshold` as (index, score), best first. Ties go to the lower index, so the
@@ -293,12 +321,56 @@ mod tests {
             printed(headline),
             ["Opinión de la semana sobre el tema", "A headline long enough to be judged here"]
         );
+        // Every section title before the printed block is printed with it, not only the last: a title is never lost to the
+        // one after it.
         assert_eq!(
             printed(para),
             [
+                "Opinión de la semana sobre el tema",
                 "A headline long enough to be judged here",
                 "A paragraph of the page that is long enough to be judged on its own."
             ]
+        );
+    }
+
+    #[test]
+    fn a_run_of_titles_before_a_block_is_printed_whole() {
+        // Each card's title is a heading with no block between the titles: all of them go with the block after the run.
+        let page = r#"<body><main><h3>ALEKS SYNTEK</h3><h3>LITTLE BIG</h3><h3>DRUHA RIKA</h3>
+            <p>A paragraph of the page that is long enough to be judged on its own.</p></main></body>"#;
+        let ex = crate::extract::html(page, &url::Url::parse("https://example.com/post/").unwrap());
+        let para = ex.blocks.iter().position(|b| b.text.starts_with("A paragraph")).unwrap();
+        let kept: HashSet<usize> = [para].into_iter().collect();
+        let printed: Vec<&str> = selected_blocks(&ex, &kept).into_iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(
+            printed,
+            [
+                "ALEKS SYNTEK",
+                "LITTLE BIG",
+                "DRUHA RIKA",
+                "A paragraph of the page that is long enough to be judged on its own."
+            ]
+        );
+    }
+
+    #[test]
+    fn a_record_is_marked_by_its_number_and_a_later_page_by_its_address() {
+        let record = |i: usize, n: usize, page: Option<usize>, text: &str| Block {
+            record: Some(n),
+            page,
+            ..Block::new(i, Kind::Para, text.to_string())
+        };
+        let plain = Block::new(3, Kind::Para, "A paragraph of the page that is long enough to be judged.".into());
+        let (first, second) =
+            (record(0, 1, Some(1), "Thursday\n15\nCarmen Lillo"), record(1, 2, Some(2), "Friday\n16\n9louro"));
+        let text = blocks_text(
+            &[&first, &second, &plain],
+            &["https://x.test/agenda".parse().unwrap(), "https://x.test/agenda?page=2".parse().unwrap()],
+        );
+        assert_eq!(
+            text,
+            "[record 1]\nThursday\n15\nCarmen Lillo\n\n<https://x.test/agenda?page=2>\n\n[record 2]\nFriday\n16\n9louro\n\n\
+             A paragraph of the page that is long enough to be judged.\n\n"
         );
     }
 }

@@ -1,0 +1,557 @@
+[
+ {
+  "id": "news-eldiario-precise",
+  "group": "news",
+  "mode": "precise",
+  "url": "https://www.eldiario.es/",
+  "q": "cuántos muertos en el aeropuerto de riad",
+  "ok": true,
+  "rc": 0,
+  "answer": "12 muertos",
+  "text": "12 muertos",
+  "expect": [
+   "12 muertos",
+   "aeropuerto saudí de Riad"
+  ],
+  "jev_tokens": 17256,
+  "pages": 1,
+  "ms": 740,
+  "volatile": true,
+  "note": "on origin/main the headline is an h2 (a Heading block), and Jev is never asked about a heading: this is the case the headline fix is for"
+ },
+ {
+  "id": "news-eldiario-ask",
+  "group": "news",
+  "mode": "ask",
+  "url": "https://www.eldiario.es/",
+  "q": "cuántos muertos en el aeropuerto de riad",
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "ERC confirma a Rufián como cabeza de lista y cierra la puerta al Frente Amplio\nIzquierda Unida respalda la vía Colau y pide “responsabilidad” al resto de fuerzas tras el movimiento de Rufián\nMás Madrid propone una lista liderada por Emilio Delgado para las elecciones\nSánchez pide al Supremo que fren",
+  "expect": [
+   "12 muertos"
+  ],
+  "jev_tokens": 16245,
+  "pages": 1,
+  "ms": 606,
+  "volatile": true,
+  "note": "the same headline, in the -q blocks: on origin/main it is not among them"
+ },
+ {
+  "id": "news-eldiario-links",
+  "group": "news",
+  "mode": "links",
+  "url": "https://www.eldiario.es/",
+  "q": "cuántos muertos en el aeropuerto de riad",
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "https://www.eldiario.es/internacional/12-muertos-300-heridos-ataque-huti-aeropuerto-riad_1_13578028.html",
+  "expect": [
+   "riad"
+  ],
+  "jev_tokens": 30355,
+  "pages": 1,
+  "ms": 535,
+  "volatile": true,
+  "note": null
+ },
+ {
+  "id": "news-bbc-precise",
+  "group": "news",
+  "mode": "precise",
+  "url": "https://www.bbc.com/news",
+  "q": "What happened to the Riyadh airport in two days?",
+  "ok": true,
+  "rc": 0,
+  "answer": "Saudi capital airport hit by second Houthi strike in two days",
+  "text": "Saudi capital airport hit by second Houthi strike in two days",
+  "expect": [
+   "second Houthi strike"
+  ],
+  "jev_tokens": 9095,
+  "pages": 1,
+  "ms": 685,
+  "volatile": true,
+  "note": "the same headline also appears as a numbered list item on the page ('4 Saudi Arabia's Riyadh airport...'), which origin/main scores: this case guards the wrapping-link path, it does not prove it"
+ },
+ {
+  "id": "news-guardian-precise",
+  "group": "news",
+  "mode": "precise",
+  "url": "https://www.theguardian.com/international",
+  "q": "What happened to the Riyadh airport after the Houthi attack?",
+  "ok": false,
+  "rc": 0,
+  "answer": "Unidentified projectile strikes King Khalid airport as escalating attacks threaten to draw more countries into Yemen conflict",
+  "text": "Unidentified projectile strikes King Khalid airport as escalating attacks threaten to draw more countries into Yemen conflict",
+  "expect": [
+   "hit again"
+  ],
+  "jev_tokens": 17884,
+  "pages": 1,
+  "ms": 826,
+  "volatile": true,
+  "note": "the headline is an h3 inside a link (a card), and the same text appears as a list item too: origin/main answers it from that item, so this case guards, it does not prove the fix"
+ },
+ {
+  "id": "pricing-cloudflare-workers-requests",
+  "group": "pricing",
+  "mode": "precise",
+  "url": "https://developers.cloudflare.com/workers/platform/pricing/",
+  "q": "how many requests per month are included in the Workers Paid plan?",
+  "ok": true,
+  "rc": 0,
+  "answer": "10 million",
+  "text": "10 million",
+  "expect": [
+   "10 million"
+  ],
+  "jev_tokens": 21712,
+  "pages": 1,
+  "ms": 194,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "docs-postgres-bigint-table",
+  "group": "docs",
+  "mode": "precise",
+  "url": "https://www.postgresql.org/docs/current/datatype-numeric.html",
+  "q": "what is the range of bigint?",
+  "ok": true,
+  "rc": 0,
+  "answer": "-9223372036854775808 to +9223372036854775807",
+  "text": "-9223372036854775808 to +9223372036854775807",
+  "expect": [
+   "9223372036854775807"
+  ],
+  "jev_tokens": 12236,
+  "pages": 1,
+  "ms": 951,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "trap-claude-api-prices-hidden-tab",
+  "group": "trap",
+  "mode": "precise",
+  "url": "https://claude.com/pricing",
+  "q": "How much does Opus 5.5 cost per million output tokens?",
+  "ok": true,
+  "rc": 1,
+  "answer": null,
+  "text": "",
+  "expect": null,
+  "jev_tokens": 4415,
+  "pages": 1,
+  "ms": 625,
+  "volatile": true,
+  "note": "the API prices are in a div role=tabpanel with the hidden attribute, which a reader does not see: no answer is right (hidden elements are never read)"
+ },
+ {
+  "id": "pricing-asana-starter",
+  "group": "pricing",
+  "mode": "precise",
+  "url": "https://asana.com/pricing",
+  "q": "How much does the Starter plan cost per user per month, billed annually?",
+  "ok": false,
+  "rc": 1,
+  "answer": null,
+  "text": "",
+  "expect": [
+   "$10.99"
+  ],
+  "jev_tokens": 12956,
+  "pages": 1,
+  "ms": 445,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "docs-python-file-lines",
+  "group": "docs",
+  "mode": "ask",
+  "url": "https://docs.python.org/3/tutorial/inputoutput.html",
+  "q": "how do I read a file line by line?",
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "7. Input and output\n7.1. Fancier output formatting\n7.1.1. Formatted string literals\n7.1.2. The string format() method\n7.1.3. Manual string formatting\n7.1.4. Old string formatting\n7.2. Reading and writing files\n7.2.1. Methods of file objects\nf.readline() reads a single line from the file; a newline c",
+  "expect": [
+   "for line in f"
+  ],
+  "jev_tokens": 10417,
+  "pages": 1,
+  "ms": 136,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "docs-mdn-array-at-negative",
+  "group": "docs",
+  "mode": "ask",
+  "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/at",
+  "q": "what happens when the index is negative?",
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "Array.prototype.at()\nThe at() method of Array instances takes an integer value and returns the item at that index, allowing for positive and negative integers. Negative integers count back from the last item in the array.\nTry it\nconst array = [5, 12, 8, 130, 44];\n\nlet index = 2;\n\nconsole.log(`An ind",
+  "expect": [
+   "count back from the last item"
+  ],
+  "jev_tokens": 3516,
+  "pages": 1,
+  "ms": 133,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "docs-github-rate-limit",
+  "group": "docs",
+  "mode": "precise",
+  "url": "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+  "q": "what is the primary rate limit for authenticated users?",
+  "ok": true,
+  "rc": 0,
+  "answer": "5,000 requests per hour",
+  "text": "5,000 requests per hour",
+  "expect": [
+   "5,000 requests per hour"
+  ],
+  "jev_tokens": 8559,
+  "pages": 1,
+  "ms": 128,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "docs-react-clean-up-code",
+  "group": "docs",
+  "mode": "ask",
+  "url": "https://react.dev/reference/react/useEffect",
+  "q": "how do I clean up a subscription when the component unmounts?",
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "Reference {/reference/}\nuseEffect(setup, dependencies?) {/useeffect/}\nimport { useState, useEffect } from 'react';\nimport { createConnection } from './chat.js';\n\nfunction ChatRoom({ roomId }) {\n  const [serverUrl, setServerUrl] = useState('https://localhost:1234');\n\n  useEffect(() => {\n    const con",
+  "expect": [
+   "return () =>"
+  ],
+  "jev_tokens": 28312,
+  "pages": 1,
+  "ms": 164,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "docs-uv-install-command",
+  "group": "docs",
+  "mode": "ask",
+  "url": "https://github.com/astral-sh/uv",
+  "q": "how do I install uv on macOS or Linux?",
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "uv\nHighlights\nInstallation\nInstall uv with our standalone installers:\n# On macOS and Linux.\ncurl -LsSf https://astral.sh/uv/install.sh | sh\n# With pip.\npip install uv\n# Or pipx.\npipx install uv",
+  "expect": [
+   "curl -LsSf https://astral.sh/uv/install.sh | sh"
+  ],
+  "jev_tokens": 6766,
+  "pages": 1,
+  "ms": 681,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "docs-ripgrep-install-command",
+  "group": "docs",
+  "mode": "ask",
+  "url": "https://github.com/BurntSushi/ripgrep",
+  "q": "how do I install it on macOS?",
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "ripgrep (rg)\nCHANGELOG\nDocumentation quick links\nScreenshot of search results\nQuick examples comparing tools\nWhy should I use ripgrep?\nWhy shouldn't I use ripgrep?\nIs it really faster than everything else?\nFeature comparison\nPlayground\nInstallation\nArchives of precompiled binaries for ripgrep are av",
+  "expect": [
+   "brew install ripgrep"
+  ],
+  "jev_tokens": 12665,
+  "pages": 1,
+  "ms": 670,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "wiki-jevons-precise",
+  "group": "wikipedia",
+  "mode": "precise",
+  "url": "https://en.wikipedia.org/wiki/Jevons_paradox",
+  "q": "who first described the paradox and in which book?",
+  "ok": true,
+  "rc": 0,
+  "answer": "The Jevons paradox was first described by the English economist William Stanley Jevons in his 1865 book The Coal Question",
+  "text": "The Jevons paradox was first described by the English economist William Stanley Jevons in his 1865 book The Coal Question",
+  "expect": [
+   "The Coal Question"
+  ],
+  "jev_tokens": 11902,
+  "pages": 1,
+  "ms": 279,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "wiki-medicine-aspirin-follow",
+  "group": "wikipedia",
+  "mode": "follow",
+  "url": "https://en.wikipedia.org/wiki/Medicine",
+  "q": "What is the chemical formula of aspirin?",
+  "ok": true,
+  "rc": 0,
+  "answer": "C9H8O4",
+  "text": "C9H8O4",
+  "expect": [
+   "C9H8O4"
+  ],
+  "jev_tokens": 166202,
+  "pages": 3,
+  "ms": 2335,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "wiki-paris-eiffel-follow",
+  "group": "wikipedia",
+  "mode": "follow",
+  "url": "https://en.wikipedia.org/wiki/Paris",
+  "q": "Who designed the Eiffel Tower?",
+  "ok": true,
+  "rc": 0,
+  "answer": "Maurice Koechlin and Émile Nouguier",
+  "text": "Maurice Koechlin and Émile Nouguier",
+  "expect": [
+   "Koechlin",
+   "Nouguier",
+   "Sauvestre",
+   "Gustave Eiffel"
+  ],
+  "jev_tokens": 145515,
+  "pages": 3,
+  "ms": 1291,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "wiki-medicine-aspirin-links",
+  "group": "wikipedia",
+  "mode": "links",
+  "url": "https://en.wikipedia.org/wiki/Medicine",
+  "q": "What is the chemical formula of aspirin?",
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "https://en.wikipedia.org/wiki/Aspirin",
+  "expect": [
+   "/wiki/Aspirin"
+  ],
+  "jev_tokens": 30309,
+  "pages": 1,
+  "ms": 285,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "shop-pompeii-returns-es",
+  "group": "shop",
+  "mode": "precise",
+  "url": "https://pompeiibrand.com/policies/refund-policy",
+  "q": "¿Cuántos días tengo para devolver mi compra?",
+  "ok": true,
+  "rc": 0,
+  "answer": "365 días",
+  "text": "365 días",
+  "expect": [
+   "365 días"
+  ],
+  "jev_tokens": 2416,
+  "pages": 1,
+  "ms": 333,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "shop-ecoalf-withdrawal-es",
+  "group": "shop",
+  "mode": "precise",
+  "url": "https://ecoalf.com/policies/refund-policy",
+  "q": "¿Cuántos días naturales tengo para desistir de la compra?",
+  "ok": true,
+  "rc": 0,
+  "answer": "14 días naturales",
+  "text": "14 días naturales",
+  "expect": [
+   "14 días naturales"
+  ],
+  "jev_tokens": 3483,
+  "pages": 1,
+  "ms": 551,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "airline-iberia-hand-luggage-default-es",
+  "group": "airline",
+  "mode": "default",
+  "url": "https://www.iberia.com/es/equipajes/de-mano/",
+  "q": null,
+  "ok": true,
+  "rc": 0,
+  "answer": null,
+  "text": "Equipaje de mano\nTodo lo que tienes que saber sobre tu equipaje de mano\n¿Ya sabes qué puedes llevar como equipaje de mano? En Iberia, todas nuestras tarifas incluyen un equipaje de hasta 10 Kg y un equipaje de mano personal gratuito. Recuerda que debes asegurarte de cumplir con las medidas y pesos e",
+  "expect": [
+   "10 kg"
+  ],
+  "jev_tokens": 17131,
+  "pages": 1,
+  "ms": 257,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "airline-iberia-hand-luggage-weight-es",
+  "group": "airline",
+  "mode": "precise",
+  "url": "https://www.iberia.com/es/equipajes/de-mano/",
+  "q": "¿Cuánto puede pesar el equipaje de mano en clase turista?",
+  "ok": true,
+  "rc": 0,
+  "answer": "10 kg",
+  "text": "10 kg",
+  "expect": [
+   "10 kg"
+  ],
+  "jev_tokens": 17772,
+  "pages": 1,
+  "ms": 340,
+  "volatile": false,
+  "note": "asked without the class, the answer is the Business one (14 kg), which is also on the page"
+ },
+ {
+  "id": "airline-iberia-hand-luggage-weight-en",
+  "group": "airline",
+  "mode": "precise",
+  "url": "https://www.iberia.com/es/equipajes/de-mano/",
+  "q": "How much can my hand luggage weigh?",
+  "ok": true,
+  "rc": 0,
+  "answer": "10 kg",
+  "text": "10 kg",
+  "expect": [
+   "10 kg"
+  ],
+  "jev_tokens": 17854,
+  "pages": 1,
+  "ms": 648,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "trap-linear-ceo-dog",
+  "group": "trap",
+  "mode": "precise",
+  "url": "https://linear.app/",
+  "q": "What is the name of the CEO's dog?",
+  "ok": true,
+  "rc": 1,
+  "answer": null,
+  "text": "",
+  "expect": null,
+  "jev_tokens": 8992,
+  "pages": 1,
+  "ms": 790,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "trap-tailscale-support-phone",
+  "group": "trap",
+  "mode": "precise",
+  "url": "https://tailscale.com/",
+  "q": "What is the phone number for customer support?",
+  "ok": true,
+  "rc": 1,
+  "answer": null,
+  "text": "",
+  "expect": null,
+  "jev_tokens": 5826,
+  "pages": 1,
+  "ms": 566,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "render-mega-free-storage",
+  "group": "render",
+  "mode": "precise",
+  "url": "https://mega.io/",
+  "q": "How much free storage does MEGA offer?",
+  "ok": true,
+  "rc": 0,
+  "answer": "20 GB",
+  "text": "20 GB",
+  "expect": [
+   "20 GB",
+   "20GB"
+  ],
+  "jev_tokens": 4774,
+  "pages": 1,
+  "ms": 3208,
+  "volatile": false,
+  "note": "the raw HTML also has '20 GB free storage' in a table, so the answer alone does not prove the render: expect_stderr does"
+ },
+ {
+  "id": "sitemap-cloudflare-workers-cpu-follow",
+  "group": "sitemap",
+  "mode": "follow",
+  "url": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "ok": true,
+  "rc": 0,
+  "answer": "5 min (default: 30 seconds)",
+  "text": "5 min (default: 30 seconds)",
+  "expect": [
+   "30s",
+   "30 s",
+   "30 seconds",
+   "5 min",
+   "300,000",
+   "30,000 ms"
+  ],
+  "jev_tokens": 90873,
+  "pages": 5,
+  "ms": 14819,
+  "volatile": false,
+  "note": null
+ },
+ {
+  "id": "sitemap-github-rate-limit-follow",
+  "group": "sitemap",
+  "mode": "follow",
+  "url": "docs.github.com",
+  "q": "What is the primary rate limit for authenticated users?",
+  "ok": true,
+  "rc": 0,
+  "answer": "5,000 requests per hour",
+  "text": "5,000 requests per hour",
+  "expect": [
+   "5,000"
+  ],
+  "jev_tokens": 155299,
+  "pages": 5,
+  "ms": 496,
+  "volatile": false,
+  "note": null
+ }
+]

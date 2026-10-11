@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use scraper::{ElementRef, Html, Node, Selector};
 use url::Url;
 
+use super::cards::{self, Member};
 use super::join::join_short;
 use super::{BREAK, Block, Extracted, Image, Kind, Link, collapse, push_image, push_link};
+use crate::paging;
 
 const SKIP: &[&str] = &[
     "script", "style", "noscript", "nav", "footer", "aside", "form", "svg", "button", "iframe", "template", "select",
@@ -37,16 +39,36 @@ pub fn html_with_placeholders(body: &str, base: &Url) -> (Extracted, bool) {
 fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
     let root = content_root(doc);
     let in_body = root.value().name() == "body";
+    let site_links = collect_site_links(doc, base);
+    let mut blocks = join_short(walk(doc, root, in_body, base));
+    cards::number_records(&mut blocks);
     Extracted {
         title: collapse(&page_title(doc)),
         lang: declared_lang(doc),
-        blocks: join_short(walk(doc, root, in_body, base)),
+        blocks,
         structured: Vec::new(),
         images: collect_images(doc, root, in_body, base),
         links: collect_links(root, in_body, base),
-        site_links: collect_site_links(doc, base),
+        next_page: next_page(doc, &site_links, base),
+        site_links,
+        pages: Vec::new(),
         app_shell: is_app_shell(doc, body),
     }
+}
+
+/// The page after this one in its list (see `paging`): the target of a `rel="next"` link (in the head, or an anchor that is
+/// not hidden) when it is on the same site, else the link whose page number is this one's plus one.
+fn next_page(doc: &Html, site_links: &[Link], base: &Url) -> Option<Url> {
+    let standard = doc
+        .select(&sel("link[rel~=next], a[rel~=next]"))
+        .filter(|e| !hidden(*e))
+        .filter_map(|e| base.join(e.value().attr("href")?.trim()).ok())
+        .map(|mut u| {
+            u.set_fragment(None);
+            u
+        })
+        .find(|u| u != base && matches!(u.scheme(), "http" | "https") && paging::same_site(base, u));
+    standard.or_else(|| paging::numbered_next(base, site_links.iter().map(|l| &l.url)))
 }
 
 /// The page's title: `og:title`, else the `<title>`, else the first `<h1>`.
@@ -324,7 +346,7 @@ impl<'a> Walker<'a> {
         }
         let i = self.blocks.len();
         let list = (kind == Kind::Item).then_some(self.list).flatten();
-        self.blocks.push(Block { i, kind, level, lang, text, list, href });
+        self.blocks.push(Block { i, kind, level, lang, text, list, href, record: None, page: None });
     }
 
     fn flush(&mut self) {
@@ -332,7 +354,8 @@ impl<'a> Walker<'a> {
         self.push(Kind::Para, None, None, text);
     }
 
-    /// Generic container: inline runs become paragraphs, block children recurse.
+    /// Generic container: inline runs become paragraphs, block children recurse. Its container children that read as blocks
+    /// are the members of its card lists, merged once they are all read (see `cards`).
     fn container(&mut self, el: ElementRef<'a>) {
         if self.depth >= MAX_WALK_DEPTH {
             // Too deep to walk into: its text, read flat, carries on the paragraph in progress.
@@ -342,6 +365,7 @@ impl<'a> Walker<'a> {
             return;
         }
         self.depth += 1;
+        let mut members = Vec::new();
         for child in el.children() {
             match child.value() {
                 Node::Text(t) => self.buf.push_str(t),
@@ -363,13 +387,20 @@ impl<'a> Walker<'a> {
                         self.buf.push_str(&inline_text(child));
                     } else {
                         self.flush();
+                        let start = self.blocks.len();
                         self.element(child);
+                        if generic(child) {
+                            members.push(Member { shape: shape(child, SHAPE_DEPTH), start, end: self.blocks.len() });
+                        }
                     }
                 }
                 _ => {}
             }
         }
         self.depth -= 1;
+        if !members.is_empty() {
+            self.blocks = cards::merge_cards(std::mem::take(&mut self.blocks), &members);
+        }
     }
 
     /// The streamed content that belongs where this `<template id="B:n">` is.
@@ -626,6 +657,57 @@ fn visible_len(el: ElementRef) -> usize {
 
 fn has_block_desc(el: ElementRef) -> bool {
     el.descendants().filter_map(ElementRef::wrap).skip(1).any(|d| !INLINE.contains(&d.value().name()))
+}
+
+/// How deep a card's shape reads: its tag, and the tags of the blocks in it, this many levels down (see `cards`). Deeper, an
+/// optional part of a card (a "sold out" badge, say) splits its list.
+const SHAPE_DEPTH: usize = 3;
+/// The most children a shape reads at each level, a bound on the cost of a huge list.
+const SHAPE_CHILDREN: usize = 16;
+
+/// The shape of an element for the card rule: its tag, then the shapes of its children that the walk reads as blocks, down
+/// `SHAPE_DEPTH` levels. Classes and ids are not part of it: a card list's cards often each carry an id of their own
+/// (`qode-events1178`, `post-79696`), so the same card can have a different class on each card.
+fn shape(el: ElementRef, depth: usize) -> String {
+    let mut out = el.value().name().to_string();
+    if depth == 0 {
+        return out;
+    }
+    let kids: Vec<String> = el
+        .children()
+        .filter_map(ElementRef::wrap)
+        .filter(|c| !SKIP.contains(&c.value().name()) && !(INLINE.contains(&c.value().name()) && !has_block_desc(*c)))
+        .take(SHAPE_CHILDREN)
+        .map(|c| shape(c, depth - 1))
+        .collect();
+    if !kids.is_empty() {
+        out += &format!("({})", kids.join(","));
+    }
+    out
+}
+
+/// Whether the walk reads a child as a container (a `div`, an `article`, a link around a card) rather than as a block of its
+/// own: a heading, a paragraph, a list, a table, a quote or code. Only containers form card lists.
+fn generic(el: ElementRef) -> bool {
+    !matches!(
+        el.value().name(),
+        "h1" | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "p"
+            | "figcaption"
+            | "dt"
+            | "dd"
+            | "summary"
+            | "pre"
+            | "blockquote"
+            | "li"
+            | "ul"
+            | "ol"
+            | "table"
+    )
 }
 
 /// Whether an ancestor of the element is skipped. The element's own `hidden` is the caller's to check, and its own
@@ -1269,5 +1351,154 @@ mod tests {
         for menu in ["A menu heading", "Another menu heading", "A footer heading"] {
             assert!(texts.iter().all(|t| !t.contains(menu)), "{menu} in {texts:?}");
         }
+    }
+
+    /// The texts of the cards in `page`, and the texts of the blocks that are not cards.
+    fn cards_and_rest(page: &str) -> (Vec<String>, Vec<String>) {
+        let ex = html(page, &base());
+        let cards = ex.blocks.iter().filter(|b| b.record.is_some()).map(|b| b.text.clone()).collect();
+        let rest = ex.blocks.iter().filter(|b| b.record.is_none()).map(|b| b.text.clone()).collect();
+        (cards, rest)
+    }
+
+    #[test]
+    fn a_card_list_reads_one_block_per_card_with_its_date_and_title_together() {
+        // The title comes last in each card, after its date: read flat, each title would sit next to the next card's date.
+        let page = r#"<body><main><div class="list">
+            <div class="item"><div class="day">Thursday</div><div class="num">15</div><h3>Carmen Lillo en MAZO (Pop)</h3></div>
+            <div class="item"><div class="day">Friday</div><div class="num">16</div><h3>9louro en MAZO (Urbano Pop)</h3></div>
+            <div class="item"><div class="day">Saturday</div><div class="num">17</div><h3>Baile Europa: Back to Clamores</h3></div>
+            </div></main></body>"#;
+        let (cards, rest) = cards_and_rest(page);
+        assert_eq!(
+            cards,
+            [
+                "Thursday\n15\nCarmen Lillo en MAZO (Pop)",
+                "Friday\n16\n9louro en MAZO (Urbano Pop)",
+                "Saturday\n17\nBaile Europa: Back to Clamores"
+            ]
+        );
+        assert!(rest.is_empty(), "{rest:?}");
+    }
+
+    #[test]
+    fn each_record_is_numbered_in_page_order_across_lists() {
+        // Two lists on one page, with a paragraph between them: the records of both are one run of numbers.
+        let page = r#"<body><main><div class="list">
+            <div class="item"><div>Thursday</div><h3>Carmen Lillo</h3></div>
+            <div class="item"><div>Friday</div><h3>9louro</h3></div>
+            <div class="item"><div>Saturday</div><h3>Baile Europa</h3></div>
+            </div><p>A paragraph between the two lists, long enough to be read as content.</p>
+            <div class="other"><div class="row"><div>Sunday</div><div>Dos</div></div>
+            <div class="row"><div>Monday</div><div>Tres</div></div><div class="row"><div>Tuesday</div><div>Cuatro</div></div></div>
+            </main></body>"#;
+        let ex = html(page, &base());
+        let numbers: Vec<_> = ex.blocks.iter().filter_map(|b| b.record).collect();
+        assert_eq!(numbers, [1, 2, 3, 4, 5, 6], "{:?}", ex.blocks);
+    }
+
+    #[test]
+    fn cards_with_an_id_class_each_are_one_list() {
+        // Each event carries a class of its own (`qode-events1178`): the list is still one, as the shape of a card is its tags.
+        let page = r#"<body><main><div class="events">
+            <div class="event e1178"><span>27</span><span>Oct</span><h3>ALEKS SYNTEK</h3><a>Comprar Entradas</a></div>
+            <div class="event e1174"><span>06</span><span>Nov</span><h3>LITTLE BIG</h3><a>Comprar Entradas</a></div>
+            <div class="event e1170"><span>15</span><span>Nov</span><h3>DRUHA RIKA</h3><a>Comprar Entradas</a></div>
+            </div></main></body>"#;
+        let (cards, rest) = cards_and_rest(page);
+        assert_eq!(cards.len(), 3, "{cards:?}");
+        assert!(cards[0].contains("27") && cards[0].contains("ALEKS SYNTEK"), "{cards:?}");
+        assert!(rest.is_empty(), "{rest:?}");
+    }
+
+    #[test]
+    fn a_card_with_a_headline_link_keeps_the_link_on_its_card() {
+        let page = r#"<body><main>
+            <article><a href="/world/riyadh"><h3>Riyadh airport hit again after a deadly attack</h3></a><p>Sat</p></article>
+            <article><a href="/world/doha"><h3>Doha: talks resume after a week of delays</h3></a><p>Sun</p></article>
+            <article><a href="/world/cairo"><h3>Cairo: protests end with a deal on prices</h3></a><p>Mon</p></article>
+            </main></body>"#;
+        let ex = html(page, &base());
+        let cards: Vec<&Block> = ex.blocks.iter().filter(|b| b.record.is_some()).collect();
+        assert_eq!(cards.len(), 3, "{:?}", ex.blocks);
+        assert_eq!(cards[0].href.as_deref(), Some("https://example.com/world/riyadh"));
+        assert!(cards[0].text.starts_with("Riyadh airport") && cards[0].text.ends_with("Sat"), "{:?}", cards[0].text);
+    }
+
+    #[test]
+    fn two_cards_are_not_a_list_and_a_list_of_articles_is_read_as_it_was() {
+        let two = r#"<body><main><div class="item"><div>Thursday</div><h3>Carmen Lillo</h3></div>
+            <div class="item"><div>Friday</div><h3>9louro</h3></div></main></body>"#;
+        let (cards, _) = cards_and_rest(two);
+        assert!(cards.is_empty(), "a pair is not a list: {cards:?}");
+
+        // Teasers of long text: a headline and a summary each, no field short enough to be one.
+        let teasers = r#"<body><main>
+            <article><h2>First story headline, long enough to be a block of its own</h2><p>A summary of the first story, which runs on for a while in the page.</p></article>
+            <article><h2>Second story headline, long enough to be a block of its own</h2><p>A summary of the second story, which runs on for a while in the page.</p></article>
+            <article><h2>Third story headline, long enough to be a block of its own</h2><p>A summary of the third story, which runs on for a while in the page.</p></article>
+            </main></body>"#;
+        let (cards, rest) = cards_and_rest(teasers);
+        assert!(cards.is_empty(), "{cards:?}");
+        assert_eq!(rest.len(), 6, "{rest:?}");
+    }
+
+    #[test]
+    fn a_card_list_with_a_code_block_in_one_card_is_read_as_it_was() {
+        let page = r#"<body><main><div class="list">
+            <div class="item"><div>Thursday</div><h3>Carmen Lillo</h3></div>
+            <div class="item"><div>Friday</div><h3>9louro</h3><pre><code>npm install</code></pre></div>
+            <div class="item"><div>Saturday</div><h3>Baile Europa</h3></div>
+            </div></main></body>"#;
+        let (cards, _) = cards_and_rest(page);
+        assert!(cards.is_empty(), "{cards:?}");
+    }
+
+    #[test]
+    fn a_hidden_card_in_a_list_does_not_stop_the_others_being_cards() {
+        let page = r#"<body><main><div class="list">
+            <div class="item"><div>Thursday</div><h3>Carmen Lillo</h3></div>
+            <div class="item" hidden><div>Friday</div><h3>Hidden one</h3></div>
+            <div class="item"><div>Saturday</div><h3>9louro</h3></div>
+            <div class="item"><div>Sunday</div><h3>Baile Europa</h3></div>
+            </div></main></body>"#;
+        let (cards, _) = cards_and_rest(page);
+        assert_eq!(cards.len(), 3, "{cards:?}");
+        assert!(cards.iter().all(|c| !c.contains("Hidden")), "{cards:?}");
+    }
+
+    #[test]
+    fn a_repeated_menu_is_not_a_card_list() {
+        // Navigation is repeated too: a `nav` or a navigation role is never read, so its items cannot be cards.
+        let page = r#"<body><nav><div class="item"><div>Home page</div><a>Shop now</a></div>
+            <div class="item"><div>Contact us</div><a>Send</a></div><div class="item"><div>About</div><a>Read</a></div></nav>
+            <div role="navigation"><div class="item"><div>Tickets</div><a>Buy</a></div>
+            <div class="item"><div>Help</div><a>Ask</a></div><div class="item"><div>Blog</div><a>Read</a></div></div>
+            <main><p>The page's own text, long enough to be read as content.</p></main></body>"#;
+        let (cards, rest) = cards_and_rest(page);
+        assert!(cards.is_empty(), "{cards:?}");
+        assert!(rest.iter().all(|t| !t.contains("Shop") && !t.contains("Tickets")), "{rest:?}");
+    }
+
+    #[test]
+    fn a_next_page_link_is_the_standard_one_or_the_page_number_one_on() {
+        let here = "https://www.sala-apolo.com/es/agenda";
+        let next = |page: &str| html(page, &Url::parse(here).unwrap()).next_page.map(String::from);
+        // The head's rel="next" names it.
+        let head = r#"<html><head><link rel="next" href="/es/agenda?page=2"></head><body><p>Agenda.</p></body></html>"#;
+        assert_eq!(next(head).as_deref(), Some("https://www.sala-apolo.com/es/agenda?page=2"));
+        // An anchor's rel="next" on the same site counts; another site's does not.
+        let anchor = r#"<body><a rel="next" href="https://sala-apolo.com/es/agenda?page=2">Siguiente</a></body>"#;
+        assert_eq!(next(anchor).as_deref(), Some("https://sala-apolo.com/es/agenda?page=2"));
+        let other = r#"<body><a rel="next" href="https://other.test/agenda?page=2">Next</a></body>"#;
+        assert_eq!(next(other), None);
+        // No rel: a link one page number on, whatever its text says, and only in the page's own list.
+        let more =
+            r#"<body><nav><a href="/es/agenda?page=2">More</a></nav><a href="/es/agenda?id=2">A product</a></body>"#;
+        assert_eq!(next(more).as_deref(), Some("https://www.sala-apolo.com/es/agenda?page=2"));
+        assert_eq!(next(r#"<body><a href="/es/agenda?id=2">A product</a></body>"#), None);
+        // A hidden rel="next" is not on the page.
+        let hidden = r#"<body><a rel="next" href="/es/agenda?page=2" style="display:none">Next</a></body>"#;
+        assert_eq!(next(hidden), None);
     }
 }
