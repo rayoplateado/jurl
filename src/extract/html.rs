@@ -40,7 +40,7 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
     Extracted {
         title: collapse(&page_title(doc)),
         lang: declared_lang(doc),
-        blocks: join_short(walk(doc, root, in_body)),
+        blocks: join_short(walk(doc, root, in_body, base)),
         structured: Vec::new(),
         images: collect_images(doc, root, in_body, base),
         links: collect_links(root, in_body, base),
@@ -91,7 +91,7 @@ fn content_root(doc: &Html) -> ElementRef<'_> {
 }
 
 /// The blocks of the content root, in page order.
-fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool) -> Vec<Block> {
+fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool, base: &Url) -> Vec<Block> {
     // React streams late content (a Suspense boundary) as `<div hidden id="S:n">` at the end of the body, and a
     // script moves it into `<template id="B:n">`, where it belongs. Read it there.
     let segments: HashMap<String, ElementRef> = doc
@@ -106,6 +106,7 @@ fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool) -> Vec<Block> {
         list: None,
         lists: 0,
         depth: 0,
+        base: base.clone(),
     };
     w.container(root);
     w.flush();
@@ -308,16 +309,22 @@ struct Walker<'a> {
     lists: usize,
     /// How many containers the walk is inside of, capped at `MAX_WALK_DEPTH`.
     depth: usize,
+    /// The page's own address: what its links are resolved against.
+    base: Url,
 }
 
 impl<'a> Walker<'a> {
     fn push(&mut self, kind: Kind, level: Option<u8>, lang: Option<String>, text: String) {
+        self.push_with(kind, level, lang, text, None);
+    }
+
+    fn push_with(&mut self, kind: Kind, level: Option<u8>, lang: Option<String>, text: String, href: Option<String>) {
         if text.trim().is_empty() {
             return;
         }
         let i = self.blocks.len();
         let list = (kind == Kind::Item).then_some(self.list).flatten();
-        self.blocks.push(Block { i, kind, level, lang, text, list });
+        self.blocks.push(Block { i, kind, level, lang, text, list, href });
     }
 
     fn flush(&mut self) {
@@ -376,7 +383,8 @@ impl<'a> Walker<'a> {
         match name {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let level = name[1..].parse().ok();
-                self.push(Kind::Heading, level, None, collapse(&inline_text(el)));
+                let href = headline_href(el, &self.base);
+                self.push_with(Kind::Heading, level, None, collapse(&inline_text(el)), href);
             }
             "p" | "figcaption" | "dt" | "dd" | "summary" => {
                 self.push(Kind::Para, None, None, collapse(&inline_text(el)))
@@ -563,6 +571,41 @@ fn permalink(el: ElementRef) -> bool {
     el.value().name() == "a"
         && el.value().attr("href").is_some_and(|h| h.starts_with('#'))
         && matches!(collapse(&el.text().collect::<String>()).as_str(), "" | "¶" | "#" | "§" | "🔗" | "⚓")
+}
+
+/// The page a heading is a headline of, if it is one: a heading whose text is one link to another page (a news front page's
+/// headline in an `<h2>`), or a heading inside a link to another page (a card whose title is the link's own). A section title
+/// is none of these, and neither is a heading whose link is only part of its text, or a link to this page or its own sections.
+fn headline_href(heading: ElementRef, base: &Url) -> Option<String> {
+    let text = collapse(&inline_text(heading));
+    let inside = heading
+        .select(&sel("a[href]"))
+        .filter(|a| !permalink(*a) && collapse(&a.text().collect::<String>()) == text)
+        .find_map(|a| link_target(a, base));
+    inside.or_else(|| {
+        heading
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .filter(|a| a.value().name() == "a")
+            .find_map(|a| link_target(a, base))
+    })
+}
+
+/// The address a link goes to, absolute, when it is a page of its own: http or https, and not this page (a fragment
+/// apart) or one of its sections (`#…`).
+fn link_target(link: ElementRef, base: &Url) -> Option<String> {
+    let href = link.value().attr("href")?.trim();
+    if href.starts_with('#') {
+        return None;
+    }
+    let url = base.join(href).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let (mut page, mut here) = (url.clone(), base.clone());
+    page.set_fragment(None);
+    here.set_fragment(None);
+    (page != here).then(|| url.to_string())
 }
 
 /// The root must hold at least 1/5 of the body's visible text.
@@ -1175,5 +1218,56 @@ mod tests {
         let ex = html(page, &base());
         assert_eq!(ex.images[0].url.as_str(), "https://example.com/s/big.jpg");
         assert_eq!(ex.images[0].preview.as_str(), "https://example.com/s/small.jpg");
+    }
+
+    #[test]
+    fn a_headline_that_is_one_link_is_a_heading_with_the_page_it_links_to() {
+        let page = r#"<body><main><article><h2 class="ni-title"><a href="/news/12-muertos">Al menos 12 muertos en un ataque contra el aeropuerto</a></h2>
+            <p class="signature">Andrés Gil — Corresponsal en Washington</p></article></main></body>"#;
+        let ex = html(page, &base());
+        let headline = ex.blocks.iter().find(|b| b.kind == Kind::Heading).expect("the headline is a block");
+        assert_eq!(headline.text, "Al menos 12 muertos en un ataque contra el aeropuerto");
+        assert_eq!(headline.href.as_deref(), Some("https://example.com/news/12-muertos"));
+        assert!(ex.links.iter().any(|l| l.url.as_str() == "https://example.com/news/12-muertos"));
+    }
+
+    #[test]
+    fn a_card_title_inside_a_link_to_another_page_is_a_headline() {
+        let page = r#"<body><article><a href="/world/riyadh"><h3>Riyadh airport hit again after a deadly attack</h3></a><p>Summary of the story.</p></article></body>"#;
+        let ex = html(page, &base());
+        let title = ex.blocks.iter().find(|b| b.text.starts_with("Riyadh")).expect("the card title is a block");
+        assert_eq!(title.kind, Kind::Heading);
+        assert_eq!(title.href.as_deref(), Some("https://example.com/world/riyadh"));
+    }
+
+    #[test]
+    fn section_titles_and_links_to_this_page_or_its_own_sections_are_not_headlines() {
+        let page = r##"<body><main><h2>Opinión</h2>
+            <h2><a href="#sec">Section title long enough to be judged</a></h2>
+            <h2><a href="/post/">A link to this very page, long enough</a></h2>
+            <h2><a href="#methods">¶</a>Methods of File Objects long enough</h2>
+            <h2>Introduction <a href="/x">read more about this long topic</a></h2>
+            <p>A paragraph of the page that is long enough to be judged on its own.</p></main></body>"##;
+        let ex = html(page, &base());
+        let headings: Vec<_> = ex.blocks.iter().filter(|b| b.kind == Kind::Heading).collect();
+        assert_eq!(headings.len(), 5, "{:?}", ex.blocks);
+        for h in headings {
+            assert_eq!(h.href, None, "{:?}", h.text);
+        }
+    }
+
+    #[test]
+    fn headings_that_link_in_navigation_and_footers_are_not_blocks() {
+        let page = r#"<body><nav><h2><a href="/a">A menu heading with a long link name</a></h2></nav>
+            <div role="navigation"><h3><a href="/b">Another menu heading with a long name</a></h3></div>
+            <article><h2><a href="/news/c">An article headline that is kept as content</a></h2>
+            <p>Some words of the article itself, long enough to be read.</p></article>
+            <footer><h2><a href="/d">A footer heading with a long link name</a></h2></footer></body>"#;
+        let ex = html(page, &base());
+        let texts: Vec<_> = ex.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert!(texts.contains(&"An article headline that is kept as content"), "{texts:?}");
+        for menu in ["A menu heading", "Another menu heading", "A footer heading"] {
+            assert!(texts.iter().all(|t| !t.contains(menu)), "{menu} in {texts:?}");
+        }
     }
 }

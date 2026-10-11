@@ -190,7 +190,15 @@ mod tests {
         texts
             .iter()
             .enumerate()
-            .map(|(i, t)| Block { i, kind: Kind::Para, level: None, lang: None, text: t.clone(), list: None })
+            .map(|(i, t)| Block {
+                i,
+                kind: Kind::Para,
+                level: None,
+                lang: None,
+                text: t.clone(),
+                list: None,
+                href: None,
+            })
             .collect()
     }
 
