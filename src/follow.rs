@@ -2086,10 +2086,12 @@ pub async fn run_many(
     let mut answered = 0;
     for k in 0..joint.asked.len() {
         let ask = joint.asked[k].args.ask.clone().unwrap_or_default();
+        // `jev_input_tokens_estimated` is this question's share of the requests it shared with others (split by its entries in
+        // each): an estimate. The run's `usage.jev.input_tokens` is the exact total, and the shares add up to it.
         let usage = json!({
             "pages": joint.asked[k].pages,
             "opened": joint.asked[k].opened,
-            "jev_input_tokens": joint.asked[k].args.spent.load(Relaxed),
+            "jev_input_tokens_estimated": joint.asked[k].args.spent.load(Relaxed),
         });
         let result = joint.conclude(k, client, api_key);
         match result {

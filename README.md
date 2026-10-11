@@ -123,6 +123,26 @@ With `--precise`, a page whose text gives no answer is read for its JSON-LD valu
 
 On [28 searches](bench/follow.json), run once each on 2026-10-08: 27 right, against 25 for the build before (7e68b67). The eight pricing pages are found from the bare domain, 8/8 (about 3 pages, median ~2.6 s, ~$0.0035 each). Answers in docs from the docs' root: 3/3. Short Wikipedia games (Medicine → Aspirin: `C9H8O4`): 3/3. Questions the site doesn't answer, left empty: 3/3. Long games with `--follow 15`, 3 to 5 clicks apart: 10/11, the one miss being Bicycle → the Titanic. Five were tuned on (Paris → Aspirin, Tennis → the boiling point of mercury, Jazz → the moons of Mars, among them) and six never were (Volcano → Mona Lisa, Chess → the speed of sound, among them). Median ~5 s; ~$0.031 each on average (before: ~$0.035). Three runs of each, on earlier builds, are in [bench/README.md](bench/README.md).
 
+### Several questions in one search
+
+`--questions-file` answers a list of questions about one site in one search. The file has one question per line; blank lines and `#` comments are skipped.
+
+```sh
+$ cat questions.txt
+What is the lowest price per 1 million input tokens for any text model?
+Does this provider offer a batch API discount?
+$ jurl --precise --follow 5 --questions-file questions.txt --json https://example.com/pricing
+```
+
+It is one search, not one per question. Each page is read once, and every question still open is checked against it, so the page's blocks and links go to Jev once for all of them (one request, with each question's entries on the same items). Each question keeps its own answer, stop rules and miss: it stops when it is answered or its trail goes cold. The budget is `--follow N` pages for the whole run (5 by default). `--own-budget` gives each question its own picks, up to N of its own, and a page one question picks is read for all of them; it costs more, since every page is checked against every open question.
+
+The JSON is an array with one object per question, in the file's order. Each object has what a single `--precise --json` run prints for that question (`ask`, `answer`, `closest`, `p`, `quote`, `block`, `kind`, `link`, `path`), and two more keys:
+
+- `question_usage`: `pages` (the pages checked against this question), `opened` (the pages it picked), and `jev_input_tokens_estimated`. That last one is an estimate: the question's share of the Jev input tokens of the requests it shared with other questions, split by its entries in each request. The shares add up to the run's total, but one question's share is not what it would have cost alone.
+- `usage`: the run's totals, the same in every object. These are exact: `usage.jev.input_tokens` is what the run was billed.
+
+A question that is not answered has `"answer": null`, with its `closest` when it has one, as a single run's miss does. The run exits 0 when any question is answered and 1 when none is. A file with one question is the same run as `-q`. jurl cloud doesn't take `--questions-file` yet, so it runs on your own keys.
+
 ### Just the code
 
 ````console
@@ -269,6 +289,8 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | --- | --- |
 | `-q, --ask "…"` | Keep what answers the question. Works with every mode |
 | `--follow [N]` | With `-q`: when the page doesn't answer, follow the links the pages give, most promising first, reading up to N pages (default 5) |
+| `--questions-file FILE` | With `--precise --follow`: answer each question in FILE (one per line) in one search of the site, and print a JSON array, one object per question. See [Several questions in one search](#several-questions-in-one-search) |
+| `--own-budget` | With `--questions-file`: each question picks its own pages, up to `--follow` N of its own, instead of one budget of N pages for the whole run (opt-in) |
 | `-p, --precise` | With `-q`: just the answer, in the page's words (a JSON-LD value is marked as such), then its block and a link to it. A table's answer is quoted with the table's header and its row. Exits 1 when no part of the page is the answer |
 | `-c, --code` | Code blocks only |
 | `-l, --links` | Content links, best first. With `-q`, the links most likely to lead to the answer, menus included |
