@@ -399,6 +399,7 @@ async fn run(client: &Client, argv: &[String]) -> Value {
         // Read per call, so keys added with `jurl init` or `jurl login` while the agent runs are picked up. Never prompts:
         // stdin is the protocol.
         let cfg = Config::load();
+        args.country = crate::country::configured(|key| cfg.get(key), args.timing);
         args.stealth = crate::stealth::Sidecar::configured(
             |key| cfg.get(key),
             args.public_only,

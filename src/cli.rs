@@ -68,6 +68,10 @@ pub(crate) struct Args {
     /// the proxy are this run's own. Not a flag.
     #[arg(skip)]
     pub(crate) fallback: crate::fallback::Fallback,
+    /// The country this run reads as, from `JURL_COUNTRY` (see `country.rs`): the pages of its region come first, and a start page
+    /// the site sends to another country is read again through the fallback proxy. Not a flag.
+    #[arg(skip)]
+    pub(crate) country: Option<String>,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,
