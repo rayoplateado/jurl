@@ -58,29 +58,89 @@ fn page_links(page: &Url, ex: &Extracted, extra: &[Link], keep: impl Fn(&Url) ->
         .collect()
 }
 
-/// How many of the question's words a link shares (by their first five letters: "limit" finds `/limits/`). Only used to
-/// choose which links get scored when a page has more than [`MAX_LINKS`]; Jev does the scoring.
+/// How many of the question's words a link shares (by their first five letters: "limit" finds `/limits/`). A word of
+/// under four bytes is left out: most short words are articles and prepositions ("the", "for", "how", "and"), which
+/// many links share by chance and which say nothing about a link's topic. Measured on 25 answers on 19 sites: at three
+/// bytes "the" matched 370 of Vercel's 8,628 links, more than the cap, so its pricing page was pushed out; four drops
+/// "the" and keeps "plan" and "paid" (with five, they stop counting). Only used to choose which links get scored when a
+/// page or a site has more than the cap; Jev does the scoring.
 pub fn overlap(question: &str, link: &Link) -> usize {
-    const STOP: &[&str] =
-        &["what", "which", "where", "when", "does", "with", "that", "this", "from", "have", "the", "for", "and", "how"];
     let stem = |w: &str| w.chars().take(5).collect::<String>();
     let words = |s: &str| -> Vec<String> {
-        s.split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() >= 3).map(|w| w.to_lowercase()).collect()
+        s.split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() >= 4).map(|w| w.to_lowercase()).collect()
     };
     let link_words: HashSet<String> =
         words(&format!("{} {}", link.text, link.url.path())).iter().map(|w| stem(w)).collect();
-    words(question).iter().filter(|w| !STOP.contains(&w.as_str())).filter(|w| link_words.contains(&stem(w))).count()
+    words(question).iter().filter(|w| link_words.contains(&stem(w))).count()
 }
 
-/// At most `max`: those that share words with the question first, then in page order.
+/// At most `max`: those that share words with the question first, then in page order; a list that fits is kept as it
+/// is. A page's own links are cut this way (see [`candidates`]): where a link sits on the page is its order. Not spread
+/// over directories, as [`spread`] spreads a site's listing: on Wikipedia's pages the references are in other hosts'
+/// directories, and spreading them over those took the in-host links out of the cap (Pizza kept 99 of its in-host
+/// links, 22 when spread).
 pub fn most_relevant(question: &str, links: Vec<Link>, max: usize) -> Vec<Link> {
-    let mut links = links;
-    if links.len() > max {
-        let mut ranked: Vec<(usize, Link)> = links.into_iter().map(|l| (overlap(question, &l), l)).collect();
-        ranked.sort_by_key(|(o, l)| (std::cmp::Reverse(*o), l.i));
-        links = ranked.into_iter().take(max).map(|(_, l)| l).collect();
+    if links.len() <= max {
+        return in_order(&links, 0..links.len());
     }
-    links.into_iter().enumerate().map(|(i, l)| Link { i, ..l }).collect()
+    let shared: Vec<usize> = links.iter().map(|l| overlap(question, l)).collect();
+    let mut order: Vec<usize> = (0..links.len()).collect();
+    order.sort_by_key(|&p| (std::cmp::Reverse(shared[p]), p));
+    in_order(&links, order.into_iter().take(max))
+}
+
+/// The links of a site's own listing (its sitemaps and llms.txt), at most `max`, in the order a search reads them.
+/// Those that share words with the question come first; then the shallowest pages, since a site's sections and their
+/// answers sit near its root (Vercel's `/pricing`); then, within one depth, the directories take turns, one link from
+/// each per turn. So a directory of hundreds of similar pages (Air Europa's `/es-es/ofertas-…`) gives one link per turn
+/// instead of the whole cap, and a small section at the same depth is in the cap. In a directory, page order holds. A
+/// listing that fits is kept as it is.
+///
+/// Measured on 25 answers on 19 sites, against word-then-page order: no answer is lost; the cap spans more directories
+/// (Cloudflare's docs: 108 to 149, the top directory's share 10% to 9%); the top directory's share is lower in 17
+/// listings and higher in 3. Spreading across depths as well, not only within one, lost root-level answers.
+pub fn spread(question: &str, links: Vec<Link>, max: usize) -> Vec<Link> {
+    if links.len() <= max {
+        return in_order(&links, 0..links.len());
+    }
+    let shared: Vec<usize> = links.iter().map(|l| overlap(question, l)).collect();
+    let depths: Vec<usize> = links.iter().map(|l| segments(&l.url).len()).collect();
+    let mut order: Vec<usize> = (0..links.len()).collect();
+    order.sort_by_key(|&p| (std::cmp::Reverse(shared[p]), depths[p], p));
+    let mut picked: Vec<usize> = Vec::with_capacity(links.len());
+    for bucket in order.chunk_by(|&a, &b| (shared[a], depths[a]) == (shared[b], depths[b])) {
+        // The bucket's directories in the order each one's first link comes, each with its links in page order.
+        let mut dirs: Vec<Vec<usize>> = Vec::new();
+        let mut at: HashMap<String, usize> = HashMap::new();
+        for &p in bucket {
+            let d = *at.entry(directory(&links[p].url)).or_insert_with(|| {
+                dirs.push(Vec::new());
+                dirs.len() - 1
+            });
+            dirs[d].push(p);
+        }
+        let turns = dirs.iter().map(Vec::len).max().unwrap_or(0);
+        for turn in 0..turns {
+            picked.extend(dirs.iter().filter_map(|d| d.get(turn).copied()));
+        }
+    }
+    in_order(&links, picked.into_iter().take(max))
+}
+
+/// The links at `order`, in that order, numbered from 0.
+fn in_order(links: &[Link], order: impl Iterator<Item = usize>) -> Vec<Link> {
+    order.enumerate().map(|(i, p)| Link { i, ..links[p].clone() }).collect()
+}
+
+/// A URL's path segments, empty ones left out.
+fn segments(url: &Url) -> Vec<&str> {
+    url.path_segments().map(|s| s.filter(|p| !p.is_empty()).collect()).unwrap_or_default()
+}
+
+/// The directory a page is in: its host and its path without the last segment (`/es-es/ofertas-x` is in `host/es-es`).
+fn directory(url: &Url) -> String {
+    let parent = segments(url);
+    format!("{}/{}", url.host_str().unwrap_or_default(), parent[..parent.len().saturating_sub(1)].join("/"))
 }
 
 /// How likely following each link leads to the answer to `-q`, in `links` order. `what` names the link in the
@@ -239,6 +299,77 @@ mod tests {
         assert_eq!(kept.len(), MAX_LINKS);
         assert_eq!(kept[0].url.path(), "/workers/platform/limits/");
         assert_eq!(kept[0].i, 0);
+    }
+
+    #[test]
+    fn a_flooded_directory_does_not_take_the_whole_cap() {
+        // Three directories at one depth: 300 similar pages in one, two pages in each of the others. The cap is 100,
+        // and the two small directories are in it beside the flood, whose page order holds.
+        let mut links: Vec<Link> = (0..300).map(|i| link(&format!("https://x.com/ofertas/o{i}"))).collect();
+        for path in ["/sitemap/a", "/sitemap/b", "/rutas/c", "/rutas/d"] {
+            links.push(link(&format!("https://x.com{path}")));
+        }
+        let kept = spread("What is the baggage allowance?", links, 100);
+        let paths: Vec<&str> = kept.iter().map(|l| l.url.path()).collect();
+        assert_eq!(paths.len(), 100);
+        for path in ["/sitemap/a", "/sitemap/b", "/rutas/c", "/rutas/d"] {
+            assert!(paths.contains(&path), "{path}");
+        }
+        assert_eq!(paths[0], "/ofertas/o0");
+    }
+
+    #[test]
+    fn a_shallower_page_comes_before_a_deeper_one_whatever_its_directory() {
+        // The site's `/pricing` is one level down, the other pages two levels further. The cap of two keeps `/pricing`
+        // and the first deep page, not the first pages of two directories one level further down.
+        let links = vec![link("https://x.com/docs/a/b"), link("https://x.com/docs/c/d"), link("https://x.com/pricing")];
+        let paths: Vec<String> =
+            spread("Which plan is cheapest?", links, 2).iter().map(|l| l.url.path().to_string()).collect();
+        assert_eq!(paths, ["/pricing", "/docs/a/b"]);
+    }
+
+    #[test]
+    fn a_shared_word_comes_first_within_a_depth_and_the_directories_take_turns_after() {
+        // "Workers" and "limits" are shared by one link each, in two directories, two levels down. The 50 pages of
+        // another directory at that depth share nothing. The cap of three keeps the two shared links, then the first
+        // page.
+        let mut links: Vec<Link> = (0..50).map(|i| link(&format!("https://x.com/a/p{i}"))).collect();
+        links.push(link("https://x.com/b/limits"));
+        links.push(link("https://x.com/c/workers"));
+        let paths: Vec<String> =
+            spread("What are the Workers limits?", links, 3).iter().map(|l| l.url.path().to_string()).collect();
+        assert_eq!(paths, ["/b/limits", "/c/workers", "/a/p0"]);
+    }
+
+    #[test]
+    fn a_word_under_four_bytes_shares_nothing_and_one_of_four_does() {
+        // "the" and "for" are articles and prepositions; "plan" and "paid" are the words of a pricing question.
+        let question = "What is the plan for paid members?";
+        assert_eq!(overlap(question, &link("https://x.com/the-team/for-you")), 0);
+        assert_eq!(overlap(question, &link("https://x.com/plan/paid")), 2);
+    }
+
+    #[test]
+    fn the_same_listing_gives_the_same_cut_in_the_same_order_every_time() {
+        let links: Vec<Link> = (0..400).map(|i| link(&format!("https://x.com/d{}/p{i}", i % 7))).collect();
+        let cut = |links: Vec<Link>| -> Vec<(usize, String)> {
+            spread("Which page is it?", links, 100).into_iter().map(|l| (l.i, l.url.to_string())).collect()
+        };
+        let first = cut(links.clone());
+        assert_eq!(first.len(), 100);
+        assert_eq!(first, cut(links.clone()));
+        assert!(first.iter().enumerate().all(|(k, (i, _))| k == *i), "numbered in order");
+    }
+
+    #[test]
+    fn a_pages_own_links_keep_their_page_order_and_are_not_spread() {
+        // 300 links in one directory, then one in another, at the same depth: a page's links are read in the order they
+        // sit on it, so the first five are the page's first five.
+        let mut links: Vec<Link> = (0..300).map(|i| link(&format!("https://x.com/a/p{i}"))).collect();
+        links.push(link("https://x.com/b/c"));
+        let paths: Vec<String> =
+            most_relevant("Which page is it?", links, 5).iter().map(|l| l.url.path().to_string()).collect();
+        assert_eq!(paths, ["/a/p0", "/a/p1", "/a/p2", "/a/p3", "/a/p4"]);
     }
 
     #[test]
