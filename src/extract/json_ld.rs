@@ -32,7 +32,7 @@ pub fn blocks(html: &str, first: usize) -> Vec<Block> {
         }
     }
     texts.truncate(MAX_BLOCKS);
-    texts.into_iter().enumerate().map(|(k, text)| Block::new(first + k, Kind::Para, text)).collect()
+    texts.into_iter().enumerate().map(|(k, text)| Block::new(first + k, Kind::Structured, text)).collect()
 }
 
 /// Walks a JSON-LD value depth first. A typed object gives its own text (see [`describe`]); what is inside it is visited
@@ -174,6 +174,16 @@ mod tests {
 
     fn texts(html: &str) -> Vec<String> {
         blocks(html, 0).into_iter().map(|b| b.text).collect()
+    }
+
+    #[test]
+    fn a_value_is_structured_data_not_the_page_text() {
+        // Its kind says so in the JSON the precise answer prints: "structured", never "para".
+        let html =
+            r#"<script type="application/ld+json">{"@type":"Event","name":"X","startDate":"2027-01-01"}</script>"#;
+        let b = blocks(html, 0);
+        assert_eq!(b[0].kind, Kind::Structured);
+        assert_eq!(serde_json::to_value(b[0].kind).unwrap(), "structured");
     }
 
     #[test]

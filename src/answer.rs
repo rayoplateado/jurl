@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     decide::choice,
-    extract::{Block, Extracted, Kind},
+    extract::{Block, Extracted, Kind, collapse},
     judge::{Ctx, Item, STATE_TEXT_CHARS},
     output::{Rendered, not_found},
     precise,
@@ -238,25 +238,59 @@ fn option_scores(probs: &HashMap<String, f64>, prefix: char, n: usize) -> Vec<f6
     (0..n).map(|k| probs.get(&format!("{prefix}{k}")).copied().unwrap_or(0.0)).collect()
 }
 
+/// The link of a precise answer: the answer's words as a text fragment on the page. A structured value's words are not on the
+/// page (they are in its JSON-LD), so its link is the page itself, with no fragment.
+fn answer_link(url: &url::Url, block: &Block, range: &Range<usize>) -> String {
+    if block.kind == Kind::Structured {
+        let mut page = url.clone();
+        page.set_fragment(None);
+        return page.to_string();
+    }
+    precise::link(url, &block.text, range)
+}
+
+/// The answer's text, as the answer line prints it. A span over a cell's paragraphs has a line break in it, and the answer is one
+/// line, as the page reads; code keeps its lines.
+pub(crate) fn answer_text(block: &Block, range: &Range<usize>) -> String {
+    let text = &block.text[range.clone()];
+    if block.kind == Kind::Code { text.to_string() } else { collapse(text) }
+}
+
+/// What a precise answer quotes from its block, as JSON and as text. A block with rows (a table, in HTML or in a markdown
+/// page) is quoted by its header and the answer's row, so a cell says what it is; any other block is quoted whole. Code is
+/// always whole: its pipes are its own.
+fn quoted(block: &Block, range: &Range<usize>) -> (String, String) {
+    let row = (block.kind != Kind::Code).then(|| precise::table_quote(&block.text, range)).flatten();
+    match row {
+        Some(row) => (row.clone(), row),
+        None => (block.text.clone(), block.markdown()),
+    }
+}
+
 /// The answer on its own line, then the block it's in and a link to it; JSON says how sure, and below the threshold
 /// has it as `closest` instead of `answer`. It also says the quoted block's `kind`, and its `level` and `lang` when the
-/// block has them, encoded as the block arrays encode them. `path` is how --follow got here.
+/// block has them, encoded as the block arrays encode them. A table's quote is its header and the answer's row. `path` is
+/// how --follow got here.
 pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: Option<&[url::Url]>) -> Rendered {
     let q = ctx.args.ask.as_deref().unwrap_or_default();
     let threshold = ctx.args.threshold_for(true);
     let block = &ex.blocks[pick.block];
-    let answer = &block.text[pick.range.clone()];
-    let link = precise::link(ctx.url, &block.text, &pick.range);
+    let answer = answer_text(block, &pick.range);
+    let link = answer_link(ctx.url, block, &pick.range);
+    let source =
+        if block.kind == Kind::Structured { " (JSON-LD: the page's structured data, not text it shows)" } else { "" };
+    // A table's quote is its header and the answer's row, so a cell says what it is ("Clase Turista"), not the whole table.
+    let (quote, shown) = quoted(block, &pick.range);
     let p = pick.p;
 
     let mut doc = json!({
         "url": ctx.url.as_str(),
         "title": ex.title,
         "ask": q,
-        "answer": (p >= threshold).then_some(answer),
-        "closest": (p < threshold).then_some(answer),
+        "answer": (p >= threshold).then_some(answer.as_str()),
+        "closest": (p < threshold).then_some(answer.as_str()),
         "p": p,
-        "quote": block.text,
+        "quote": quote,
         "block": block.i,
         "kind": block.kind,
         "link": link,
@@ -271,7 +305,7 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
     if let Some(path) = path {
         doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
     }
-    Rendered { text: format!("{answer}\n\n{}\n\n<{link}>\n", block.markdown()), json: doc }
+    Rendered { text: format!("{answer}\n\n{shown}\n\n<{link}>{source}\n"), json: doc }
 }
 
 #[cfg(test)]
@@ -295,6 +329,56 @@ mod tests {
     fn pick_scores(spans: &[precise::Span], probabilities: &[(&str, f64)]) -> Vec<f64> {
         let probs = answered("pick", probabilities).probabilities("pick").unwrap();
         option_scores(&probs, 's', spans.len())
+    }
+
+    #[test]
+    fn a_multi_line_answer_prints_on_one_line_and_code_keeps_its_lines() {
+        // A cell's two paragraphs are one line in the answer; a code block's lines are its own.
+        let cell = "| Economy | 10 kg.\n56 x 40 cm. | Overhead |";
+        let span = cell.find("10 kg").unwrap()..cell.find(" | Overhead").unwrap();
+        let table = Block::new(0, Kind::Table, cell.into());
+        assert_eq!(answer_text(&table, &span), "10 kg. 56 x 40 cm.");
+        assert_eq!(precise_json(&table, span, 0.93)["answer"], "10 kg. 56 x 40 cm.");
+        let code = Block::new(0, Kind::Code, "brew install ripgrep\nrg --version".into());
+        let v = precise_json(&code, 0..code.text.len(), 0.93);
+        assert_eq!(v["answer"], "brew install ripgrep\nrg --version");
+    }
+
+    #[test]
+    fn a_paragraph_with_rows_is_quoted_by_its_row_and_other_text_whole() {
+        let text = "| | Bag | Place |\n| Economy | 10 kg | Overhead |\n| Business | 14 kg | Under |";
+        let at = text.find("14 kg").unwrap();
+        let rows = Block::new(0, Kind::Para, text.into());
+        assert_eq!(quoted(&rows, &(at..at + 5)).0, "| | Bag | Place |\n| Business | 14 kg | Under |");
+        // Code keeps its pipes, and prose without rows is quoted as the block is.
+        let code = Block::new(0, Kind::Code, text.into());
+        assert_eq!(quoted(&code, &(at..at + 5)).0, text);
+        let prose = Block::new(0, Kind::Para, "Business: 14 kg.".into());
+        assert_eq!(quoted(&prose, &(10..14)), ("Business: 14 kg.".to_string(), "Business: 14 kg.".to_string()));
+    }
+
+    #[test]
+    fn a_structured_value_links_to_the_page_with_no_fragment() {
+        // Its words are in the page's JSON-LD, so a text fragment for them would point at nothing on the page.
+        let url = url::Url::parse("https://mistral.ai/pricing/#plans").unwrap();
+        let text = "Offer Free (JSON-LD, Mistral Vibe): price 0 USD.";
+        let structured = Block::new(3, Kind::Structured, text.into());
+        assert_eq!(answer_link(&url, &structured, &(0..text.len())), "https://mistral.ai/pricing/");
+        let para = Block::new(3, Kind::Para, text.into());
+        assert!(answer_link(&url, &para, &(0..5)).starts_with("https://mistral.ai/pricing/#:~:text="));
+    }
+
+    #[test]
+    fn a_table_cells_fragment_is_the_cells_words_only() {
+        // The words either side of a cell are its border (`|`), so the fragment is the cell and nothing of its neighbours.
+        let url = url::Url::parse("https://www.iberia.com/es/equipajes/de-mano/").unwrap();
+        let text = "|  | Bag | Place |\n| Economy | 30 cm | Under |";
+        let at = text.find("30 cm").unwrap();
+        let block = Block::new(0, Kind::Table, text.into());
+        assert_eq!(
+            answer_link(&url, &block, &(at..at + 5)),
+            "https://www.iberia.com/es/equipajes/de-mano/#:~:text=30%20cm"
+        );
     }
 
     #[test]

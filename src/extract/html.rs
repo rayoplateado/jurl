@@ -431,13 +431,7 @@ impl<'a> Walker<'a> {
                 self.flush();
             }
             "table" => {
-                let rows: Vec<String> = el
-                    .select(&sel("tr"))
-                    .map(|tr| {
-                        let cells: Vec<_> = tr.select(&sel("th, td")).map(|c| collapse(&inline_text(c))).collect();
-                        format!("| {} |", cells.join(" | "))
-                    })
-                    .collect();
+                let rows: Vec<String> = table_grid(el).iter().map(|row| format!("| {} |", row.join(" | "))).collect();
                 self.push(Kind::Table, None, None, rows.join("\n"));
             }
             _ => {
@@ -446,6 +440,53 @@ impl<'a> Walker<'a> {
             }
         }
     }
+}
+
+/// The most slots a table's grid has: a page's spans can't make a table of millions of cells.
+const MAX_GRID_SLOTS: usize = 100_000;
+
+/// A table's rows as the HTML table model lays them out. A cell fills every slot it covers with its `colspan` and `rowspan`,
+/// so each row has a text for each column it reaches: a fare class that spans two rows is named in both. Slots no cell
+/// covers are "". A cell's line breaks are kept, as `inline_text` keeps them, so a row can run over several lines.
+fn table_grid(table: ElementRef) -> Vec<Vec<String>> {
+    let trs: Vec<ElementRef> = table.select(&sel("tr")).collect();
+    let mut grid: Vec<Vec<Option<String>>> = vec![Vec::new(); trs.len()];
+    let mut slots = 0;
+    for (r, tr) in trs.iter().enumerate() {
+        let mut col = 0;
+        for cell in tr.select(&sel("th, td")) {
+            // The slots an earlier row's cell covers are taken: this cell goes after them.
+            while grid[r].get(col).is_some_and(Option::is_some) {
+                col += 1;
+            }
+            let cols = span_attr(cell, "colspan").unwrap_or(1).clamp(1, 1000);
+            // A rowspan of 0 covers the rest of the table, and no span reaches past the table's last row.
+            let rows = match span_attr(cell, "rowspan") {
+                Some(0) => trs.len() - r,
+                span => span.unwrap_or(1).min(trs.len() - r),
+            };
+            slots += cols * rows;
+            if slots > MAX_GRID_SLOTS {
+                break;
+            }
+            let text = collapse(&inline_text(cell));
+            for row in &mut grid[r..r + rows] {
+                if row.len() < col + cols {
+                    row.resize(col + cols, None);
+                }
+                for slot in &mut row[col..col + cols] {
+                    *slot = Some(text.clone());
+                }
+            }
+            col += cols;
+        }
+    }
+    grid.into_iter().map(|row| row.into_iter().map(Option::unwrap_or_default).collect()).collect()
+}
+
+/// A cell's `colspan` or `rowspan` as the page writes it: None when it is missing or not a number.
+fn span_attr(cell: ElementRef, name: &str) -> Option<usize> {
+    cell.value().attr(name).and_then(|v| v.trim().parse().ok())
 }
 
 fn inline_text(el: ElementRef) -> String {
@@ -766,6 +807,41 @@ mod tests {
         let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
         assert_eq!(texts, ["| Founders | Dylan Field\nEvan Wallace |", "Line one\nline two"]);
         assert_eq!(collapse("  a \n  b  "), "a b");
+    }
+
+    #[test]
+    fn a_span_fills_every_row_and_column_it_covers() {
+        // The HTML table model: a rowspan's cell is in both rows it spans, and a colspan's in both columns it covers, so
+        // the row that comes after a rowspan starts at the next free column.
+        let page = r#"<body><table>
+            <tr><th></th><th>Bag</th><th>Place</th></tr>
+            <tr><td rowspan="2">Economy</td><td>10 kg</td><td>Overhead</td></tr>
+            <tr><td>30 cm</td><td>Under seat</td></tr>
+            <tr><td colspan="2">Total</td><td>3</td></tr>
+            </table></body>"#;
+        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(
+            texts,
+            [
+                "|  | Bag | Place |\n| Economy | 10 kg | Overhead |\n| Economy | 30 cm | Under seat |\n| Total | Total | 3 |"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_span_past_the_end_of_the_table_adds_no_rows() {
+        // A rowspan stops at the table's last row, and a colspan at the HTML standard's limit: no third row appears.
+        let page = r#"<body><table><tr><td rowspan="9999" colspan="9999">a</td><td>b</td></tr><tr><td>c</td></tr></table></body>"#;
+        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(texts.len(), 1);
+        assert!(texts[0].lines().count() == 2, "{texts:?}");
+    }
+
+    #[test]
+    fn a_rowspan_of_zero_covers_the_rest_of_the_table() {
+        let page = r#"<body><table><tr><td rowspan="0">a</td><td>b</td></tr><tr><td>c</td></tr><tr><td>d</td></tr></table></body>"#;
+        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(texts, ["| a | b |\n| a | c |\n| a | d |"]);
     }
 
     #[test]

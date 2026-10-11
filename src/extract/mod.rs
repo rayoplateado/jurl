@@ -25,6 +25,9 @@ pub enum Kind {
     Quote,
     Item,
     Table,
+    /// A value from the page's JSON-LD (see `json_ld`): structured data, not text the page shows. Only --precise answers
+    /// from one, and the answer's link has no text fragment, since its words are not on the page.
+    Structured,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +61,7 @@ impl Block {
             }
             Kind::Quote => self.text.lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n"),
             Kind::Item => format!("- {}", self.text),
-            Kind::Para | Kind::Table => self.text.clone(),
+            Kind::Para | Kind::Table | Kind::Structured => self.text.clone(),
         }
     }
 }

@@ -278,6 +278,7 @@ fn kind_of(name: &str) -> Option<Kind> {
         "quote" => Some(Kind::Quote),
         "item" => Some(Kind::Item),
         "table" => Some(Kind::Table),
+        "structured" => Some(Kind::Structured),
         _ => None,
     }
 }

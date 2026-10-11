@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use crate::extract::{Block, Kind};
+use crate::extract::{Block, Kind, collapse};
 
 /// A candidate answer: `range` of the text of block `block`, where `block` is that block's `i` (its number on the
 /// page, which is also its index in `Extracted::blocks`). A table cell carries its row and column as `label`, which is
@@ -43,7 +43,11 @@ pub(crate) fn candidates(blocks: &[&Block]) -> Vec<Span> {
         .map(|b| {
             let mut spans = table_cells(&b.text);
             let plain = if b.kind == Kind::Code { code_spans(&b.text) } else { prose_spans(&b.text) };
-            spans.extend(plain.into_iter().map(|r| (r, None)));
+            // Rows make a table whatever the block's kind (a markdown page's table is a paragraph): its words belong to its
+            // cells, so a span across a cell's border ("25 cm. | Compartimentos") is no answer. Code can hold pipes of its own.
+            let tabular = b.kind != Kind::Code && table_rows(&b.text).len() >= 2;
+            let plain = plain.into_iter().filter(|r| !tabular || !b.text[r.clone()].contains('|'));
+            spans.extend(plain.map(|r| (r, None)));
             spans.into_iter()
         })
         .collect();
@@ -76,39 +80,27 @@ pub(crate) fn candidates(blocks: &[&Block]) -> Vec<Span> {
 /// The cells of a table written as `| a | b |` lines, each with its row's first cell and its column's header: in a
 /// table comparing plans, "10 ms" and "30 s" only mean something next to "Free" and "Paid".
 fn table_cells(text: &str) -> Vec<(Range<usize>, Option<String>)> {
-    let mut rows: Vec<Vec<Range<usize>>> = Vec::new();
-    let mut start = 0;
-    for line in text.split_inclusive('\n') {
-        let body = line.trim_end();
-        if body.starts_with('|') && body.ends_with('|') && body.len() > 1 {
-            let inner = &body[1..body.len() - 1];
-            // `|---|:--:|` is markdown's header separator, not a row.
-            if !inner.chars().all(|c| matches!(c, '-' | ':' | '|' | ' ')) {
-                let mut cells = Vec::new();
-                let mut at = start + 1;
-                for cell in inner.split('|') {
-                    cells.push(at..at + cell.len());
-                    at += cell.len() + 1;
-                }
-                rows.push(cells);
-            }
-        }
-        start += line.len();
-    }
+    let rows: Vec<Vec<Range<usize>>> = table_rows(text).into_iter().map(|row| row_cells(&row, text)).collect();
     if rows.len() < 2 {
         return Vec::new();
     }
-    let cell = |r: &Range<usize>| text[r.clone()].trim().trim_matches(['*', '_']).to_string();
+    // A cell's words are on one line in its label, even where the cell holds a paragraph per line.
+    let cell = |r: &Range<usize>| collapse(&text[r.clone()]).trim().trim_matches(['*', '_']).to_string();
     let header: Vec<String> = rows[0].iter().map(cell).collect();
     let mut out = Vec::new();
+    let mut above = rows[0].first().map(cell).unwrap_or_default();
     for row in &rows[1..] {
         let name = row.first().map(cell).unwrap_or_default();
+        // A first cell that repeats the row above's is a rowspan's cell, written again under its own row: that row has it as
+        // a candidate already, so here it only names the row.
+        let repeated = name == above;
+        above = name.clone();
         // The first column names the row, but can be the answer too: in a glossary (`| C9H8O4 | aspirin |`) the
         // formula is the first cell. It's labelled by the cell next to it.
         let next = row.get(1).map(cell).unwrap_or_default();
         for (j, r) in row.iter().enumerate() {
             let value = cell(r);
-            if value.is_empty() {
+            if value.is_empty() || (j == 0 && repeated) {
                 continue;
             }
             let column = header.get(j).cloned().unwrap_or_default();
@@ -119,6 +111,56 @@ fn table_cells(text: &str) -> Vec<(Range<usize>, Option<String>)> {
         }
     }
     out
+}
+
+/// The rows of a table written as `| a | b |`, each as the byte range from its first `|` to its last. A cell can hold line
+/// breaks (a paragraph per line), so a row runs from a line that starts with `|` to the first line after it that ends with
+/// one. markdown's header separator (`|---|:--:|`) is not a row.
+fn table_rows(text: &str) -> Vec<Range<usize>> {
+    let mut rows = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end();
+        if open.is_none() && body.trim_start().starts_with('|') {
+            open = Some(start + (line.len() - line.trim_start().len()));
+        }
+        let end = start + body.len();
+        if let Some(from) = open
+            && body.ends_with('|')
+        {
+            open = None;
+            // A row has a `|` at each end: a lone `|` is no row.
+            if end - from >= 2 && !text[from + 1..end - 1].chars().all(|c| matches!(c, '-' | ':' | '|' | ' ' | '\n')) {
+                rows.push(from..end);
+            }
+        }
+        start += line.len();
+    }
+    rows
+}
+
+/// The byte range of each cell in a row (see [`table_rows`]): the text between two `|`s, as it stands.
+fn row_cells(row: &Range<usize>, text: &str) -> Vec<Range<usize>> {
+    let mut cells = Vec::new();
+    let mut at = row.start + 1;
+    for cell in text[row.start + 1..row.end - 1].split('|') {
+        cells.push(at..at + cell.len());
+        at += cell.len() + 1;
+    }
+    cells
+}
+
+/// The quote for a table's answer: its header row, then the row the cell `at` is in, each as the table has it. A cell in the
+/// header is quoted by the header alone. None when `at` is in no row.
+pub(crate) fn table_quote(text: &str, at: &Range<usize>) -> Option<String> {
+    let rows = table_rows(text);
+    let header = rows.first()?;
+    let row = rows.iter().find(|r| r.contains(&at.start))?;
+    if row == header {
+        return Some(text[header.clone()].to_string());
+    }
+    Some(format!("{}\n{}", &text[header.clone()], &text[row.clone()]))
 }
 
 /// Code: each line, and the whole snippet when it's short.
@@ -685,6 +727,87 @@ mod tests {
         let t = texts(&block(Kind::Table, "| **Pro** | $20/mo. | Everything you need |"));
         assert!(t.contains(&"$20/mo".to_string()), "{t:?}");
         assert!(!t.iter().any(|s| s.ends_with('|')), "{t:?}");
+    }
+
+    #[test]
+    fn a_span_across_a_cell_border_is_no_candidate() {
+        // The words either side of a `|` are two cells: "25 cm. | Under" is no answer, though the text has it.
+        let b = block(Kind::Table, "| Economy | 10 kg\n56 x 40 x 25 cm. | Overhead |\n| Business | 14 kg | Under |");
+        let spans = candidates(&[&b]);
+        assert!(spans.iter().all(|s| s.label.is_some() || !b.text[s.range.clone()].contains('|')), "{spans:?}");
+        assert!(!texts(&b).iter().any(|s| s.contains('|')), "{:?}", texts(&b));
+    }
+
+    #[test]
+    fn a_row_of_a_rowspan_is_labelled_with_the_name_it_spans() {
+        // The class is in both rows (the HTML table model's rowspan, as html.rs writes it): the personal item's row names its class.
+        let b = block(
+            Kind::Table,
+            "|  | Equipaje de mano autorizado | Ubicación |\n| Clase Turista | 1 equipaje de hasta 10 kg. | Compartimentos superiores |\n| Clase Turista | 1 equipaje de mano personal 30 x 40 x 15 cm. | Bajo el asiento delantero |",
+        );
+        let spans = candidates(&[&b]);
+        let personal = spans
+            .iter()
+            .find(|s| {
+                s.label.as_deref()
+                    == Some(
+                        "1 equipaje de mano personal 30 x 40 x 15 cm. (Clase Turista · Equipaje de mano autorizado)",
+                    )
+            })
+            .expect("the cell is labelled by its row and its header");
+        assert_eq!(&b.text[personal.range.clone()], "1 equipaje de mano personal 30 x 40 x 15 cm");
+    }
+
+    #[test]
+    fn a_rowspan_is_one_candidate_however_many_rows_it_covers() {
+        // The grid writes the class in both rows, but it is one cell of the page: only its first row offers it.
+        let b =
+            block(Kind::Table, "|  | Bag | Place |\n| Economy | 10 kg | Overhead |\n| Economy | 30 cm | Under seat |");
+        let spans = candidates(&[&b]);
+        let economy = spans.iter().filter(|s| s.label.as_deref().is_some_and(|l| l.starts_with("Economy ("))).count();
+        assert_eq!(economy, 1, "{spans:?}");
+        let cm = spans.iter().find(|s| s.label.as_deref() == Some("30 cm (Economy · Bag)"));
+        assert!(cm.is_some(), "{spans:?}");
+    }
+
+    #[test]
+    fn a_cell_of_several_lines_is_one_cell_in_one_row() {
+        // A cell with a paragraph per line is still one cell: its label has the words on one line, and the row goes on
+        // to the next line that ends with `|`.
+        let b = block(
+            Kind::Table,
+            "| | Bag | Place |\n| Economy | 10 kg.\n56 x 40 x 25 cm. | Overhead |\n| Business | 14 kg | Under |",
+        );
+        let spans = candidates(&[&b]);
+        let cell = spans
+            .iter()
+            .find(|s| s.label.as_deref() == Some("10 kg. 56 x 40 x 25 cm. (Economy · Bag)"))
+            .expect("the cell");
+        assert_eq!(&b.text[cell.range.clone()], "10 kg.\n56 x 40 x 25 cm");
+        assert!(spans.iter().any(|s| s.label.as_deref() == Some("14 kg (Business · Bag)")));
+    }
+
+    #[test]
+    fn the_quote_of_a_table_answer_is_its_header_and_its_row() {
+        let text = "|  | Bag | Place |\n| Economy | 10 kg\n56 x 40 x 25 cm. | Overhead |\n| Economy | 30 cm | Under |";
+        let at = text.find("30 cm").unwrap();
+        assert_eq!(table_quote(text, &(at..at + 5)).unwrap(), "|  | Bag | Place |\n| Economy | 30 cm | Under |");
+        // A cell in the header is quoted by the header alone, and a range in no row by nothing.
+        let at = text.find("Bag").unwrap();
+        assert_eq!(table_quote(text, &(at..at + 3)).unwrap(), "|  | Bag | Place |");
+        assert_eq!(table_quote("no table here", &(0..2)), None);
+    }
+
+    #[test]
+    fn a_table_in_a_paragraph_is_a_table_too() {
+        // A markdown page's table comes as a paragraph: its cells count and its borders are no answer, whatever the kind.
+        let b = block(Kind::Para, "| | Bag | Place |\n| Economy | 10 kg | Overhead |\n| Business | 14 kg | Under |");
+        let t = texts(&b);
+        assert!(!t.iter().any(|s| s.contains('|')), "{t:?}");
+        assert!(candidates(&[&b]).iter().any(|s| s.label.as_deref() == Some("14 kg (Business · Bag)")));
+        // Code is not a table: its pipes are its own.
+        let code = block(Kind::Code, "| | Bag |\n| Economy | 10 kg |");
+        assert!(texts(&code).iter().any(|s| s.contains('|')), "{:?}", texts(&code));
     }
 
     #[test]
