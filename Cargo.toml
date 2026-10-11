@@ -19,6 +19,8 @@ futures = "0.3.34"
 # The HTTP/2 layers under reqwest (h2) and wreq (http2): a server's stream reset is told from their errors (see `fetch::server_reset`).
 h2 = "0.4.19"
 http2 = "0.5.20"
+# CLDR's likely subtags, for the region a bare language implies (`de` is DE): `langtag::likely_region`, which `--follow`'s country uses.
+icu_locale = "2.3.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 language-tags = "0.3.2"
 psl = "2.1.241"

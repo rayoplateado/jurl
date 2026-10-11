@@ -7,6 +7,7 @@ mod blocks;
 mod cli;
 mod cloud;
 mod config;
+mod country;
 mod decide;
 mod extract;
 mod fallback;
@@ -164,6 +165,7 @@ async fn run(mut args: Args) -> Result<()> {
     }
     prepare(&mut args)?;
     reach::set_reach(&mut args).await?;
+    args.country = country::configured(|key| cfg.get(key), args.timing);
     args.stealth =
         stealth::Sidecar::configured(|key| cfg.get(key), args.public_only, args.render_sandboxed, args.timing);
     args.fallback = fallback::Fallback::configured(|key| cfg.get(key))?;
@@ -268,7 +270,7 @@ async fn read(
     }
     // The start's page, or its `www.` alternate when the bare domain gives no answer (see `fetch::start_with_alternate`).
     let (url, ex, served) =
-        fetch::start_with_alternate(&target, args.timing, async |u| load(args, cfg, u, t).await).await?;
+        fetch::start_with_alternate(&target, args.timing, async |u| load_start(args, cfg, u, t).await).await?;
     decide::USAGE.record_route(served);
     let _ = warm.await;
 
@@ -288,6 +290,27 @@ pub(crate) async fn load(
     args: &Args,
     cfg: &Config,
     target: &url::Url,
+    t: &mut Timer,
+) -> Result<(url::Url, Extracted, fetch::Served)> {
+    load_page(args, cfg, target, false, t).await
+}
+
+/// [`load`] for the run's start page: when the site sent its direct read to a page of another country, the start page is read
+/// again through the fallback proxy, and the run goes on from that read (see `country::reread`).
+pub(crate) async fn load_start(
+    args: &Args,
+    cfg: &Config,
+    target: &url::Url,
+    t: &mut Timer,
+) -> Result<(url::Url, Extracted, fetch::Served)> {
+    load_page(args, cfg, target, true, t).await
+}
+
+async fn load_page(
+    args: &Args,
+    cfg: &Config,
+    target: &url::Url,
+    start: bool,
     t: &mut Timer,
 ) -> Result<(url::Url, Extracted, fetch::Served)> {
     // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
@@ -311,6 +334,7 @@ pub(crate) async fn load(
         if page.via_browser() {
             decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        let page = if start { country::reread(args, retry, target, page, t).await } else { page };
         let served = fetch::Served { route: page.route, rendered: false };
         (page, served)
     };

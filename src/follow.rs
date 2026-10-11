@@ -5,7 +5,7 @@
 //! `sitemap.xml`) is read alongside the first page: it often names the right page outright.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -24,9 +24,9 @@ use crate::{
     extract::{self, Extracted, Kind, Link},
     fetch::{Retry, Served},
     judge::{Ctx, Item, is_block_page},
-    langtag::{self, Relation},
+    langtag::{self, Market, Place, Relation},
     links::{self, FieldScores},
-    load,
+    load, load_start,
     output::{Rendered, missed, not_found},
     timing::Timer,
 };
@@ -143,21 +143,23 @@ fn other_language(start: Option<&str>, page: Option<&str>) -> Option<OtherLangua
     (start != page).then_some(OtherLanguage { page, start })
 }
 
-/// The start page's language, for putting the site's pages in order (see [`candidates`]): the tag it declares, and the
-/// locale its own URL is under (`uk` on `/uk/pricing`). A prefix that names a language is the start page's language on
-/// this site, whatever the prefix reads as.
+/// The start page's language, for putting the site's pages in order (see [`candidates`]): the tag it declares, the locale its
+/// own URL is under (`uk` on `/uk/pricing`), and the country the run reads as, which the pages of its language are put in
+/// order by (see [`StartLanguage::place`]). A prefix that names a language is the start page's language on this site,
+/// whatever the prefix reads as.
 struct StartLanguage {
     tag: String,
     prefix: Option<String>,
+    country: Option<String>,
 }
 
 impl StartLanguage {
-    /// The start page's language, from the URL it was read at (after any redirect) and the tag it declares. None when
-    /// the tag is one jurl does not know.
-    fn of(url: &Url, declared: Option<&str>) -> Option<Self> {
+    /// The start page's language, from the URL it was read at (after any redirect), the tag it declares and the run's
+    /// country. None when the tag is one jurl does not know.
+    fn of(url: &Url, declared: Option<&str>, country: Option<&str>) -> Option<Self> {
         let tag = langtag::declared(declared?)?;
         let prefix = first_segment(url).filter(|s| langtag::segment(s).is_some());
-        Some(StartLanguage { tag, prefix })
+        Some(StartLanguage { tag, prefix, country: country.map(str::to_string) })
     }
 
     /// How a page's language relates to the start page's (see [`Relation`]). A page under the start page's own prefix is
@@ -167,10 +169,20 @@ impl StartLanguage {
         if self.prefix.is_some() && first_segment(url) == self.prefix {
             return Relation::Exact;
         }
-        let tag = declared.map(str::to_string).or_else(|| langtag::path_tag(url));
-        langtag::relation(&self.tag, tag.as_deref())
+        langtag::relation(&self.tag, langtag::page_tag(url, declared).as_deref())
+    }
+
+    /// Where a page sits in the order its site's pages are read in (see [`Place`]): its language's relation to the start
+    /// page's, and for the start page's language, whether its region is the run's country (see [`langtag::market`]).
+    fn place(&self, url: &Url, declared: Option<&str>) -> Place {
+        let market = langtag::market(self.country.as_deref(), langtag::page_tag(url, declared).as_deref());
+        langtag::place(self.relation(url, declared), market)
     }
 }
+
+/// The place of every page when there is no start page language (see [`candidates`]): one tier, so the pages keep the order they
+/// are listed in.
+const NO_LANGUAGE: Place = Place::Language(Market::Undeclared, Relation::Exact);
 
 /// The URL's first path segment, lowercased.
 fn first_segment(u: &Url) -> Option<String> {
@@ -393,13 +405,14 @@ async fn sitemap_entries(
     }
 }
 
-/// Where a sitemap index's child ranks (see [`crate::sitemaps::index_children`]): by the language its URL names. Without
-/// a start language every child ranks alike, so the newest are read, as they were.
-fn child_rank(lang: Option<&StartLanguage>, loc: &str) -> Relation {
+/// Where a sitemap index's child ranks (see [`crate::sitemaps::index_children`]): by the language its URL names, and the
+/// region of it (see [`StartLanguage::place`]). Without a start language every child ranks alike, so the newest are read,
+/// as they were.
+fn child_rank(lang: Option<&StartLanguage>, loc: &str) -> Place {
     match (lang, Url::parse(loc)) {
-        (Some(lang), Ok(url)) => lang.relation(&url, None),
-        (Some(_), Err(_)) => Relation::Other,
-        (None, _) => Relation::Exact,
+        (Some(lang), Ok(url)) => lang.place(&url, None),
+        (Some(_), Err(_)) => Place::Other,
+        (None, _) => NO_LANGUAGE,
     }
 }
 
@@ -938,12 +951,12 @@ impl Search {
             &args.fallback,
         );
 
-        let (loaded, index) = tokio::join!(load(args, cfg, start, t), site_index(start, retry));
+        let (loaded, index) = tokio::join!(load_start(args, cfg, start, t), site_index(start, retry));
         let (url, ex, served) = loaded?;
         // The start page's language is the one it declares as fetched, after any redirect. The start page is judged
         // here, not through `visit`, so it is never skipped for its language.
         site.language = ex.lang.clone();
-        let lang = StartLanguage::of(&url, ex.lang.as_deref());
+        let lang = StartLanguage::of(&url, ex.lang.as_deref(), args.country.as_deref());
         // The hosts the page links to on its own registrable domain (docs.stripe.com from stripe.com): their llms.txt is
         // read too, and their pages are leads like the site's own.
         let linked = crate::hosts::linked_hosts(
@@ -1219,23 +1232,21 @@ impl Search {
     }
 }
 
-/// The candidates a search may ask about, at most `max`, in the order they are kept: the start page's language first (see
-/// [`StartLanguage::relation`]), then the pages that declare none, then another language. Each tier is kept as
-/// [`links::most_relevant`] keeps a list, by how much of the question its URL shares, so a page in another language
-/// never crowds out one in the start page's language. Without a start language every page is one tier, and the list is
-/// [`links::most_relevant`]'s, as it was. A page listed twice is kept once.
+/// The candidates a search may ask about, at most `max`, in the order they are kept: the start page's language first, the
+/// run's country's region first within it (see [`StartLanguage::place`]), then the pages that declare no language, then
+/// another language. Each tier is kept as [`links::most_relevant`] keeps a list, by how much of the question its URL shares,
+/// so a page in another language never crowds out one in the start page's language. Without a start language every page is
+/// one tier, and the list is [`links::most_relevant`]'s, as it was. A page listed twice is kept once.
 fn candidates(question: &str, listed: Listed, lang: Option<&StartLanguage>, max: usize) -> Vec<Link> {
     let mut seen = HashSet::new();
-    let mut tiers: [Vec<Link>; 4] = Default::default();
+    let mut tiers: BTreeMap<Place, Vec<Link>> = BTreeMap::new();
     for l in listed.links.into_iter().filter(|l| seen.insert(links::key(&l.url))) {
-        let tier = match lang {
-            Some(lang) => lang.relation(&l.url, listed.declared.get(&links::key(&l.url)).map(String::as_str)) as usize,
-            None => 0,
-        };
-        tiers[tier].push(l);
+        let declared = listed.declared.get(&links::key(&l.url)).map(String::as_str);
+        let place = lang.map_or(NO_LANGUAGE, |lang| lang.place(&l.url, declared));
+        tiers.entry(place).or_default().push(l);
     }
     let mut kept: Vec<Link> = Vec::new();
-    for tier in tiers {
+    for tier in tiers.into_values() {
         let room = max.saturating_sub(kept.len());
         if room == 0 {
             break;
@@ -2221,7 +2232,7 @@ mod tests {
             ("/es-ar/sitemap.xml", "<urlset><url><loc>http://{host}/es-ar/equipaje</loc></url></urlset>"),
             ("/es-es/sitemap.xml", "<urlset><url><loc>http://{host}/es-es/equipaje</loc></url></urlset>"),
         ]);
-        let lang = StartLanguage::of(&start, Some("es")).expect("a declared language");
+        let lang = StartLanguage::of(&start, Some("es"), None).expect("a declared language");
         let listing = site_files(&start, &Site::new(&start), Some(&lang), retry_off()).await;
         let mut paths: Vec<&str> = listing.links.iter().map(|l| l.url.path()).collect();
         paths.sort();
@@ -2253,7 +2264,7 @@ mod tests {
             ("/de-de/sitemap.xml", german),
             ("/es-es/sitemap.xml", "<urlset><url><loc>http://{host}/es-es/devoluciones</loc></url></urlset>"),
         ]);
-        let lang = StartLanguage::of(&start, Some("es")).expect("a declared language");
+        let lang = StartLanguage::of(&start, Some("es"), None).expect("a declared language");
         let listing = site_files(&start, &Site::new(&start), Some(&lang), retry_off()).await;
         let kept = candidates("what does a cabin bag weigh?", listing, Some(&lang), MAX_HINTS);
         assert_eq!(kept.len(), MAX_HINTS);
@@ -2264,7 +2275,7 @@ mod tests {
     #[test]
     fn the_start_pages_language_is_kept_ahead_of_the_cap() {
         // 350 German pages, then one Spanish page: the cap alone would keep the German ones and drop the last-listed one.
-        let start = StartLanguage::of(&u("https://x.com/"), Some("es")).expect("a declared language");
+        let start = StartLanguage::of(&u("https://x.com/"), Some("es"), None).expect("a declared language");
         let german: Vec<String> = (0..350).map(|i| format!("https://x.com/de-de/p{i}")).collect();
         let mut urls: Vec<&str> = german.iter().map(String::as_str).collect();
         urls.push("https://x.com/es-es/devoluciones");
@@ -2288,10 +2299,72 @@ mod tests {
     }
 
     #[test]
+    fn a_run_that_names_a_country_puts_its_regions_first_within_the_start_pages_language() {
+        // A Spanish start page read as from Spain. `/es-es/` is Spain, `/es/` names no region, `/es-ar/` and the sitemap's
+        // `es-mx` are other regions, `/ar/es/` is ambiguous (undeclared), and `/at/de/` is German.
+        let start = StartLanguage::of(&u("https://x.com/"), Some("es"), Some("ES")).expect("a declared language");
+        let listing = Listed {
+            links: listed(&[
+                "https://x.com/es-ar/equipaje",
+                "https://x.com/ar/es/aea",
+                "https://x.com/es/equipaje",
+                "https://x.com/es-es/equipaje",
+                "https://x.com/p/bolsa",
+                "https://x.com/at/de/bag",
+            ]),
+            declared: HashMap::from([(links::key(&u("https://x.com/p/bolsa")), "es-mx".to_string())]),
+        };
+        let kept = candidates("what does a cabin bag weigh?", listing, Some(&start), MAX_HINTS);
+        let paths: Vec<&str> = kept.iter().map(|l| l.url.path()).collect();
+        assert_eq!(
+            paths,
+            ["/es-es/equipaje", "/es/equipaje", "/es-ar/equipaje", "/p/bolsa", "/ar/es/aea", "/at/de/bag"],
+            "the country's region, then none, then another region, within the language"
+        );
+    }
+
+    #[test]
+    fn without_a_country_the_regions_of_the_start_pages_language_keep_their_order() {
+        let start = StartLanguage::of(&u("https://x.com/"), Some("es"), None).expect("a declared language");
+        let listing = Listed {
+            links: listed(&[
+                "https://x.com/es-ar/equipaje",
+                "https://x.com/es/equipaje",
+                "https://x.com/es-es/equipaje",
+            ]),
+            declared: HashMap::new(),
+        };
+        let kept = candidates("what does a cabin bag weigh?", listing, Some(&start), MAX_HINTS);
+        let paths: Vec<&str> = kept.iter().map(|l| l.url.path()).collect();
+        assert_eq!(
+            paths,
+            ["/es/equipaje", "/es-ar/equipaje", "/es-es/equipaje"],
+            "the start tag, then the language's tags"
+        );
+    }
+
+    #[test]
+    fn a_sitemap_index_reads_the_run_countrys_children_of_the_start_language_first() {
+        let xml = "<sitemapindex>\
+            <sitemap><loc>https://x.com/es-ar/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+            <sitemap><loc>https://x.com/es-mx/sitemap.xml</loc><lastmod>2026-09-15</lastmod></sitemap>\
+            <sitemap><loc>https://x.com/es-es/sitemap.xml</loc><lastmod>2019-01-01</lastmod></sitemap>\
+            <sitemap><loc>https://x.com/de-de/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+            </sitemapindex>";
+        let start = StartLanguage::of(&u("https://x.com/"), Some("es"), Some("ES")).expect("a declared language");
+        let read = crate::sitemaps::index_children(xml, |loc| child_rank(Some(&start), loc));
+        assert_eq!(
+            read,
+            ["https://x.com/es-es/sitemap.xml", "https://x.com/es-ar/sitemap.xml", "https://x.com/es-mx/sitemap.xml"],
+            "Spain first, then the other Spanish regions newest first; German is not read"
+        );
+    }
+
+    #[test]
     fn a_page_is_in_the_start_pages_language_by_its_prefix_then_its_sitemap_then_its_path() {
         // The start page is under a prefix that names a language: that prefix is its language on this site, whatever it
         // reads as (`uk`, Ukrainian, is Britain here).
-        let uk = StartLanguage::of(&u("https://x.com/uk/"), Some("en-GB")).expect("a declared language");
+        let uk = StartLanguage::of(&u("https://x.com/uk/"), Some("en-GB"), None).expect("a declared language");
         assert_eq!(uk.relation(&u("https://x.com/uk/pricing"), None), Relation::Exact);
         assert_eq!(
             uk.relation(&u("https://x.com/uk/pricing"), Some("de")),
@@ -2299,15 +2372,15 @@ mod tests {
             "the prefix decides first"
         );
         // A page's own sitemap entry declares its language over its path.
-        let es = StartLanguage::of(&u("https://x.com/"), Some("es")).expect("a declared language");
+        let es = StartLanguage::of(&u("https://x.com/"), Some("es"), None).expect("a declared language");
         assert_eq!(es.relation(&u("https://x.com/es/pricing"), Some("de")), Relation::Other);
         assert_eq!(es.relation(&u("https://x.com/pricing"), Some("es-mx")), Relation::Same);
         // Without one, the path names the language; with neither, the page declares none.
         assert_eq!(es.relation(&u("https://x.com/es-es/pricing"), None), Relation::Same);
         assert_eq!(es.relation(&u("https://x.com/pricing"), None), Relation::Undeclared);
         // A start page with no tag jurl knows has no language to put the pages in.
-        assert!(StartLanguage::of(&u("https://x.com/"), Some("x-default")).is_none());
-        assert!(StartLanguage::of(&u("https://x.com/"), None).is_none());
+        assert!(StartLanguage::of(&u("https://x.com/"), Some("x-default"), None).is_none());
+        assert!(StartLanguage::of(&u("https://x.com/"), None, None).is_none());
     }
 
     #[tokio::test]

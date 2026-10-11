@@ -77,7 +77,7 @@ pub(crate) struct Sidecar {
     token: String,
     /// The first language tag of the run's Accept-Language, when it names one (see [`lang_of`]).
     lang: Option<String>,
-    /// `JURL_STEALTH_COUNTRY`, when it is two uppercase letters (see [`country_of`]).
+    /// The run's country, when it is two uppercase letters: `JURL_COUNTRY`, else `JURL_STEALTH_COUNTRY` (see `country.rs`).
     country: Option<String>,
     /// The run's public-only setting and sandbox flag (see `reach.rs`). The sidecar runs the page's JavaScript, which
     /// `JURL_PUBLIC_ONLY=1` allows only when the network outside jurl confines the browser, as `fetch::render_allowed` says.
@@ -110,11 +110,8 @@ impl Sidecar {
             );
             return None;
         };
-        let country_setting = get("JURL_STEALTH_COUNTRY").filter(|v| !v.is_empty());
-        let country = country_of(country_setting.as_deref());
-        if country_setting.is_some() && country.is_none() {
-            note(timing, "JURL_STEALTH_COUNTRY is not two uppercase letters, so it is not sent".into());
-        }
+        // The run's country (its invalid settings are said under -t by `country::configured`, once per run).
+        let country = crate::country::setting(&get);
         let max_pages = get("JURL_STEALTH_MAX_PAGES").and_then(|v| v.trim().parse().ok()).unwrap_or(MAX_PAGES);
         let client = match Client::builder().no_proxy().timeout(TIMEOUT).build() {
             Ok(client) => client,
@@ -313,8 +310,8 @@ pub(crate) fn lang_of(accept_language: Option<&str>) -> Option<String> {
     plain.then(|| first.to_string())
 }
 
-/// The country a page is read as, when `JURL_STEALTH_COUNTRY` is two uppercase letters (ISO 3166-1 alpha-2). Any other value is
-/// not sent.
+/// The country a page is read as, when the run's country setting (`JURL_COUNTRY`, or `JURL_STEALTH_COUNTRY`; see `country.rs`) is
+/// two uppercase letters (ISO 3166-1 alpha-2). Any other value is not used.
 pub(crate) fn country_of(value: Option<&str>) -> Option<String> {
     let v = value?;
     (v.len() == 2 && v.bytes().all(|b| b.is_ascii_uppercase())).then(|| v.to_string())
