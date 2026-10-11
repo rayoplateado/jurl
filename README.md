@@ -274,13 +274,14 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | `-l, --links` | Content links, best first. With `-q`, the links most likely to lead to the answer, menus included |
 | `-i, --image` | Content images, judged by file name, alt text and caption |
 | `--vision` | Like `--image`, plus Clef looks at the pixels |
+| `--pages N` | A list's next pages too: up to N pages (50 at most), each the page's own next page (`rel="next"`, or the `?page=2` or `/page/2/` link one on), judged as one list, with each page's address where its blocks start. The default block count grows with the pages read; not with `--follow`, `--links` or `--image` |
 | `-f, --find "…"` | The image that best matches the description |
 | `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps and unfilled template placeholders) |
 | `--no-browser-retry` | Don't ask a page that answers 202, 403 or 503, or whose server resets its stream, again with a browser's TLS fingerprint (see below) |
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
-| `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`, `structured`), and the `level` or `lang` when the block has one. Its `context` is the whole table or list the answer is in, as the page has it: a table's header and rows, or a list's items one per line. Past 60 rows (a table's header included) or 6,000 characters, `context` keeps a table's header, the answer's row and the rows nearest it that fit, and `context_truncated` is `true`. `context` is left out for other blocks, and a `jurl login` answer doesn't carry it yet |
+| `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`, `structured`), and the `level` or `lang` when the block has one. Its `context` is the whole table or list the answer is in, as the page has it: a table's header and rows, or a list's items one per line. Past 60 rows (a table's header included) or 6,000 characters, `context` keeps a table's header, the answer's row and the rows nearest it that fit, and `context_truncated` is `true`. `context` is left out for other blocks, and a `jurl login` answer doesn't carry it yet. A block that is a record of a repeated list (a concert calendar's card, a row of a card grid) has `record`, its number in the run, and its pieces are one block with a line each (the text prints the same record under a `[record N]` line). A list read over `--pages` gives each block its `page` and the run its `pages` |
 | `-t, --timing` | Where the time went, on stderr |
 | `jurl init` | Set or replace your API keys, or sign in to jurl cloud |
 | `jurl login` | Sign this computer in to [jurl cloud](#jurl-cloud) |

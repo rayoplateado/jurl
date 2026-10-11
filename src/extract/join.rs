@@ -36,8 +36,11 @@ fn is_price(text: &str) -> bool {
 pub(super) fn join_short(blocks: Vec<Block>) -> Vec<Block> {
     // A heading that is a price ("### $12") is a figure set big on its card, not a section title.
     let value = |b: &Block| b.kind == Kind::Heading && is_price(&b.text);
+    // A card is a block already, one that the walk made whole: it is never joined into a run of its neighbours.
     let short = |b: &Block| {
-        (matches!(b.kind, Kind::Para | Kind::Item) || value(b)) && b.text.chars().count() < SHORT_BLOCK_CHARS
+        b.record.is_none()
+            && (matches!(b.kind, Kind::Para | Kind::Item) || value(b))
+            && b.text.chars().count() < SHORT_BLOCK_CHARS
     };
     let mut out: Vec<Block> = Vec::with_capacity(blocks.len());
     let mut run: Vec<Block> = Vec::new();

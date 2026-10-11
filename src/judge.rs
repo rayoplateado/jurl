@@ -198,6 +198,8 @@ mod tests {
                 text: t.clone(),
                 list: None,
                 href: None,
+                record: None,
+                page: None,
             })
             .collect()
     }

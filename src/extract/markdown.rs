@@ -78,6 +78,8 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         images,
         links,
         site_links,
+        next_page: None,
+        pages: Vec::new(),
         app_shell: false,
     }
 }

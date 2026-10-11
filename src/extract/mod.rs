@@ -7,6 +7,7 @@
 use serde::Serialize;
 use url::Url;
 
+mod cards;
 mod html;
 mod join;
 pub mod json_ld;
@@ -42,16 +43,25 @@ pub struct Block {
     /// Which `<ul>`/`<ol>` a list item belongs to, numbered in page order.
     #[serde(skip)]
     pub list: Option<usize>,
-    /// The page a headline links to, absolute (see `html::headline_href`). Only a heading can have one, and only one that
-    /// is a teaser's title: Jev is asked about it as about a paragraph, where a section title is shown with its section.
+    /// The page a headline links to, absolute (see `html::headline_href`). A heading, or a card (see `cards`) that holds a
+    /// headline, can have one. Jev is asked about a headline as about a paragraph, where a section title is shown with its
+    /// section.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
+    /// A record of a repeated list (see `cards`): one card of it, its pieces (a title, a date, a price…) joined by lines in page
+    /// order. It is the record's boundary in the output: numbered from 1 over the whole run, in page order, and printed under a
+    /// `[record N]` line in the text. A record is always a candidate for Jev, however short its text is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<usize>,
+    /// Which page of a list the block is from, counted from 1, when `--pages` read more than one (see `paging`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<usize>,
 }
 
 impl Block {
-    /// A block with no heading level, code language, list or link: callers set those with struct update syntax.
+    /// A block with no heading level, code language, list, link, record or page: callers set those with struct update syntax.
     pub fn new(i: usize, kind: Kind, text: String) -> Block {
-        Block { i, kind, level: None, lang: None, text, list: None, href: None }
+        Block { i, kind, level: None, lang: None, text, list: None, href: None, record: None, page: None }
     }
 
     pub fn markdown(&self) -> String {
@@ -107,6 +117,10 @@ pub struct Extracted {
     pub links: Vec<Link>,
     /// Every link on the page, menus and footers included: how `--follow` moves around a site.
     pub site_links: Vec<Link>,
+    /// The page after this one in its list, when the page links to one (see `paging`): what `--pages` reads next.
+    pub next_page: Option<url::Url>,
+    /// The pages a list was read from, in order, when `--pages` read more than one (see `paging::merge`); empty otherwise.
+    pub pages: Vec<url::Url>,
     /// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no
     /// text, the page is a JS app.
     pub app_shell: bool,
