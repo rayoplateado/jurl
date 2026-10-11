@@ -16,7 +16,7 @@ use serde_json::Map;
 use url::Url;
 
 use crate::{
-    answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, precise_pick, render_precise},
+    answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, answer_text, precise_pick, render_precise},
     blocks::{render_blocks, score_blocks, top},
     cli::Args,
     config::Config,
@@ -1188,7 +1188,7 @@ impl Search {
                         Some(Found::Precise(pick)) if pick.p >= PRECISE_BLOCK_FLOOR => {
                             format!(
                                 " (closest: \"{}\" on {}, p={:.2})",
-                                &v.ex.blocks[pick.block].text[pick.range.clone()],
+                                answer_text(&v.ex.blocks[pick.block], &pick.range),
                                 v.url,
                                 pick.p
                             )
