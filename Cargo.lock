@@ -1313,6 +1313,7 @@ dependencies = [
  "h2",
  "http",
  "image",
+ "language-tags",
  "psl",
  "pulldown-cmark",
  "reqwest",
@@ -1326,6 +1327,12 @@ dependencies = [
  "wreq",
  "wreq-util",
 ]
+
+[[package]]
+name = "language-tags"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
 name = "libc"

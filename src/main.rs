@@ -14,6 +14,7 @@ mod fetch;
 mod follow;
 mod hosts;
 mod judge;
+mod langtag;
 mod lightpanda;
 mod links;
 mod mcp;
