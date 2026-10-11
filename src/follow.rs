@@ -37,9 +37,10 @@ const PARALLEL: usize = 2;
 /// A long search (`--follow 10` and up) goes wider: a long trail needs more than one or two guesses per step.
 const PARALLEL_LONG: usize = 3;
 /// URLs from the site map scored, like a page's links: at most this many besides the start page, the start page's
-/// language first (see [`candidates`]). Not fewer, and picked by shared words then depth rather than ranked closer: an
-/// answer can sit behind a URL with none of the question's words (Grafana's default port, in
-/// `/tutorials/grafana-fundamentals`), and only Jev reading the list finds it.
+/// language first (see [`candidates`]). Not fewer, and not ranked closer: an answer can sit behind a URL with none of
+/// the question's words (Grafana's default port, in `/tutorials/grafana-fundamentals`), and only Jev reading the list
+/// finds it. So the list is picked by shared words, then depth, and the directories of one depth take turns (see
+/// [`links::spread`]).
 const MAX_HINTS: usize = 300;
 /// A link's score is discounted per hop, so a good lead near the start beats a slightly better one deep down.
 const HOP_DECAY: f64 = 0.85;
@@ -1232,11 +1233,12 @@ impl Search {
     }
 }
 
-/// The candidates a search may ask about, at most `max`, in the order they are kept: the start page's language first, the
-/// run's country's region first within it (see [`StartLanguage::place`]), then the pages that declare no language, then
-/// another language. Each tier is kept as [`links::most_relevant`] keeps a list, by how much of the question its URL shares,
-/// so a page in another language never crowds out one in the start page's language. Without a start language every page is
-/// one tier, and the list is [`links::most_relevant`]'s, as it was. A page listed twice is kept once.
+/// The candidates a search may ask about, at most `max`, in the order they are kept: the start page's language first,
+/// the run's country's region first within it (see [`StartLanguage::place`]), then the pages that declare no language,
+/// then another language. Each tier is kept as [`links::spread`] keeps a list (by how much of the question its URL
+/// shares, then the shallowest pages, the directories taking turns), so a page in another language never crowds out one
+/// in the start page's language. Without a start language every page is one tier, and the list is [`links::spread`]'s.
+/// A page listed twice is kept once.
 fn candidates(question: &str, listed: Listed, lang: Option<&StartLanguage>, max: usize) -> Vec<Link> {
     let mut seen = HashSet::new();
     let mut tiers: BTreeMap<Place, Vec<Link>> = BTreeMap::new();
@@ -1251,7 +1253,7 @@ fn candidates(question: &str, listed: Listed, lang: Option<&StartLanguage>, max:
         if room == 0 {
             break;
         }
-        kept.extend(links::most_relevant(question, tier, room));
+        kept.extend(links::spread(question, tier, room));
     }
     kept
 }
@@ -2286,16 +2288,34 @@ mod tests {
     }
 
     #[test]
-    fn without_a_start_language_the_candidates_are_the_most_relevant_as_before() {
+    fn without_a_start_language_the_candidates_are_one_spread_over_the_site() {
+        // One tier: the candidates are the whole listing as `links::spread` cuts it.
         let urls: Vec<String> = (0..350).map(|i| format!("https://x.com/de-de/p{i}")).collect();
         let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
         let question = "what does a cabin bag weigh?";
-        let before: Vec<String> =
-            links::most_relevant(question, listed(&refs), MAX_HINTS).iter().map(|l| l.url.to_string()).collect();
+        let whole: Vec<String> =
+            links::spread(question, listed(&refs), MAX_HINTS).iter().map(|l| l.url.to_string()).collect();
         let listing = Listed { links: listed(&refs), declared: HashMap::new() };
         let now: Vec<String> =
             candidates(question, listing, None, MAX_HINTS).iter().map(|l| l.url.to_string()).collect();
-        assert_eq!(now, before);
+        assert_eq!(now, whole);
+    }
+
+    #[test]
+    fn a_small_section_at_the_same_depth_is_a_candidate_beside_a_flood() {
+        // 350 pages of one directory and two of another, all two levels down: the two are in the cap, with the flood.
+        let mut urls: Vec<String> = (0..350).map(|i| format!("https://x.com/ofertas/o{i}")).collect();
+        urls.push("https://x.com/guias/equipaje".to_string());
+        urls.push("https://x.com/guias/tarifas".to_string());
+        let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        let listing = Listed { links: listed(&refs), declared: HashMap::new() };
+        let kept: Vec<String> = candidates("What is the baggage allowance?", listing, None, MAX_HINTS)
+            .iter()
+            .map(|l| l.url.to_string())
+            .collect();
+        assert_eq!(kept.len(), MAX_HINTS);
+        assert!(kept.contains(&"https://x.com/guias/equipaje".to_string()));
+        assert!(kept.contains(&"https://x.com/guias/tarifas".to_string()));
     }
 
     #[test]
