@@ -24,6 +24,7 @@ use crate::{
     extract::{self, Extracted, Kind, Link},
     fetch::{Retry, Served},
     judge::{Ctx, Item, is_block_page},
+    langtag::{self, Relation},
     links::{self, FieldScores},
     load,
     output::{Rendered, missed, not_found},
@@ -35,9 +36,10 @@ use crate::{
 const PARALLEL: usize = 2;
 /// A long search (`--follow 10` and up) goes wider: a long trail needs more than one or two guesses per step.
 const PARALLEL_LONG: usize = 3;
-/// URLs from the site map scored, like a page's links: at most this many besides the start page. Not fewer, and picked
-/// by shared words then depth rather than ranked closer: an answer can sit behind a URL with none of the question's
-/// words (Grafana's default port, in `/tutorials/grafana-fundamentals`), and only Jev reading the list finds it.
+/// URLs from the site map scored, like a page's links: at most this many besides the start page, the start page's
+/// language first (see [`candidates`]). Not fewer, and picked by shared words then depth rather than ranked closer: an
+/// answer can sit behind a URL with none of the question's words (Grafana's default port, in
+/// `/tutorials/grafana-fundamentals`), and only Jev reading the list finds it.
 const MAX_HINTS: usize = 300;
 /// A link's score is discounted per hop, so a good lead near the start beats a slightly better one deep down.
 const HOP_DECAY: f64 = 0.85;
@@ -139,6 +141,40 @@ fn other_language(start: Option<&str>, page: Option<&str>) -> Option<OtherLangua
     let start = primary_subtag(start?)?;
     let page = primary_subtag(page?)?;
     (start != page).then_some(OtherLanguage { page, start })
+}
+
+/// The start page's language, for putting the site's pages in order (see [`candidates`]): the tag it declares, and the
+/// locale its own URL is under (`uk` on `/uk/pricing`). A prefix that names a language is the start page's language on
+/// this site, whatever the prefix reads as.
+struct StartLanguage {
+    tag: String,
+    prefix: Option<String>,
+}
+
+impl StartLanguage {
+    /// The start page's language, from the URL it was read at (after any redirect) and the tag it declares. None when
+    /// the tag is one jurl does not know.
+    fn of(url: &Url, declared: Option<&str>) -> Option<Self> {
+        let tag = langtag::declared(declared?)?;
+        let prefix = first_segment(url).filter(|s| langtag::segment(s).is_some());
+        Some(StartLanguage { tag, prefix })
+    }
+
+    /// How a page's language relates to the start page's (see [`Relation`]). A page under the start page's own prefix is
+    /// the start page's language; else the language its sitemap declares for it (`declared`, normalized); else the one
+    /// its path names.
+    fn relation(&self, url: &Url, declared: Option<&str>) -> Relation {
+        if self.prefix.is_some() && first_segment(url) == self.prefix {
+            return Relation::Exact;
+        }
+        let tag = declared.map(str::to_string).or_else(|| langtag::path_tag(url));
+        langtag::relation(&self.tag, tag.as_deref())
+    }
+}
+
+/// The URL's first path segment, lowercased.
+fn first_segment(u: &Url) -> Option<String> {
+    u.path_segments()?.find(|s| !s.is_empty()).map(str::to_ascii_lowercase)
 }
 
 /// `robots.txt` for every crawler (`User-agent: *`) on one host: the paths jurl won't open, decided as RFC 9309 §2.2.2
@@ -325,20 +361,46 @@ async fn small_text_within(url: &Url, max: usize, retry: Retry<'_>) -> Option<St
     (!body.trim_start().starts_with('<') || body.contains("<urlset") || body.contains("<sitemapindex")).then_some(body)
 }
 
-/// The pages a child sitemap of a sitemap index lists, or none if it can't be read.
-async fn child_map(sitemap: Url, retry: Retry<'_>) -> Vec<String> {
-    small_text(&sitemap, retry).await.map(|b| locs(&b)).unwrap_or_default()
+/// The pages a sitemap body lists, each with the language its own entry declares (see [`crate::sitemaps::url_entries`]).
+/// A sitemap index is read through the children [`crate::sitemaps::index_children`] picks: the start page's language
+/// first (see [`child_rank`]), then the newest.
+async fn pages_of(body: &str, lang: Option<&StartLanguage>, retry: Retry<'_>) -> Vec<(String, Option<String>)> {
+    if !body.contains("<sitemapindex") {
+        return crate::sitemaps::url_entries(body);
+    }
+    let children: Vec<Url> = crate::sitemaps::index_children(body, |loc| child_rank(lang, loc))
+        .iter()
+        .filter_map(|c| Url::parse(c).ok())
+        .collect();
+    join_all(children.into_iter().map(|child| async move {
+        small_text(&child, retry).await.map(|b| crate::sitemaps::url_entries(&b)).unwrap_or_default()
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
-/// The pages one sitemap lists: its `<loc>`s, or for a sitemap index, the pages of its newest few sitemaps (see
-/// [`crate::sitemaps::index_children`]).
-async fn sitemap_pages(sitemap: &Url, retry: Retry<'_>) -> Vec<String> {
-    let Some(body) = small_text(sitemap, retry).await else { return Vec::new() };
-    if !body.contains("<sitemapindex") {
-        return locs(&body);
+/// The pages of the sitemap at `sitemap` (see [`pages_of`]), or none if it can't be read.
+async fn sitemap_entries(
+    sitemap: &Url,
+    lang: Option<&StartLanguage>,
+    retry: Retry<'_>,
+) -> Vec<(String, Option<String>)> {
+    match small_text(sitemap, retry).await {
+        Some(body) => pages_of(&body, lang, retry).await,
+        None => Vec::new(),
     }
-    let children: Vec<Url> = crate::sitemaps::index_children(&body).iter().filter_map(|c| Url::parse(c).ok()).collect();
-    join_all(children.into_iter().map(|c| child_map(c, retry))).await.into_iter().flatten().collect()
+}
+
+/// Where a sitemap index's child ranks (see [`crate::sitemaps::index_children`]): by the language its URL names. Without
+/// a start language every child ranks alike, so the newest are read, as they were.
+fn child_rank(lang: Option<&StartLanguage>, loc: &str) -> Relation {
+    match (lang, Url::parse(loc)) {
+        (Some(lang), Ok(url)) => lang.relation(&url, None),
+        (Some(_), Err(_)) => Relation::Other,
+        (None, _) => Relation::Exact,
+    }
 }
 
 /// The sitemaps robots.txt names that are read: [`crate::sitemaps::ROBOTS_SITEMAPS`] of them, in file order, each once,
@@ -359,19 +421,43 @@ fn robots_sitemap_urls(body: &str, start: &Url, skip: Option<&Url>) -> Vec<Url> 
     urls
 }
 
-/// What the site lists about itself, read beside the first page (see [`site_files`]).
+/// The pages a site lists, and the language each declares for itself: a page's own `hreflang` (see
+/// [`crate::sitemaps::url_entries`]), normalized, by its [`links::key`]. A page whose sitemap declares none is not in
+/// `declared`.
+#[derive(Default)]
+struct Listed {
+    /// llms.txt, then the sitemaps, shallowest first. A page listed in several languages keeps one copy (see
+    /// [`without_language_copies`]).
+    links: Vec<Link>,
+    declared: HashMap<String, String>,
+}
+
+impl Listed {
+    fn append(&mut self, other: Listed) {
+        self.links.extend(other.links);
+        self.declared.extend(other.declared);
+    }
+}
+
+/// What the site lists about itself, read beside the first page (see [`site_index`] and [`SiteIndex::pages`]).
 struct SiteFiles {
     /// The start host's robots.txt, if it has a usable one. Its rules are the search's (see [`Search::start`]).
     robots: Option<String>,
-    /// The pages the site lists: llms.txt, then its sitemaps, shallowest first. A page listed in several languages keeps
-    /// one copy (see [`without_language_copies`]).
-    links: Vec<Link>,
+    listed: Listed,
 }
 
-/// The site's own files, read at once: `robots.txt`, `llms.txt` (written for exactly this) and `/sitemap.xml`, and the
-/// sitemaps `robots.txt` names (its `Sitemap:` lines, see [`robots_sitemap_urls`]), which wait for the robots file. A
-/// sitemap index is read through its newest sitemaps (see [`sitemap_pages`]).
-async fn site_files(start: &Url, site: &Site, retry: Retry<'_>) -> SiteFiles {
+/// The site's own files, as they are read before the start page's language is known: `robots.txt`, `llms.txt` and the
+/// bodies of `/sitemap.xml` and of the sitemaps `robots.txt` names (its `Sitemap:` lines, see [`robots_sitemap_urls`]).
+/// The sitemap indexes among them are read through their children by [`SiteIndex::pages`].
+struct SiteIndex {
+    robots: Option<String>,
+    llms: Vec<Link>,
+    sitemaps: Vec<String>,
+}
+
+/// The site's own files, read at once: `robots.txt`, `llms.txt` (written for exactly this), `/sitemap.xml`, and the
+/// sitemaps `robots.txt` names, which wait for the robots file.
+async fn site_index(start: &Url, retry: Retry<'_>) -> SiteIndex {
     let robots = async {
         let url = start.join("/robots.txt").ok()?;
         small_text(&url, retry).await
@@ -384,61 +470,84 @@ async fn site_files(start: &Url, site: &Site, retry: Retry<'_>) -> SiteFiles {
     let own_url = start.join("/sitemap.xml").ok();
     let own = async {
         match &own_url {
-            Some(url) => sitemap_pages(url, retry).await,
-            None => Vec::new(),
+            Some(url) => small_text(url, retry).await,
+            None => None,
         }
     };
     let (robots, llms, own) = tokio::join!(robots, llms, own);
     let listed = robots_sitemap_urls(robots.as_deref().unwrap_or_default(), start, own_url.as_ref());
-    let listed_pages = join_all(listed.iter().map(|u| sitemap_pages(u, retry))).await;
+    let listed_bodies = join_all(listed.iter().map(|u| small_text(u, retry))).await;
+    let sitemaps = own.into_iter().chain(listed_bodies.into_iter().flatten()).collect();
+    SiteIndex { robots, llms: llms.unwrap_or_default(), sitemaps }
+}
 
-    let mut out: Vec<Link> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut add = |url: Url, text: String| {
-        if site.contains(&url) && seen.insert(links::key(&url)) {
-            out.push(Link { i: out.len(), url, text, context: String::new(), marginal: false });
+impl SiteIndex {
+    /// The site's pages, in the order the search keeps them. Each sitemap is read as its body says: a page list, or an
+    /// index through the children [`pages_of`] picks, the start page's language first. `lang` is the start page's
+    /// language, when it declares one.
+    async fn pages(self, start: &Url, site: &Site, lang: Option<&StartLanguage>, retry: Retry<'_>) -> SiteFiles {
+        let read = join_all(self.sitemaps.iter().map(|body| pages_of(body, lang, retry))).await;
+        let mut pages: Vec<(Url, Option<String>)> =
+            read.into_iter().flatten().filter_map(|(loc, declared)| Some((Url::parse(&loc).ok()?, declared))).collect();
+        pages.sort_by_key(|(u, _)| {
+            (u.path_segments().map_or(0, |s| s.filter(|p| !p.is_empty()).count()), u.as_str().len())
+        });
+
+        let mut out: Vec<Link> = Vec::new();
+        let mut declared = HashMap::new();
+        let mut seen = HashSet::new();
+        let mut add = |url: Url, text: String, tag: Option<String>| {
+            if site.contains(&url) && seen.insert(links::key(&url)) {
+                if let Some(tag) = tag {
+                    declared.insert(links::key(&url), tag);
+                }
+                out.push(Link { i: out.len(), url, text, context: String::new(), marginal: false });
+            }
+        };
+        for l in self.llms {
+            add(l.url, l.text, None);
         }
-    };
-    for l in llms.unwrap_or_default() {
-        add(l.url, l.text);
+        for (u, declared_tag) in pages {
+            let text = u.path().to_string();
+            add(u, text, declared_tag.as_deref().and_then(langtag::declared));
+        }
+        let listed = Listed { links: without_language_copies(start, out), declared };
+        SiteFiles { robots: self.robots, listed }
     }
-    let mut pages: Vec<Url> =
-        own.into_iter().chain(listed_pages.into_iter().flatten()).filter_map(|u| Url::parse(&u).ok()).collect();
-    pages.sort_by_key(|u| (u.path_segments().map_or(0, |s| s.filter(|p| !p.is_empty()).count()), u.as_str().len()));
-    for u in pages {
-        let text = u.path().to_string();
-        add(u, text);
-    }
-    SiteFiles { robots, links: without_language_copies(start, out) }
 }
 
 /// The pages the sitemaps of each of `hosts` list (see [`crate::hosts::linked_hosts`]): the host's /sitemap.xml and the
-/// sitemaps its robots.txt names, read as the start site's own are (see [`site_files`]). Kept when they share the start
-/// page's registrable domain.
-async fn linked_sitemaps(start: &Url, hosts: &[Url], retry: Retry<'_>) -> Vec<Link> {
+/// sitemaps its robots.txt names, read as the start site's own are (see [`SiteIndex::pages`]). Kept when they share the
+/// start page's registrable domain.
+async fn linked_sitemaps(start: &Url, hosts: &[Url], lang: Option<&StartLanguage>, retry: Retry<'_>) -> Listed {
     let per_host = join_all(hosts.iter().map(|origin| async move {
         let own = origin.join("/sitemap.xml").ok();
         let robots = match origin.join("/robots.txt") {
             Ok(url) => small_text(&url, retry).await,
             Err(_) => None,
         };
-        let mut urls: Vec<String> = Vec::new();
+        let mut entries: Vec<(String, Option<String>)> = Vec::new();
         if let Some(own) = &own {
-            urls.extend(sitemap_pages(own, retry).await);
+            entries.extend(sitemap_entries(own, lang, retry).await);
         }
         for listed in robots_sitemap_urls(robots.as_deref().unwrap_or_default(), origin, own.as_ref()) {
-            urls.extend(sitemap_pages(&listed, retry).await);
+            entries.extend(sitemap_entries(&listed, lang, retry).await);
         }
-        urls
+        entries
     }))
     .await;
-    per_host
-        .into_iter()
-        .flatten()
-        .filter_map(|u| Url::parse(&u).ok())
-        .filter(|u| crate::hosts::same_registrable(start, u))
-        .map(|url| Link { i: 0, text: url.path().to_string(), url, context: String::new(), marginal: false })
-        .collect()
+    let mut listed = Listed::default();
+    for (loc, declared) in per_host.into_iter().flatten() {
+        let Ok(url) = Url::parse(&loc) else { continue };
+        if !crate::hosts::same_registrable(start, &url) {
+            continue;
+        }
+        if let Some(tag) = declared.as_deref().and_then(langtag::declared) {
+            listed.declared.insert(links::key(&url), tag);
+        }
+        listed.links.push(Link { i: 0, text: url.path().to_string(), url, context: String::new(), marginal: false });
+    }
+    listed
 }
 
 /// The llms.txt of each of `hosts` (see [`crate::hosts::linked_hosts`]): the pages it lists, kept when they share the start
@@ -507,15 +616,6 @@ fn without_language_copies(start: &Url, links: Vec<Link>) -> Vec<Link> {
         })
         .collect();
     links.into_iter().zip(keep).filter(|(_, keep)| *keep).enumerate().map(|(i, (l, _))| Link { i, ..l }).collect()
-}
-
-/// Every `<loc>…</loc>` in a sitemap.
-fn locs(xml: &str) -> Vec<String> {
-    xml.split("<loc>")
-        .skip(1)
-        .filter_map(|s| s.split("</loc>").next())
-        .map(|s| s.trim().replace("&amp;", "&"))
-        .collect()
 }
 
 /// What a page said about the question.
@@ -838,12 +938,12 @@ impl Search {
             &args.fallback,
         );
 
-        let (loaded, files) = tokio::join!(load(args, cfg, start, t), site_files(start, &site, retry));
+        let (loaded, index) = tokio::join!(load(args, cfg, start, t), site_index(start, retry));
         let (url, ex, served) = loaded?;
         // The start page's language is the one it declares as fetched, after any redirect. The start page is judged
         // here, not through `visit`, so it is never skipped for its language.
         site.language = ex.lang.clone();
-        let SiteFiles { robots, links: mut map } = files;
+        let lang = StartLanguage::of(&url, ex.lang.as_deref());
         // The hosts the page links to on its own registrable domain (docs.stripe.com from stripe.com): their llms.txt is
         // read too, and their pages are leads like the site's own.
         let linked = crate::hosts::linked_hosts(
@@ -853,13 +953,18 @@ impl Search {
         );
         let read_before = HashSet::new();
         let (known0, field0) = (HashSet::new(), FieldScores::new());
-        let (first, hints) =
+        let (first, (robots, hints)) =
             tokio::join!(judge(args, client, api_key, url, ex, &site, &known0, &field0, &read_before, served), async {
-                let (llms, sitemaps) =
-                    tokio::join!(linked_llms(start, &linked, retry), linked_sitemaps(start, &linked, retry),);
-                map.extend(llms);
-                map.extend(sitemaps);
-                site_hints(args, client, api_key, start, &site, map).await
+                // The site's pages are listed now that the start page's language is known: a sitemap index's children
+                // are picked by it (see [`SiteIndex::pages`]).
+                let SiteFiles { robots, mut listed } = index.pages(start, &site, lang.as_ref(), retry).await;
+                let (llms, linked_listed) = tokio::join!(
+                    linked_llms(start, &linked, retry),
+                    linked_sitemaps(start, &linked, lang.as_ref(), retry),
+                );
+                listed.links.extend(llms);
+                listed.append(linked_listed);
+                (robots, site_hints(args, client, api_key, start, &site, lang.as_ref(), listed).await)
             },);
         let mut first = first?;
         let mut hints = hints?;
@@ -1114,21 +1219,45 @@ impl Search {
     }
 }
 
-/// The start page's hints: the pages the site lists (see [`site_files`] and [`linked_llms`]), the pages that share words with
-/// the question first, each scored as a link. The start page is first, scored like a candidate too.
+/// The candidates a search may ask about, at most `max`, in the order they are kept: the start page's language first (see
+/// [`StartLanguage::relation`]), then the pages that declare none, then another language. Each tier is kept as
+/// [`links::most_relevant`] keeps a list, by how much of the question its URL shares, so a page in another language
+/// never crowds out one in the start page's language. Without a start language every page is one tier, and the list is
+/// [`links::most_relevant`]'s, as it was. A page listed twice is kept once.
+fn candidates(question: &str, listed: Listed, lang: Option<&StartLanguage>, max: usize) -> Vec<Link> {
+    let mut seen = HashSet::new();
+    let mut tiers: [Vec<Link>; 4] = Default::default();
+    for l in listed.links.into_iter().filter(|l| seen.insert(links::key(&l.url))) {
+        let tier = match lang {
+            Some(lang) => lang.relation(&l.url, listed.declared.get(&links::key(&l.url)).map(String::as_str)) as usize,
+            None => 0,
+        };
+        tiers[tier].push(l);
+    }
+    let mut kept: Vec<Link> = Vec::new();
+    for tier in tiers {
+        let room = max.saturating_sub(kept.len());
+        if room == 0 {
+            break;
+        }
+        kept.extend(links::most_relevant(question, tier, room));
+    }
+    kept
+}
+
+/// The start page's hints: the pages the site lists (see [`candidates`]), the pages that share words with the question
+/// first, each scored as a link. The start page is first, scored like a candidate too.
 async fn site_hints(
     args: &Args,
     client: &Client,
     api_key: &str,
     start: &Url,
     site: &Site,
-    map: Vec<Link>,
+    lang: Option<&StartLanguage>,
+    listed: Listed,
 ) -> Result<Vec<ScoredLink>> {
     let q = args.ask.as_deref().unwrap_or_default();
-    // A page listed twice (by the site's files and by a linked host's) is kept once.
-    let mut seen = HashSet::new();
-    let map: Vec<Link> = map.into_iter().filter(|l| seen.insert(links::key(&l.url))).collect();
-    let mut links = links::most_relevant(q, map, MAX_HINTS);
+    let mut links = candidates(q, listed, lang, MAX_HINTS);
     // The start page is scored as a candidate too: how much its own answer counts against the site's other pages.
     links.retain(|l| links::key(&l.url) != links::key(start));
     links.insert(0, Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false });
@@ -1408,7 +1537,8 @@ mod tests {
     #[test]
     fn sitemap_locs() {
         let xml = "<urlset><url><loc>https://x.com/a?b=1&amp;c=2</loc></url><url><loc> https://x.com/pricing </loc></url></urlset>";
-        assert_eq!(locs(xml), ["https://x.com/a?b=1&c=2", "https://x.com/pricing"]);
+        let locs: Vec<String> = crate::sitemaps::url_entries(xml).into_iter().map(|(loc, _)| loc).collect();
+        assert_eq!(locs, ["https://x.com/a?b=1&c=2", "https://x.com/pricing"]);
     }
 
     #[tokio::test]
@@ -1512,7 +1642,7 @@ mod tests {
         });
         let start = Url::parse(&base).unwrap();
         let memo = Memo::default();
-        let links = site_files(&start, &Site::new(&start), retry_on(&memo)).await.links;
+        let links = site_files(&start, &Site::new(&start), None, retry_on(&memo)).await.links;
         assert!(links.iter().any(|l| l.url.path() == "/news/a.html"), "the sitemap's page is a hint");
         let kinds = served.kinds();
         assert_eq!(kinds.iter().filter(|k| **k == Kind::Browser).count(), 1, "one browser retry, for the sitemap");
@@ -1546,7 +1676,7 @@ mod tests {
         });
         let start = Url::parse(&base).unwrap();
         let memo = Memo::default();
-        let links = site_files(&start, &Site::new(&start), retry_on(&memo)).await.links;
+        let links = site_files(&start, &Site::new(&start), None, retry_on(&memo)).await.links;
         assert!(links.is_empty(), "the sitemap is not read");
         assert!(served.kinds().iter().all(|k| *k == Kind::Plain), "a 503 that says when to come back is not retried");
     }
@@ -1561,7 +1691,7 @@ mod tests {
             _ => Some(reply("403 Forbidden", "", b"")),
         });
         let start = Url::parse(&base).unwrap();
-        let links = site_files(&start, &Site::new(&start), retry_off()).await.links;
+        let links = site_files(&start, &Site::new(&start), None, retry_off()).await.links;
         assert!(links.is_empty());
         let mut rules = RobotsByHost::default();
         assert_eq!(rules.load_for(std::slice::from_ref(&start), retry_off()).await, 1);
@@ -1997,6 +2127,13 @@ mod tests {
         (Url::parse(&base).unwrap(), served)
     }
 
+    /// The site's listing as the search reads it, with `lang` the start page's language, if any: [`site_index`], then
+    /// [`SiteIndex::pages`].
+    async fn site_files(start: &Url, site: &Site, lang: Option<&StartLanguage>, retry: Retry<'_>) -> Listed {
+        let SiteFiles { listed, .. } = site_index(start, retry).await.pages(start, site, lang, retry).await;
+        listed
+    }
+
     #[tokio::test]
     async fn a_sitemap_robots_txt_names_is_read_beside_the_sites_own() {
         let (start, _) = site_at(vec![
@@ -2004,7 +2141,7 @@ mod tests {
             ("/feeds/pages.xml", "<urlset><url><loc>http://{host}/news/a.html</loc></url></urlset>"),
             ("/sitemap.xml", "<urlset><url><loc>http://{host}/news/b.html</loc></url></urlset>"),
         ]);
-        let links = site_files(&start, &Site::new(&start), retry_off()).await.links;
+        let links = site_files(&start, &Site::new(&start), None, retry_off()).await.links;
         let mut paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
         paths.sort();
         assert_eq!(paths, ["/news/a.html", "/news/b.html"]);
@@ -2031,7 +2168,7 @@ mod tests {
             stealth: None,
             fallback: &NO_FALLBACK,
         };
-        let links = site_files(&start, &Site::new(&start), retry).await.links;
+        let links = site_files(&start, &Site::new(&start), None, retry).await.links;
         let paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
         assert_eq!(paths, ["/news/b.html"]);
         assert!(links.iter().all(|l| l.url.host_str() != Some("127.0.0.2")));
@@ -2054,12 +2191,123 @@ mod tests {
             ("/s/2021.xml", "<urlset><url><loc>http://{host}/news/2021.html</loc></url></urlset>"),
             ("/s/2023.xml", "<urlset><url><loc>http://{host}/news/2023.html</loc></url></urlset>"),
         ]);
-        let links = site_files(&start, &Site::new(&start), retry_off()).await.links;
+        let links = site_files(&start, &Site::new(&start), None, retry_off()).await.links;
         let mut paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
         paths.sort();
         assert_eq!(paths, ["/news/2021.html", "/news/2023.html", "/news/2024.html"]);
         // robots.txt, llms.txt, /sitemap.xml and the three children: the 2019 sitemap is never asked for.
         assert_eq!(served.count(), 6);
+    }
+
+    #[tokio::test]
+    async fn a_sitemap_index_reads_the_start_pages_language_children_before_the_others() {
+        // The index lists the German and English markets first, all dated alike, and the Spanish ones last, as Air Europa's
+        // does. The start page is Spanish: the two Spanish children are read, then the first German one, and /de-de and
+        // /en-be are never asked for.
+        let (start, served) = site_at(vec![
+            (
+                "/sitemap.xml",
+                "<sitemapindex>\
+                 <sitemap><loc>http://{host}/de-ch/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+                 <sitemap><loc>http://{host}/de-de/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+                 <sitemap><loc>http://{host}/en-be/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+                 <sitemap><loc>http://{host}/es-ar/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+                 <sitemap><loc>http://{host}/es-es/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+                 </sitemapindex>",
+            ),
+            ("/de-ch/sitemap.xml", "<urlset><url><loc>http://{host}/de-ch/gepaeck</loc></url></urlset>"),
+            ("/de-de/sitemap.xml", "<urlset><url><loc>http://{host}/de-de/gepaeck</loc></url></urlset>"),
+            ("/en-be/sitemap.xml", "<urlset><url><loc>http://{host}/en-be/baggage</loc></url></urlset>"),
+            ("/es-ar/sitemap.xml", "<urlset><url><loc>http://{host}/es-ar/equipaje</loc></url></urlset>"),
+            ("/es-es/sitemap.xml", "<urlset><url><loc>http://{host}/es-es/equipaje</loc></url></urlset>"),
+        ]);
+        let lang = StartLanguage::of(&start, Some("es")).expect("a declared language");
+        let listing = site_files(&start, &Site::new(&start), Some(&lang), retry_off()).await;
+        let mut paths: Vec<&str> = listing.links.iter().map(|l| l.url.path()).collect();
+        paths.sort();
+        assert_eq!(paths, ["/de-ch/gepaeck", "/es-ar/equipaje", "/es-es/equipaje"]);
+        // robots.txt, llms.txt, /sitemap.xml and the three children read.
+        assert_eq!(served.count(), 6);
+        assert!(served.heads().iter().all(|h| !h.contains("/de-de/") && !h.contains("/en-be/")));
+    }
+
+    #[tokio::test]
+    async fn the_start_pages_language_pages_are_candidates_within_the_budget() {
+        // A German sitemap of 350 pages is listed before the Spanish one, whose answer page shares no word with the
+        // question. The cap keeps 300 candidates, and the Spanish page is one of them.
+        let german: &'static str = Box::leak(
+            format!(
+                "<urlset>{}</urlset>",
+                (0..350).map(|i| format!("<url><loc>http://{{host}}/de-de/p{i}</loc></url>")).collect::<String>()
+            )
+            .into_boxed_str(),
+        );
+        let (start, served) = site_at(vec![
+            (
+                "/sitemap.xml",
+                "<sitemapindex>\
+                 <sitemap><loc>http://{host}/de-de/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+                 <sitemap><loc>http://{host}/es-es/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+                 </sitemapindex>",
+            ),
+            ("/de-de/sitemap.xml", german),
+            ("/es-es/sitemap.xml", "<urlset><url><loc>http://{host}/es-es/devoluciones</loc></url></urlset>"),
+        ]);
+        let lang = StartLanguage::of(&start, Some("es")).expect("a declared language");
+        let listing = site_files(&start, &Site::new(&start), Some(&lang), retry_off()).await;
+        let kept = candidates("what does a cabin bag weigh?", listing, Some(&lang), MAX_HINTS);
+        assert_eq!(kept.len(), MAX_HINTS);
+        assert!(kept.iter().any(|l| l.url.path() == "/es-es/devoluciones"), "the Spanish answer page is a candidate");
+        assert_eq!(served.count(), 5, "robots.txt, llms.txt, /sitemap.xml and the two children");
+    }
+
+    #[test]
+    fn the_start_pages_language_is_kept_ahead_of_the_cap() {
+        // 350 German pages, then one Spanish page: the cap alone would keep the German ones and drop the last-listed one.
+        let start = StartLanguage::of(&u("https://x.com/"), Some("es")).expect("a declared language");
+        let german: Vec<String> = (0..350).map(|i| format!("https://x.com/de-de/p{i}")).collect();
+        let mut urls: Vec<&str> = german.iter().map(String::as_str).collect();
+        urls.push("https://x.com/es-es/devoluciones");
+        let listing = Listed { links: listed(&urls), declared: HashMap::new() };
+        let kept = candidates("what does a cabin bag weigh?", listing, Some(&start), MAX_HINTS);
+        assert_eq!(kept.len(), MAX_HINTS);
+        assert_eq!(kept[0].url.path(), "/es-es/devoluciones", "the start page's language comes first");
+    }
+
+    #[test]
+    fn without_a_start_language_the_candidates_are_the_most_relevant_as_before() {
+        let urls: Vec<String> = (0..350).map(|i| format!("https://x.com/de-de/p{i}")).collect();
+        let refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        let question = "what does a cabin bag weigh?";
+        let before: Vec<String> =
+            links::most_relevant(question, listed(&refs), MAX_HINTS).iter().map(|l| l.url.to_string()).collect();
+        let listing = Listed { links: listed(&refs), declared: HashMap::new() };
+        let now: Vec<String> =
+            candidates(question, listing, None, MAX_HINTS).iter().map(|l| l.url.to_string()).collect();
+        assert_eq!(now, before);
+    }
+
+    #[test]
+    fn a_page_is_in_the_start_pages_language_by_its_prefix_then_its_sitemap_then_its_path() {
+        // The start page is under a prefix that names a language: that prefix is its language on this site, whatever it
+        // reads as (`uk`, Ukrainian, is Britain here).
+        let uk = StartLanguage::of(&u("https://x.com/uk/"), Some("en-GB")).expect("a declared language");
+        assert_eq!(uk.relation(&u("https://x.com/uk/pricing"), None), Relation::Exact);
+        assert_eq!(
+            uk.relation(&u("https://x.com/uk/pricing"), Some("de")),
+            Relation::Exact,
+            "the prefix decides first"
+        );
+        // A page's own sitemap entry declares its language over its path.
+        let es = StartLanguage::of(&u("https://x.com/"), Some("es")).expect("a declared language");
+        assert_eq!(es.relation(&u("https://x.com/es/pricing"), Some("de")), Relation::Other);
+        assert_eq!(es.relation(&u("https://x.com/pricing"), Some("es-mx")), Relation::Same);
+        // Without one, the path names the language; with neither, the page declares none.
+        assert_eq!(es.relation(&u("https://x.com/es-es/pricing"), None), Relation::Same);
+        assert_eq!(es.relation(&u("https://x.com/pricing"), None), Relation::Undeclared);
+        // A start page with no tag jurl knows has no language to put the pages in.
+        assert!(StartLanguage::of(&u("https://x.com/"), Some("x-default")).is_none());
+        assert!(StartLanguage::of(&u("https://x.com/"), None).is_none());
     }
 
     #[tokio::test]
@@ -2112,7 +2360,7 @@ mod tests {
             ("/feeds/docs.xml", "<urlset><url><loc>http://{host}/rate-limits</loc></url></urlset>"),
         ]);
         let start = Url::parse(&format!("http://127.0.0.1:{}/", linked.port().unwrap())).unwrap();
-        let links = linked_sitemaps(&start, std::slice::from_ref(&linked), retry_off()).await;
+        let links = linked_sitemaps(&start, std::slice::from_ref(&linked), None, retry_off()).await.links;
         let urls: Vec<String> = links.iter().map(|l| l.url.path().to_string()).collect();
         assert_eq!(urls, ["/rate-limits"]);
     }

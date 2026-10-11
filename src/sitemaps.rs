@@ -1,8 +1,9 @@
 //! The sitemaps a site names itself: the `Sitemap:` lines of its robots.txt (sitemaps.org, "Submit your sitemap using
-//! robots.txt"), and the order a sitemap index lists its sitemaps in, by `<lastmod>` (sitemaps.org, "Sitemap index
-//! files"). Pure text: the reading of the files is `follow.rs`'s.
+//! robots.txt"), the order a sitemap index lists its sitemaps in, by `<lastmod>` (sitemaps.org, "Sitemap index files"),
+//! and the language a page's own entry declares for it (Google's hreflang extension in sitemaps). Pure text: the reading
+//! of the files is `follow.rs`'s.
 
-/// How many of a sitemap index's sitemaps are read: the newest by `<lastmod>`.
+/// How many of a sitemap index's sitemaps are read: the first [`index_children`] ranks them.
 pub const CHILD_SITEMAPS: usize = 3;
 /// How many of robots.txt's `Sitemap:` lines are read, besides /sitemap.xml: in file order.
 pub const ROBOTS_SITEMAPS: usize = 3;
@@ -20,14 +21,46 @@ pub fn robots_sitemaps(body: &str) -> Vec<String> {
         .collect()
 }
 
-/// The sitemaps a sitemap index lists that are worth reading: the [`CHILD_SITEMAPS`] newest by their `<lastmod>`. One with
-/// no `<lastmod>`, or one that isn't a date, comes after the dated ones, in the order the index lists them.
-pub fn index_children(xml: &str) -> Vec<String> {
-    let mut entries: Vec<(String, Option<i64>)> =
-        index_entries(xml).into_iter().map(|(loc, lastmod)| (loc, lastmod.as_deref().and_then(lastmod_key))).collect();
-    // A stable sort, newest first: `Reverse` puts the larger time first and `None` (no date) last.
-    entries.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
-    entries.into_iter().take(CHILD_SITEMAPS).map(|(loc, _)| loc).collect()
+/// The sitemaps a sitemap index lists that are worth reading: the [`CHILD_SITEMAPS`] that rank first by `rank` (a child's
+/// rank, lower first: the caller says what it ranks by, say its language), and of those, the newest by their `<lastmod>`.
+/// One with no `<lastmod>`, or one that isn't a date, comes after the dated ones, in the order the index lists them.
+pub fn index_children<K: Ord>(xml: &str, rank: impl Fn(&str) -> K) -> Vec<String> {
+    let mut entries: Vec<(K, Option<i64>, String)> = index_entries(xml)
+        .into_iter()
+        .map(|(loc, lastmod)| (rank(&loc), lastmod.as_deref().and_then(lastmod_key), loc))
+        .collect();
+    // A stable sort: the rank first, then the newest first (`Reverse` puts the larger time first and `None`, no date, last).
+    entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| std::cmp::Reverse(a.1).cmp(&std::cmp::Reverse(b.1))));
+    entries.into_iter().take(CHILD_SITEMAPS).map(|(_, _, loc)| loc).collect()
+}
+
+/// Each `<url>` entry of a sitemap: its `<loc>`, and the language the entry declares for it. That is the `hreflang` of
+/// its own alternate: the `xhtml:link` whose `href` is the `<loc>` (the alternates an entry lists include the page
+/// itself). None when no alternate names the `<loc>`.
+pub fn url_entries(xml: &str) -> Vec<(String, Option<String>)> {
+    xml.split("<url>")
+        .skip(1)
+        .filter_map(|entry| {
+            let entry = entry.split("</url>").next()?;
+            let loc = text_of(entry, "loc")?;
+            let lang = entry.split("<xhtml:link").skip(1).find_map(|link| {
+                let attrs = link.split('>').next()?.trim_end_matches('/');
+                let is_own = attr(attrs, "rel")? == "alternate" && attr(attrs, "href")? == loc;
+                // `x-default` is the fallback page, and it can be the page itself, listed before its own language.
+                if is_own { attr(attrs, "hreflang").filter(|h| !h.eq_ignore_ascii_case("x-default")) } else { None }
+            });
+            Some((loc, lang))
+        })
+        .collect()
+}
+
+/// The value of attribute `name` in the attributes of an XML tag (`name="value"` or `name='value'`), with `&amp;` read
+/// back as `&`.
+fn attr(attrs: &str, name: &str) -> Option<String> {
+    attrs.split_whitespace().find_map(|token| {
+        let (key, value) = token.split_once('=')?;
+        (key == name).then(|| value.trim_matches(['"', '\'']).replace("&amp;", "&"))
+    })
 }
 
 /// Each `<sitemap>` entry of a sitemap index: its `<loc>`, and its `<lastmod>` text when it has one.
@@ -150,8 +183,66 @@ mod tests {
             <sitemap><loc>https://a.test/s/2025.xml?a=1&amp;b=2</loc><lastmod>2025-02-01T00:00:00+01:00</lastmod></sitemap>\
             </sitemapindex>";
         assert_eq!(
-            index_children(xml),
+            index_children(xml, |_| ()),
             ["https://a.test/s/2025.xml?a=1&b=2", "https://a.test/s/2024.xml", "https://a.test/s/2023.xml"]
+        );
+    }
+
+    #[test]
+    fn an_index_ranks_its_children_before_it_takes_the_newest() {
+        // The Spanish children are read (rank 0) before a newer German or English one, and of the Spanish, the newest.
+        // The undated Spanish child is read after the dated ones.
+        let xml = "<sitemapindex>\
+            <sitemap><loc>https://a.test/de-de/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+            <sitemap><loc>https://a.test/es-es/sitemap.xml</loc><lastmod>2019-01-01</lastmod></sitemap>\
+            <sitemap><loc>https://a.test/en-gb/sitemap.xml</loc><lastmod>2025-01-01</lastmod></sitemap>\
+            <sitemap><loc>https://a.test/es-ar/sitemap.xml</loc><lastmod>2024-01-01</lastmod></sitemap>\
+            <sitemap><loc>https://a.test/es-mx/sitemap.xml</loc></sitemap>\
+            </sitemapindex>";
+        let rank = |loc: &str| if loc.contains("/es-") { 0 } else { 1 };
+        assert_eq!(
+            index_children(xml, rank),
+            [
+                "https://a.test/es-ar/sitemap.xml",
+                "https://a.test/es-es/sitemap.xml",
+                "https://a.test/es-mx/sitemap.xml"
+            ]
+        );
+        // Ranked alike, the children are the three newest, as before.
+        assert_eq!(
+            index_children(xml, |_| ()),
+            [
+                "https://a.test/de-de/sitemap.xml",
+                "https://a.test/en-gb/sitemap.xml",
+                "https://a.test/es-ar/sitemap.xml"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_url_entry_declares_the_language_of_its_own_alternate() {
+        let xml = "<urlset xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">\
+            <url><loc>https://a.test/es/precios</loc>\
+            <xhtml:link rel=\"alternate\" hreflang=\"en\" href=\"https://a.test/en/pricing\"/>\
+            <xhtml:link rel=\"alternate\" hreflang=\"es\" href=\"https://a.test/es/precios\"/>\
+            <xhtml:link rel=\"alternate\" hreflang=\"x-default\" href=\"https://a.test/en/pricing\"/></url>\
+            <url><loc>https://a.test/q?a=1&amp;b=2</loc>\
+            <xhtml:link rel=\"alternate\" href=\"https://a.test/q?a=1&amp;b=2\" hreflang='de-DE'/></url>\
+            <url><loc>https://a.test/x</loc>\
+            <xhtml:link rel=\"alternate\" hreflang=\"fr\" href=\"https://a.test/fr/x\"/></url>\
+            <url><loc>https://a.test/home</loc>\
+            <xhtml:link rel=\"alternate\" hreflang=\"x-default\" href=\"https://a.test/home\"/>\
+            <xhtml:link rel=\"alternate\" hreflang=\"en-GB\" href=\"https://a.test/home\"/></url>\
+            </urlset>";
+        assert_eq!(
+            url_entries(xml),
+            [
+                ("https://a.test/es/precios".to_string(), Some("es".to_string())),
+                ("https://a.test/q?a=1&b=2".to_string(), Some("de-DE".to_string())),
+                ("https://a.test/x".to_string(), None),
+                // Its own x-default is listed first, and the page's own language is the one it declares.
+                ("https://a.test/home".to_string(), Some("en-GB".to_string())),
+            ]
         );
     }
 
@@ -160,6 +251,9 @@ mod tests {
         let xml = "<sitemapindex><sitemap><loc>https://a.test/1.xml</loc></sitemap>\
                    <sitemap><loc>https://a.test/2.xml</loc></sitemap><sitemap><loc>https://a.test/3.xml</loc></sitemap>\
                    <sitemap><loc>https://a.test/4.xml</loc></sitemap></sitemapindex>";
-        assert_eq!(index_children(xml), ["https://a.test/1.xml", "https://a.test/2.xml", "https://a.test/3.xml"]);
+        assert_eq!(
+            index_children(xml, |_| ()),
+            ["https://a.test/1.xml", "https://a.test/2.xml", "https://a.test/3.xml"]
+        );
     }
 }
