@@ -134,7 +134,7 @@ Does this provider offer a batch API discount?
 $ jurl --precise --follow 5 --questions-file questions.txt --json https://example.com/pricing
 ```
 
-It is one search, not one per question. Each page is read once, and every question still open is checked against it, so the page's blocks and links go to Jev once for all of them (one request, with each question's entries on the same items). Each question keeps its own answer, stop rules and miss: it stops when it is answered or its trail goes cold. The budget is `--follow N` pages for the whole run (5 by default). `--own-budget` gives each question its own picks, up to N of its own, and a page one question picks is read for all of them; it costs more, since every page is checked against every open question.
+It is one search, not one per question. Each page is read once, and every question still open is checked against it, so the page's blocks and links go to Jev once for all of them (one request, with each question's entries on the same items). Each question keeps its own answer, stop rules and miss: it stops when it is answered or its trail goes cold. The budget is `--follow N` pages for the whole run (5 by default), plus 3 more once when a question has no answer and the site's own search has pages to read. `--own-budget` gives each question its own picks, up to N of its own, and a page one question picks is read for all of them; it costs more, since every page is checked against every open question.
 
 The JSON is an array with one object per question, in the file's order. Each object has what a single `--precise --json` run prints for that question (`ask`, `answer`, `closest`, `p`, `quote`, `block`, `kind`, `link`, `path`), and two more keys:
 
