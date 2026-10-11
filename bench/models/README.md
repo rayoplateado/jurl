@@ -91,6 +91,18 @@ python3 bench/models/diff.py bench/models/results/base.jsonl bench/models/result
 
 A page can change between runs, and then a request differs for a reason that isn't the code: record and check back to back.
 
+### Paying only for what a change changes
+
+`--from` with `--upstream` falls through: a request the recording has is answered from it, and any other is forwarded to the upstream and appended to `--out` (`"replayed": false`). A new binary then costs only the requests its change alters, and the file it writes is a complete recording for the next run. Free first: `--from` alone (no upstream) says how many requests a change alters, without calling anything.
+
+```sh
+python3 bench/models/record.py --from bench/models/results/base.jsonl --out bench/models/results/check.jsonl --port 18101 &   # free: 500 for what is new
+env -u TYPESAFE_API_KEY JURL_JEV_URL=http://127.0.0.1:18101/v1/systemone JURL=target/release/jurl python3 bench/regression.py new
+TYPESAFE_API_KEY=… python3 bench/models/record.py --from bench/models/results/base.jsonl --upstream https://api.typesafe.ai/v1/systemone --out bench/models/results/after.jsonl --port 18100 &
+```
+
+The proxy's exit line says what it replayed (input tokens, free) and what it forwarded (input tokens, live, and their cost). Pages are not recorded: jurl fetches them live, so a request for a page that changed since the recording is forwarded.
+
 ## What it costs
 
 Jev is $0.042 per million input tokens. Keep each change within **$0.30**.

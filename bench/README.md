@@ -60,6 +60,36 @@ uv run --with tiktoken --with requests bench/table.py              # the table a
 
 WebFetch only runs inside Claude Code: [results/webfetch.json](results/webfetch.json) holds its answers, asked with each task's URL and question.
 
+## Regression suite: run it before merging a change to extraction, ranking or `--precise`
+
+[regression.json](regression.json) holds 29 cases, one jurl run each, in every mode jurl has: the default summary, `-q`, `--precise`, `--follow N` and `--links`. A case names its URL, its question, and what the right answer contains (`null`: the page has no answer). The mix: news front pages, where the answer is a headline; tables and pricing; docs (code, a command, a table cell); a Spanish shop's returns policy; an airline's baggage page, in Spanish and asked in English; Wikipedia games; a page that jurl renders; traps (no answer, and an answer that sits in a hidden tab); two sitemap-heavy sites. A case taken from another bench names its source (`tasks.json: …`, `follow.json: …`). [regression.py](regression.py) runs them the way [follow.py](follow.py) does, except that one host is read at a time, 20 s apart.
+
+**Run it before merging a change to extraction, ranking or `--precise`.** Jev is called through the recording proxy, which holds the key, so neither the runner nor jurl ever sees it:
+
+```sh
+# the baseline: every Jev answer of origin/main, recorded (the file holds page text, so it stays local)
+TYPESAFE_API_KEY=… python3 bench/models/record.py --out bench/models/results/regression-base.jsonl --port 18100 &
+JURL=target/release/jurl JURL_JEV_URL=http://127.0.0.1:18100/v1/systemone python3 bench/regression.py base
+
+# the change: replays what the recording has, and forwards (and pays for) only what the change alters
+TYPESAFE_API_KEY=… python3 bench/models/record.py --from bench/models/results/regression-base.jsonl --upstream https://api.typesafe.ai/v1/systemone --out bench/models/results/regression-new.jsonl --port 18101 &
+JURL=target/release/jurl JURL_JEV_URL=http://127.0.0.1:18101/v1/systemone python3 bench/regression.py new
+```
+
+Run the change first without `--upstream`: that is free, and each request it alters fails with a 500, so the count says what it will cost. The proxy's exit line gives the input tokens replayed (free) and forwarded (paid). A run prints a table: ok, the Jev input tokens its answers report, and the time. `*` marks a volatile case.
+
+What a run can show:
+
+- Pages are read live. jurl has no page cache, and an HTTPS page cannot be recorded, so only Jev's answers replay. A page that changed since the recording is forwarded and paid for: record and check back to back.
+- Volatile cases (news, and the LLM prices in a hidden tab) hold on the day they were recorded. `recorded` and `snippet` say what each rests on; update them when the page moves.
+- `expect_stderr` checks what the run did, as `-t` reports it. MEGA's answer is also in its raw HTML, so only the render line shows the page was rendered.
+
+Results, one run each: origin/main 26 of 29, this branch 28 of 29 ([results/regression-main.json](results/regression-main.json), [results/regression-headline-links.json](results/regression-headline-links.json)). The branch answers the eldiario headline without `--follow`, with and without `-q`. No case that passes on origin/main fails on the branch. The one miss on both is Asana's price: jurl reads that page as markdown, and the price is not among its blocks.
+
+Cost: the recording of the suite on origin/main was 0.81M Jev input tokens (about $0.034). Replaying it cost 54k live tokens on origin/main ($0.002) and 28k on the branch ($0.001), for the pages that had changed and the requests the change alters; the other 0.8M tokens replayed for nothing.
+
+The `--follow` benches are not in the suite: a full run of [follow.json](follow.json) costs about $0.50. The branch's change (a heading that is a link to its article becomes a candidate for the answer) leaves the blocks of all 58 start pages as they were (kind and text, checked on both binaries); it only adds questions, and 8 of those pages have headlines ([follow-affected-main.json](results/follow-affected-main.json), [follow-affected-headline-links.json](results/follow-affected-headline-links.json)). Those 8 searches, run once on each binary, gave the same answers, with one difference: Cloudflare's CPU time was `5 min (default: 30 seconds)` on origin/main and `30s` on the branch. Both are right, but follow.json does not list `30s`, so the branch scores one miss more there (the regression suite lists it). Basecamp's CEO was wrong on both. Pages deeper in a search were not compared.
+
 ## `--follow`: finding the page on a site
 
 [follow.json](follow.json) holds 28 searches that start from a site's front door: the cheapest paid plan from a bare domain (`linear.app`), an answer in docs from the docs' root, short and long Wikipedia games, and 3 questions the site doesn't answer (right = left empty). [follow.py](follow.py) runs each 3 times with `--precise --follow` and saves `results/follow-<label>.json`.
