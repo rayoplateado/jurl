@@ -8,6 +8,7 @@
 //! `jurl` would print. A miss ("the page doesn't say") is a normal result, as exit code 1 is; a failure (the page
 //! couldn't be read, a bad key, no credits) is a tool error, as exit code 2 is.
 
+use std::sync::Arc;
 use std::{collections::VecDeque, future::Future, sync::LazyLock};
 
 use anyhow::Result;
@@ -405,8 +406,9 @@ async fn run(client: &Client, argv: &[String]) -> Value {
             args.public_only,
             args.render_sandboxed,
             args.timing,
-        );
-        args.fallback = crate::fallback::Fallback::configured(|key| cfg.get(key))?;
+        )
+        .map(Arc::new);
+        args.fallback = Arc::new(crate::fallback::Fallback::configured(|key| cfg.get(key))?);
         let access = crate::setup::saved_access(&cfg)?;
         crate::page(&args, &cfg, client, &access, &mut Timer::new()).await
     }

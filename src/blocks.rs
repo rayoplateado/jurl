@@ -1,7 +1,7 @@
 //! The default mode, `-q` and `--code`: Jev scores each block, and the best are printed in page order
 //! under their headings.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::atomic::AtomicU64};
 
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
@@ -10,10 +10,13 @@ use crate::{
     answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, answer_text, precise_pick, render_precise},
     decide::choice,
     extract::{self, Block, Extracted, Kind},
-    judge::{Ctx, Item, STATE_TEXT_CHARS},
+    judge::{Ctx, Item, STATE_TEXT_CHARS, tag},
     output::{Rendered, missed, not_found},
     timing::Timer,
 };
+
+/// One question's scores for a page's blocks, and the page's kind (see [`score_blocks`]).
+pub(crate) type BlockScores = (Vec<Option<f64>>, Option<(String, f64)>);
 
 /// Blocks printed when `--max` doesn't say: 12, or 5 with `-q`.
 pub(crate) const DEFAULT_BLOCKS: usize = 12;
@@ -89,12 +92,14 @@ async fn structured_or(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer, otherwise: 
 }
 
 /// Jev's probability for each block (None for headings and blocks too short to judge alone), and the page's kind.
-pub(crate) async fn score_blocks(
-    ctx: &Ctx<'_>,
-    ex: &Extracted,
-    t: &mut Timer,
-) -> Result<(Vec<Option<f64>>, Option<(String, f64)>)> {
-    let args = ctx.args;
+pub(crate) async fn score_blocks(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Result<BlockScores> {
+    Ok(score_blocks_shared(std::slice::from_ref(ctx), ex, t).await?.swap_remove(0))
+}
+
+/// [`score_blocks`] for the questions of one page (see `follow::run_many`): one request for the blocks, each question's entries
+/// on the same items (see [`tag`]). Each question gets its own scores and kind, in the order of `ctxs`.
+pub(crate) async fn score_blocks_shared(ctxs: &[Ctx<'_>], ex: &Extracted, t: &mut Timer) -> Result<Vec<BlockScores>> {
+    let args = ctxs[0].args;
     let is_candidate = |b: &Block| match b.kind {
         Kind::Heading => false,
         Kind::Code => !b.text.trim().is_empty(),
@@ -102,12 +107,12 @@ pub(crate) async fn score_blocks(
     };
     if !ex.blocks.iter().any(is_candidate) {
         if args.code {
-            return Err(not_found(format!("no code blocks in {}", ctx.url)));
+            return Err(not_found(format!("no code blocks in {}", ctxs[0].url)));
         }
         if args.render {
-            bail!("no readable content in {}", ctx.url);
+            bail!("no readable content in {}", ctxs[0].url);
         }
-        bail!("no readable content in {} (if it needs JavaScript, try --render)", ctx.url);
+        bail!("no readable content in {} (if it needs JavaScript, try --render)", ctxs[0].url);
     }
 
     let default = if args.code {
@@ -116,23 +121,39 @@ pub(crate) async fn score_blocks(
         "carries core information of this page — what a reader came here for — rather than navigation, \
          boilerplate, cookie or legal text, promos, sign-up prompts, author bios or comments."
     };
-    let items = ex
+    let n = ctxs.len();
+    let mut items: Vec<Item> = ex
         .blocks
         .iter()
         .map(|b| Item {
             state: json!({ "i": b.i, "kind": b.kind, "text": b.text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
-            questions: if is_candidate(b) {
-                vec![(format!("b{}", b.i), ctx.question(&format!("The block in `blocks` with i={}", b.i), default))]
-            } else {
-                Vec::new()
-            },
+            questions: Vec::new(),
         })
         .collect();
-    let a = ctx.judge("blocks", items, page_questions(args.precise)).await?;
+    for (k, ctx) in ctxs.iter().enumerate() {
+        for (item, b) in items.iter_mut().zip(&ex.blocks) {
+            if is_candidate(b) {
+                let q = ctx.question(&format!("The block in `blocks` with i={}", b.i), default);
+                item.questions.push((format!("b{}{}", b.i, tag(k, n)), q));
+            }
+        }
+    }
+    let mut extra = Map::new();
+    for k in 0..n {
+        for (id, q) in page_questions(args.precise) {
+            extra.insert(format!("{id}{}", tag(k, n)), q);
+        }
+    }
+    let shares: Vec<(&AtomicU64, u64)> = ctxs.iter().map(|c| (c.args.spent.as_ref(), 1)).collect();
+    let a = ctxs[0].judge_shared("blocks", items, extra, &shares).await?;
     t.lap(a.label());
-    let kind = a.choice("page_kind");
-    let scores: Vec<Option<f64>> = ex.blocks.iter().map(|b| a.noul(&format!("b{}", b.i))).collect();
-    Ok((scores, kind))
+    Ok((0..n)
+        .map(|k| {
+            let kind = a.choice(&format!("page_kind{}", tag(k, n)));
+            let scores = ex.blocks.iter().map(|b| a.noul(&format!("b{}{}", b.i, tag(k, n)))).collect();
+            (scores, kind)
+        })
+        .collect())
 }
 
 /// The questions about the whole page, asked with its blocks. `page_kind` is what the plain output prints: --precise

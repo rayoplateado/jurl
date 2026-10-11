@@ -90,7 +90,7 @@ pub struct Link {
     pub marginal: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Extracted {
     pub title: String,
     /// The language the page declares (BCP 47), as written: its `<html lang>`, else its `xml:lang`. None when it

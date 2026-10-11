@@ -111,6 +111,7 @@ pub(crate) async fn reread(args: &Args, retry: Retry<'_>, asked: &Url, page: Pag
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+    use std::sync::Arc;
 
     use super::*;
     use crate::{
@@ -222,7 +223,7 @@ mod tests {
     ) -> anyhow::Result<(Url, Extracted, Served, Vec<String>)> {
         let mut args = crate::cli::Args::parse_from(["jurl", page]);
         args.country = country.map(str::to_string);
-        args.fallback = Fallback::with(proxy.map(proxy_url).as_deref(), first);
+        args.fallback = Arc::new(Fallback::with(proxy.map(proxy_url).as_deref(), first));
         let target = Url::parse(page).expect("a URL");
         let mut t = crate::timing::Timer::new();
         let config = crate::config::Config::default();

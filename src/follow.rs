@@ -5,29 +5,33 @@
 //! `sitemap.xml`) is read alongside the first page: it often names the right page outright.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering::Relaxed},
+    },
     time::{Duration, Instant},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use reqwest::Client;
-use serde_json::Map;
+use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::{
     answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, answer_text, precise_pick, render_precise},
-    blocks::{render_blocks, score_blocks, top},
+    blocks::{BlockScores, render_blocks, score_blocks_shared, top},
     cli::Args,
     config::Config,
     decide::is_api_error,
     extract::{self, Extracted, Kind, Link},
     fetch::{Retry, Served},
-    judge::{Ctx, Item, is_block_page},
+    judge::{Ctx, Item, is_block_page, tag},
     langtag::{self, Market, Place, Relation},
     links::{self, FieldScores},
     load, load_start,
-    output::{Rendered, missed, not_found},
+    output::{Rendered, is_not_found, miss_json, missed, not_found},
     timing::Timer,
 };
 
@@ -63,6 +67,7 @@ const ASSETS: &[&str] = &[
 ];
 
 /// The site: its host without `www.`, subdomains included (docs.example.com belongs to example.com).
+#[derive(Clone)]
 struct Site {
     root: String,
     /// The search started at the site's front door, so the site itself is what the question is about.
@@ -438,7 +443,7 @@ fn robots_sitemap_urls(body: &str, start: &Url, skip: Option<&Url>) -> Vec<Url> 
 /// The pages a site lists, and the language each declares for itself: a page's own `hreflang` (see
 /// [`crate::sitemaps::url_entries`]), normalized, by its [`links::key`]. A page whose sitemap declares none is not in
 /// `declared`.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Listed {
     /// llms.txt, then the sitemaps, shallowest first. A page listed in several languages keeps one copy (see
     /// [`without_language_copies`]).
@@ -736,72 +741,116 @@ async fn judge(
     client: &Client,
     api_key: &str,
     url: Url,
-    mut ex: Extracted,
+    ex: Extracted,
     site: &Site,
     known: &HashSet<String>,
     field_scores: &FieldScores,
     read: &HashSet<String>,
     served: Served,
 ) -> Result<Visit> {
+    let reads = [Read { args, site, known, field_scores, read }];
+    judge_shared(&reads, client, api_key, url, ex, served).await?.swap_remove(0)
+}
+
+/// One question's reading of a page: its arguments (`ask` is the question, `spent` what its share of Jev's bill is), the site,
+/// and the state its visits keep: the menu links seen so far, its field scores and the pages read.
+struct Read<'a> {
+    args: &'a Args,
+    site: &'a Site,
+    known: &'a HashSet<String>,
+    field_scores: &'a FieldScores,
+    read: &'a HashSet<String>,
+}
+
+/// [`judge`] for the questions that read a page together (see `Joint`): each question gets its visit, and the blocks and the
+/// links of the page go to Jev once for all of them (see `score_blocks_shared`, `links::score_shared`). An error of Jev or a
+/// block page fails the whole page; a page one question has read already fails that question alone.
+async fn judge_shared(
+    reads: &[Read<'_>],
+    client: &Client,
+    api_key: &str,
+    url: Url,
+    ex: Extracted,
+    served: Served,
+) -> Result<Vec<Result<Visit>>> {
     // A lead can read as a page read already (a markdown lead whose HTML page the search read): it is not judged again.
-    if read.contains(&links::key(&url)) {
-        bail!("already read: {url}");
-    }
-    let menus = menus(&ex);
-    let bare = bare_links(&ex);
-    let (found, score, warmth, links, new_field_scores, json_block) = {
-        let ctx = site.ctx(args, client, api_key, &url, &ex);
-        // The links `--links -q` would score, menus and footers included, and the URLs the text writes out. Any host:
-        // the page gives them, so a link to another domain is a candidate like any other, and is scored like one. A menu
-        // link is scored on the first page it's on, not again on every page: on a page far from the question, the
-        // site's "Main page" and "Search" would outscore everything in its text.
-        let candidates = links::candidates(&ctx, &ex, &bare, |u| {
-            let k = links::key(u);
-            Site::reachable(u) && !(menus.contains(&k) && known.contains(&k))
-        });
-        // The answer the way `-q` finds it (score_blocks), and with --precise, the way --precise picks it.
-        let answer = async {
-            let mut t = Timer::new();
-            // A page with nothing to read is a page without the answer; Jev failing, or the page being a block page,
-            // fails the read.
-            let (scores, kind) = match score_blocks(&ctx, &ex, &mut t).await {
-                Ok(s) => s,
-                Err(e) if is_api_error(&e) || is_block_page(&e) => return Err(e),
-                Err(_) => return Ok((None, 0.0)),
-            };
-            let warmth = scores.iter().flatten().copied().fold(0.0, f64::max);
-            if args.precise {
-                let keep = top(&scores, PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS);
-                if keep.is_empty() {
-                    return Ok((None, warmth));
-                }
-                match precise_pick(&ctx, &ex, &keep, &mut t).await {
-                    Ok(pick) => {
-                        let p = pick.p;
-                        Ok((Some((Found::Precise(pick), p)), warmth))
-                    }
-                    Err(e) if is_api_error(&e) || is_block_page(&e) => Err(e),
-                    Err(_) => Ok((None, warmth)),
-                }
-            } else {
-                let keep = top(&scores, args.threshold(), args.limit(5));
-                let best = keep.iter().map(|&(_, p)| p).fold(0.0, f64::max);
-                Ok(((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth))
-            }
-        };
-        // `--links -q` on the same page, at the same time; a long search also asks for the answer's field, except for
-        // the links whose field the search already has.
-        let long = args.follow.unwrap_or(5) >= 10;
-        let leads = links::score(&ctx, &candidates, "Following the link in `links`", long.then_some(field_scores));
-        let (answer, scores) = tokio::join!(answer, leads);
-        let (answer, warmth) = answer?;
+    let live: Vec<usize> = (0..reads.len()).filter(|&k| !reads[k].read.contains(&links::key(&url))).collect();
+    let judged = if live.is_empty() {
+        Vec::new()
+    } else {
+        let live_reads: Vec<&Read> = live.iter().map(|&k| &reads[k]).collect();
+        judge_live(&live_reads, client, api_key, &url, &ex, served).await?
+    };
+    let mut judged = judged.into_iter();
+    Ok((0..reads.len())
+        .map(|k| match live.contains(&k) {
+            true => Ok(judged.next().expect("a visit for each question that reads the page")),
+            false => Err(anyhow!("already read: {url}")),
+        })
+        .collect())
+}
+
+/// [`judge_shared`] for the questions in `reads`, which all read the page: one visit each, in their order.
+async fn judge_live(
+    reads: &[&Read<'_>],
+    client: &Client,
+    api_key: &str,
+    url: &Url,
+    ex: &Extracted,
+    served: Served,
+) -> Result<Vec<Visit>> {
+    let menus = menus(ex);
+    let bare = bare_links(ex);
+    let ctxs: Vec<Ctx> = reads.iter().map(|r| r.site.ctx(r.args, client, api_key, url, ex)).collect();
+    // The links `--links -q` would score, menus and footers included, and the URLs the text writes out. Any host: the page
+    // gives them, so a link to another domain is a candidate like any other, and is scored like one. A menu link is scored
+    // on the first page it's on, not again on every page: on a page far from the question, the site's "Main page" and
+    // "Search" would outscore everything in its text.
+    let candidates: Vec<Vec<Link>> = reads
+        .iter()
+        .zip(&ctxs)
+        .map(|(r, ctx)| {
+            links::candidates(ctx, ex, &bare, |u| {
+                let k = links::key(u);
+                Site::reachable(u) && !(menus.contains(&k) && r.known.contains(&k))
+            })
+        })
+        .collect();
+    // A long search (`--follow 10` and up) also asks for the answer's field, except for the links whose field it has.
+    let fields: Vec<Option<&FieldScores>> =
+        reads.iter().map(|r| (r.args.follow.unwrap_or(5) >= 10).then_some(r.field_scores)).collect();
+    let lists: Vec<&[Link]> = candidates.iter().map(Vec::as_slice).collect();
+    // The answer the way `-q` finds it (score_blocks), and the links `--links -q` scores, at the same time.
+    let mut t = Timer::new();
+    let (blocks, leads) = tokio::join!(
+        score_blocks_shared(&ctxs, ex, &mut t),
+        links::score_shared(&ctxs, &lists, "Following the link in `links`", &fields),
+    );
+    // A page with nothing to read is a page without the answer; Jev failing, or the page being a block page, fails the read.
+    let blocks: Vec<Option<BlockScores>> = match blocks {
+        Ok(b) => b.into_iter().map(Some).collect(),
+        Err(e) if is_api_error(&e) || is_block_page(&e) => return Err(e),
+        Err(_) => reads.iter().map(|_| None).collect(),
+    };
+    let leads: Vec<(Vec<f64>, FieldScores)> = match leads {
+        Ok(l) => l,
+        Err(e) if is_api_error(&e) || is_block_page(&e) => return Err(e),
+        Err(_) => candidates.iter().map(|c| (vec![0.0; c.len()], FieldScores::new())).collect(),
+    };
+    let answers = join_all(ctxs.iter().zip(blocks).map(|(ctx, scored)| answer(ctx, ex, scored))).await;
+
+    let mut visits = Vec::with_capacity(reads.len());
+    let mut answers = answers.into_iter();
+    for (k, ((cands, (scores, new_field_scores)), ctx)) in candidates.into_iter().zip(leads).zip(&ctxs).enumerate() {
+        let (answer, warmth) = answers.next().expect("an answer for each question")?;
+        let args = reads[k].args;
         // --precise, and the page's text gives no answer above the threshold: its JSON-LD values are judged on their own
         // (see `blocks::structured_pick`); the one that answers is appended to the page, so its pick is rendered from it.
         let (answer, json_block) = match answer {
             Some((Found::Precise(pick), p)) if p >= args.threshold_for(true) => (Some((Found::Precise(pick), p)), None),
             text => {
                 let mut t = Timer::new();
-                match crate::blocks::structured_pick(&ctx, &ex, &mut t).await? {
+                match crate::blocks::structured_pick(ctx, ex, &mut t).await? {
                     Some((block, pick)) => {
                         let p = pick.p;
                         (Some((Found::Precise(pick), p)), Some(block))
@@ -810,12 +859,8 @@ async fn judge(
                 }
             }
         };
-        let (scores, new_field_scores) = match scores {
-            Ok(s) => s,
-            Err(e) if is_api_error(&e) || is_block_page(&e) => return Err(e),
-            Err(_) => (vec![0.0; candidates.len()], FieldScores::new()),
-        };
-        let links = candidates
+        let long = args.follow.unwrap_or(5) >= 10;
+        let links = cands
             .into_iter()
             .zip(scores)
             .map(|(l, p)| {
@@ -823,15 +868,53 @@ async fn judge(
                 ScoredLink { url: l.url, text: l.text, p: if menu { p * LONG_MENU } else { p } }
             })
             .collect();
-        match answer {
-            Some((found, score)) => (Some(found), score, warmth, links, new_field_scores, json_block),
-            None => (None, 0.0, warmth, links, new_field_scores, json_block),
+        let (found, score) = match answer {
+            Some((found, score)) => (Some(found), score),
+            None => (None, 0.0),
+        };
+        let mut page = ex.clone();
+        if let Some(block) = json_block {
+            page.blocks.push(block);
         }
-    };
-    if let Some(block) = json_block {
-        ex.blocks.push(block);
+        visits.push(Visit {
+            url: url.clone(),
+            ex: page,
+            found,
+            score,
+            warmth,
+            links,
+            menus: menus.clone(),
+            new_field_scores,
+            served,
+        });
     }
-    Ok(Visit { url, ex, found, score, warmth, links, menus, new_field_scores, served })
+    Ok(visits)
+}
+
+/// What one question's blocks say about the page (see `judge_live`): with --precise, the span Jev picks from the best blocks
+/// (`precise_pick`), else the best blocks themselves; and how warm the page is for the question. No scores: no answer.
+async fn answer(ctx: &Ctx<'_>, ex: &Extracted, scored: Option<BlockScores>) -> Result<(Option<(Found, f64)>, f64)> {
+    let Some((scores, kind)) = scored else { return Ok((None, 0.0)) };
+    let args = ctx.args;
+    let warmth = scores.iter().flatten().copied().fold(0.0, f64::max);
+    if args.precise {
+        let keep = top(&scores, PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS);
+        if keep.is_empty() {
+            return Ok((None, warmth));
+        }
+        let mut t = Timer::new();
+        return match precise_pick(ctx, ex, &keep, &mut t).await {
+            Ok(pick) => {
+                let p = pick.p;
+                Ok((Some((Found::Precise(pick), p)), warmth))
+            }
+            Err(e) if is_api_error(&e) || is_block_page(&e) => Err(e),
+            Err(_) => Ok((None, warmth)),
+        };
+    }
+    let keep = top(&scores, args.threshold(), args.limit(5));
+    let best = keep.iter().map(|&(_, p)| p).fold(0.0, f64::max);
+    Ok(((!keep.is_empty()).then_some((Found::Blocks { scores, keep, kind }, best)), warmth))
 }
 
 /// A page waiting to be opened, and how jurl would get there.
@@ -948,7 +1031,7 @@ impl Search {
             args.timing,
             &args.reach,
             &args.cookies,
-            args.stealth.as_ref(),
+            args.stealth.as_deref(),
             &args.fallback,
         );
 
@@ -1096,7 +1179,7 @@ impl Search {
                         ctx.args.timing,
                         &ctx.args.reach,
                         &ctx.args.cookies,
-                        ctx.args.stealth.as_ref(),
+                        ctx.args.stealth.as_deref(),
                         &ctx.args.fallback,
                     ),
                 )
@@ -1358,7 +1441,7 @@ async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &C
         args.timing,
         &args.reach,
         &args.cookies,
-        args.stealth.as_ref(),
+        args.stealth.as_deref(),
         &args.fallback,
     );
     let question = args.ask.as_deref().unwrap_or_default();
@@ -1375,6 +1458,665 @@ async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &C
     Ok(true)
 }
 
+/// A question of a joint search (see [`Joint`]): its arguments (`ask` is the question, `spent` its share of Jev's bill), and what
+/// its own answer keeps, as [`Search`] keeps it.
+struct Asked {
+    args: Args,
+    /// The pages judged for this question: its visits.
+    pages: usize,
+    /// The pages this question has opened, against its own budget (see [`Joint::per_run`]).
+    opened: usize,
+    found: Vec<Ranked>,
+    closest: Option<Ranked>,
+    log: Vec<Reading>,
+    field_scores: FieldScores,
+    /// The question is answered, or its trail has gone cold, or its budget is spent: no page is judged for it any more.
+    stopped: bool,
+    cold: bool,
+    /// Whether the site's own search was tried for it (see [`Joint::second_pass_for`]).
+    second_pass: bool,
+    start_served: Served,
+}
+
+/// A lead of a joint search, one per URL. `score[k]` is how likely following it leads to question `k`'s answer, and `p[k]` the
+/// link's own score for `k`; both are 0 for a question that never scored the link.
+struct JointLead {
+    url: Url,
+    text: String,
+    path: Vec<Url>,
+    p: Vec<f64>,
+    score: Vec<f64>,
+}
+
+/// `--questions-file`: one search of a site for several questions (see `run_many`). The leads, the visited pages and the budget
+/// are shared: each page read is judged for every question not answered yet, so the page's blocks and links go to Jev once for
+/// all of them. Each question keeps its own answer and stop rules (see [`Search::done`]), and the search goes on while any
+/// question is still asked.
+struct Joint {
+    start: Url,
+    site: Site,
+    /// The questions, in the order they were given.
+    asked: Vec<Asked>,
+    /// The leads not opened yet, one per URL, and each one's place in `leads`, by [`links::key`].
+    leads: Vec<JointLead>,
+    index: HashMap<String, usize>,
+    /// The pages opened, read or not: a search doesn't open the same page twice.
+    visited: HashSet<String>,
+    /// The pages read, by [`links::key`].
+    read: HashSet<String>,
+    /// The menu links of the pages read (see [`menus`]).
+    known: HashSet<String>,
+    robots: RobotsByHost,
+    /// The pages opened in all.
+    opened: usize,
+    /// `--follow N`: the most pages the run may open in all, or with `per_run` false each question may open for itself.
+    max: usize,
+    /// Whether `max` caps the run's pages in all (the default), else each question's own picks (`--own-budget`): then a page
+    /// opened for one question is opened for all, and counts against each of their budgets.
+    per_run: bool,
+    /// How sure a page must be of its answer to be found: the default of --precise.
+    threshold: f64,
+}
+
+impl Joint {
+    /// The start of a joint search (see [`Search::start`]): the start page is loaded and judged for every question at once, the
+    /// site's own files are read once, and each question's hints are scored into the shared leads (see [`site_hints_shared`]).
+    async fn start(
+        args: Vec<Args>,
+        cfg: &Config,
+        client: &Client,
+        api_key: &str,
+        start: &Url,
+        t: &mut Timer,
+    ) -> Result<Joint> {
+        let first = &args[0];
+        let max = first.follow.unwrap_or(5).max(1);
+        let retry = Retry::for_run(
+            first.no_browser_retry,
+            first.timing,
+            &first.reach,
+            &first.cookies,
+            first.stealth.as_deref(),
+            &first.fallback,
+        );
+        let mut site = Site::new(start);
+        let (loaded, index) = tokio::join!(load_start(first, cfg, start, t), site_index(start, retry));
+        let (url, ex, served) = loaded?;
+        site.language = ex.lang.clone();
+        let lang = StartLanguage::of(&url, ex.lang.as_deref(), first.country.as_deref());
+        let linked = crate::hosts::linked_hosts(
+            start,
+            ex.links.iter().chain(&ex.site_links).map(|l| &l.url),
+            crate::hosts::LINKED_HOSTS,
+        );
+        let (none_known, none_read, none_fields) = (HashSet::new(), HashSet::new(), FieldScores::new());
+        let reads: Vec<Read> = args
+            .iter()
+            .map(|a| Read { args: a, site: &site, known: &none_known, field_scores: &none_fields, read: &none_read })
+            .collect();
+        let (visits, (robots, hints)) =
+            tokio::join!(judge_shared(&reads, client, api_key, url.clone(), ex, served), async {
+                let SiteFiles { robots, mut listed } = index.pages(start, &site, lang.as_ref(), retry).await;
+                let (llms, linked_listed) = tokio::join!(
+                    linked_llms(start, &linked, retry),
+                    linked_sitemaps(start, &linked, lang.as_ref(), retry),
+                );
+                listed.links.extend(llms);
+                listed.append(linked_listed);
+                (robots, site_hints_shared(&args, client, api_key, start, &site, lang.as_ref(), listed).await)
+            },);
+        let mut visits: Vec<Visit> = visits?.into_iter().collect::<Result<_>>()?;
+        let mut hints = hints?;
+        // The start page is the first hint of each question, and its own fit for that question (see `Search::start`).
+        let start_fit: Vec<f64> = hints.iter_mut().map(|h| h.remove(0).p.max(COLD_PAGE)).collect();
+        let mut robots_by_host = RobotsByHost::default();
+        robots_by_host.insert(start, Robots::parse(robots.as_deref().unwrap_or_default()));
+        let first_url = url;
+        let (per_run, threshold) = (!first.own_budget, first.threshold_for(true));
+        let mut joint = Joint {
+            start: start.clone(),
+            site,
+            asked: args
+                .into_iter()
+                .map(|args| Asked {
+                    args,
+                    pages: 0,
+                    opened: 1,
+                    found: Vec::new(),
+                    closest: None,
+                    log: Vec::new(),
+                    field_scores: FieldScores::new(),
+                    stopped: false,
+                    cold: false,
+                    second_pass: false,
+                    start_served: served,
+                })
+                .collect(),
+            leads: Vec::new(),
+            index: HashMap::new(),
+            visited: HashSet::from([links::key(start), links::key(&first_url)]),
+            read: HashSet::from([links::key(&first_url)]),
+            known: HashSet::new(),
+            robots: robots_by_host,
+            opened: 1,
+            max,
+            per_run,
+            threshold,
+        };
+        let first_path = vec![first_url];
+        for (k, visit) in visits.drain(..).enumerate() {
+            joint.absorb_visit(k, visit, start_fit[k], 1.0, first_path.clone());
+        }
+        for (k, list) in hints.into_iter().enumerate() {
+            for l in list {
+                joint.add_lead(&l.url, &l.text, std::slice::from_ref(start), k, l.p, l.p);
+            }
+        }
+        Ok(joint)
+    }
+
+    /// Takes question `k`'s visit of a page read (see [`Search::absorb`]): the visit's menus and pages are the search's, its
+    /// links become leads scored for `k`, and the visit is found, or closest, if it answers. `lead_score` and `lead_p` are the
+    /// lead the page was reached by, for `k`; `path` is how jurl got there.
+    fn absorb_visit(&mut self, k: usize, mut v: Visit, lead_score: f64, lead_p: f64, path: Vec<Url>) {
+        self.known.extend(v.menus.iter().cloned());
+        self.visited.insert(links::key(&v.url));
+        self.read.insert(links::key(&v.url));
+        let asked = &mut self.asked[k];
+        asked.field_scores.extend(std::mem::take(&mut v.new_field_scores));
+        asked.pages += 1;
+        asked.log.push(Reading { url: v.url.clone(), warmth: v.warmth, score: v.score });
+        // Hot or cold, as in `Search::absorb`.
+        let best_link = v.links.iter().map(|l| l.p).fold(0.0, f64::max);
+        let warmer = (best_link / lead_p.max(0.05)).min(1.0);
+        let heat =
+            if path.len() == 1 { 1.0 } else { COLD_PAGE + (1.0 - COLD_PAGE) * v.warmth.max(best_link).max(warmer) };
+        let decay = HOP_DECAY.powi(path.len() as i32 - 1);
+        for l in &v.links {
+            self.add_lead(&l.url, &l.text, &path, k, l.p, l.p * decay * heat);
+        }
+        let rank = v.score * lead_score;
+        let threshold = self.threshold;
+        let asked = &mut self.asked[k];
+        if v.found.is_some() && v.score >= threshold {
+            asked.found.push(Ranked { rank, visit: v, path });
+        } else if v.found.is_some() && asked.closest.as_ref().is_none_or(|c| rank > c.rank) {
+            asked.closest = Some(Ranked { rank, visit: v, path });
+        }
+    }
+
+    /// Adds a lead for question `k`: a URL that is a lead already keeps its best score for each question, and the path of its
+    /// best score. (A lead is never added twice; see [`Joint::index`].)
+    fn add_lead(&mut self, url: &Url, text: &str, path: &[Url], k: usize, p: f64, score: f64) {
+        let key = links::key(url);
+        let at = match self.index.get(&key) {
+            Some(&at) => at,
+            None => {
+                let n = self.asked.len();
+                self.leads.push(JointLead {
+                    url: url.clone(),
+                    text: text.to_string(),
+                    path: path.to_vec(),
+                    p: vec![0.0; n],
+                    score: vec![0.0; n],
+                });
+                self.index.insert(key, self.leads.len() - 1);
+                self.leads.len() - 1
+            }
+        };
+        let lead = &mut self.leads[at];
+        let best = lead.score.iter().copied().fold(0.0, f64::max);
+        if score > lead.score[k] {
+            lead.score[k] = score;
+            lead.p[k] = p;
+        }
+        if score > best {
+            lead.path = path.to_vec();
+        }
+    }
+
+    /// Rebuilds [`Joint::index`] after the leads have been taken out of the list.
+    fn reindex(&mut self) {
+        self.index = self.leads.iter().enumerate().map(|(i, l)| (links::key(&l.url), i)).collect();
+    }
+
+    /// The next pages to open, for the questions still asked (see [`Search::next_batch`]): the leads the robots rules allow, the
+    /// stop rules of each question (see [`Search::done`]), then the best few leads by their best score for a question still asked,
+    /// with Jev's pick among them made for all the questions at once (see [`rank_next_steps`]). Empty once every question stopped.
+    async fn next_batch(&mut self, client: &Client, api_key: &str, t: &mut Timer) -> Result<Vec<JointLead>> {
+        if self.per_run && self.opened >= self.max {
+            for a in &mut self.asked {
+                a.stopped = true;
+            }
+            return Ok(Vec::new());
+        }
+        self.leads.retain(|l| !self.visited.contains(&links::key(&l.url)));
+        self.reindex();
+        let Some(first) = self.asked.iter().position(|a| !a.stopped) else { return Ok(Vec::new()) };
+        // Each lead is checked against its own host's robots.txt first: a lead the rules drop brings the next one up, which may be
+        // on a host not read yet, so this goes round until the best few are all read and checked (see [`Search::next_batch`]).
+        let args = self.asked[first].args.clone();
+        let retry = Retry::for_run(
+            args.no_browser_retry,
+            args.timing,
+            &args.reach,
+            &args.cookies,
+            args.stealth.as_deref(),
+            &args.fallback,
+        );
+        let mut read = 0;
+        loop {
+            self.leads.retain(|l| self.robots.allows(&l.url));
+            let best: Vec<Url> = self.leads.iter().take(SHORTLIST).map(|l| l.url.clone()).collect();
+            let n = self.robots.load_for(&best, retry).await;
+            if n == 0 {
+                break;
+            }
+            read += n;
+        }
+        if read > 0 {
+            t.lap(format!("robots {read}"));
+        }
+        self.reindex();
+        for (k, a) in self.asked.iter_mut().enumerate() {
+            if a.stopped {
+                continue;
+            }
+            let best = self.leads.iter().map(|l| l.score[k]).fold(0.0, f64::max);
+            let best_found = a.found.iter().map(|f| f.rank).fold(0.0, f64::max);
+            if !a.found.is_empty() && best <= best_found + BETTER_BY {
+                a.stopped = true;
+            } else if best < COLD_TRAIL {
+                a.stopped = true;
+                a.cold = true;
+            } else if !self.per_run && a.opened >= self.max {
+                a.stopped = true;
+            }
+        }
+        let active: Vec<usize> = (0..self.asked.len()).filter(|&k| !self.asked[k].stopped).collect();
+        if active.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.leads.sort_by(|a, b| best_of(b, &active).total_cmp(&best_of(a, &active)));
+        // Jev picks the next pages out of the best few, side by side, or says none of them leads anywhere (see `next_batch`).
+        // The run's budget (the default) takes one pick list for every question still asked; with `--own-budget` each question picks its own
+        // pages, in its own order, and they count against its own budget.
+        let width = if self.max >= 10 { PARALLEL_LONG } else { PARALLEL };
+        let ranked = {
+            let empty = Extracted::default();
+            let ctxs: Vec<Ctx> = active
+                .iter()
+                .map(|&k| self.site.ctx(&self.asked[k].args, client, api_key, &self.start, &empty))
+                .collect();
+            let short: Vec<&JointLead> = self.leads.iter().take(SHORTLIST).collect();
+            if short.len() > width && self.max < 10 { rank_next_steps(&ctxs, &short).await? } else { None }
+        };
+        t.lap("next");
+        let mut picks: Vec<usize> = Vec::new();
+        let mut own: Vec<usize> = vec![0; self.asked.len()];
+        if self.per_run {
+            let n = width.min(self.max - self.opened);
+            let order: Vec<usize> = match &ranked {
+                Some(probs) => {
+                    let best_at = |i: usize| probs.iter().map(|p| p[i]).fold(0.0, f64::max);
+                    let mut order: Vec<usize> = (0..probs[0].len()).collect();
+                    order.sort_by(|&x, &y| best_at(y).total_cmp(&best_at(x)));
+                    order
+                }
+                None => (0..self.leads.len()).collect(),
+            };
+            picks = order.into_iter().take(n).collect();
+        } else {
+            for (j, &k) in active.iter().enumerate() {
+                let n = width.min(self.max - self.asked[k].opened);
+                let shortlist = ranked.as_ref().map_or(0, |probs| probs[j].len());
+                let mut order: Vec<usize> = (0..shortlist).collect();
+                if let Some(probs) = &ranked {
+                    order.sort_by(|&x, &y| probs[j][y].total_cmp(&probs[j][x]));
+                }
+                let mut rest: Vec<usize> = (shortlist..self.leads.len()).collect();
+                rest.sort_by(|&x, &y| self.leads[y].score[k].total_cmp(&self.leads[x].score[k]));
+                order.extend(rest);
+                let mine: Vec<usize> = order.into_iter().take(n).collect();
+                own[k] = mine.len();
+                for i in mine {
+                    if !picks.contains(&i) {
+                        picks.push(i);
+                    }
+                }
+            }
+        }
+        let mut batch: Vec<JointLead> = Vec::new();
+        for i in picks.into_iter().collect::<BTreeSet<_>>().into_iter().rev() {
+            batch.push(self.leads.remove(i));
+        }
+        self.reindex();
+        for lead in &batch {
+            self.visited.insert(links::key(&lead.url));
+        }
+        self.opened += batch.len();
+        for &k in &active {
+            self.asked[k].opened += if self.per_run { batch.len() } else { own[k] };
+        }
+        Ok(batch)
+    }
+
+    /// Opens a step's pages: each is loaded once and judged for every question still asked (see [`judge_shared`]), and each
+    /// question takes its visit of each page (see [`Joint::absorb_visit`]). A page that fails to load, or is in another language
+    /// than the start page's, is skipped for every question (see [`Search::absorb_batch`]).
+    async fn open(
+        &mut self,
+        batch: Vec<JointLead>,
+        cfg: &Config,
+        client: &Client,
+        api_key: &str,
+        t: &mut Timer,
+    ) -> Result<()> {
+        let live: Vec<usize> = (0..self.asked.len()).filter(|&k| !self.asked[k].stopped).collect();
+        let judged: Vec<Result<Option<Vec<Result<Visit>>>>> = {
+            let this = &*self;
+            let args = &this.asked[live[0]].args;
+            let live = &live;
+            join_all(batch.iter().map(|lead| async move {
+                let mut lt = Timer::new();
+                let (url, ex, served) = match load(args, cfg, &lead.url, &mut lt).await {
+                    Ok(loaded) => loaded,
+                    Err(e) => {
+                        if args.timing {
+                            eprintln!("jurl: skipped {}: {e:#}", lead.url);
+                        }
+                        return Ok(None);
+                    }
+                };
+                if let Some(other) = other_language(this.site.language.as_deref(), ex.lang.as_deref()) {
+                    if args.timing {
+                        eprintln!("jurl: skipped {}: {other}", lead.url);
+                    }
+                    return Ok(None);
+                }
+                let reads: Vec<Read> = live
+                    .iter()
+                    .map(|&k| Read {
+                        args: &this.asked[k].args,
+                        site: &this.site,
+                        known: &this.known,
+                        field_scores: &this.asked[k].field_scores,
+                        read: &this.read,
+                    })
+                    .collect();
+                Ok(Some(judge_shared(&reads, client, api_key, url, ex, served).await?))
+            }))
+            .await
+        };
+        t.lap(format!("{} pages", batch.len()));
+        let judged: Vec<Option<Vec<Result<Visit>>>> = judged.into_iter().collect::<Result<_>>()?;
+        for (lead, visits) in batch.into_iter().zip(judged) {
+            let Some(visits) = visits else { continue };
+            for (&k, visit) in live.iter().zip(visits) {
+                // A visit that fails (a page one question has read already) is no visit for that question.
+                let Ok(visit) = visit else { continue };
+                let mut path = lead.path.clone();
+                path.push(visit.url.clone());
+                self.absorb_visit(k, visit, lead.score[k], lead.p[k], path);
+            }
+        }
+        Ok(())
+    }
+
+    /// Opens pages until every question has stopped (see [`Joint::next_batch`]).
+    async fn read_until_stop(&mut self, cfg: &Config, client: &Client, api_key: &str, t: &mut Timer) -> Result<()> {
+        loop {
+            let batch = self.next_batch(client, api_key, t).await?;
+            if batch.is_empty() {
+                return Ok(());
+            }
+            self.open(batch, cfg, client, api_key, t).await?;
+        }
+    }
+
+    /// The whole search: the pages opened until every question has stopped; then, for a precise run, each question that found no
+    /// answer gets the site's own search results as leads, once (see [`second_pass`]), and the search goes on for those.
+    async fn read_all(&mut self, cfg: &Config, client: &Client, api_key: &str, t: &mut Timer) -> Result<()> {
+        self.read_until_stop(cfg, client, api_key, t).await?;
+        // The budget grows once for the run, however many questions get results (as `Search` grows it once).
+        let mut more = false;
+        for k in 0..self.asked.len() {
+            let a = &self.asked[k];
+            if a.args.precise && a.found.is_empty() && !a.second_pass {
+                self.asked[k].second_pass = true;
+                if self.second_pass_for(k, client, api_key).await? {
+                    self.asked[k].stopped = false;
+                    more = true;
+                }
+            }
+        }
+        if more {
+            self.max += SECOND_PASS;
+            self.read_until_stop(cfg, client, api_key, t).await?;
+        }
+        Ok(())
+    }
+
+    /// Question `k`'s share of [`second_pass`]: the site's own search results for it, not read yet, become its leads (scored for
+    /// `k` alone). True when there were any.
+    async fn second_pass_for(&mut self, k: usize, client: &Client, api_key: &str) -> Result<bool> {
+        let args = self.asked[k].args.clone();
+        let retry = Retry::for_run(
+            args.no_browser_retry,
+            args.timing,
+            &args.reach,
+            &args.cookies,
+            args.stealth.as_deref(),
+            &args.fallback,
+        );
+        let question = args.ask.as_deref().unwrap_or_default();
+        let mut results = crate::site_search::candidates(&self.start, question, true, retry).await;
+        results.retain(|l| !self.visited.contains(&links::key(&l.url)));
+        if results.is_empty() {
+            return Ok(false);
+        }
+        let start = self.start.clone();
+        let scores = {
+            let empty = Extracted::default();
+            let ctx = self.site.ctx(&args, client, api_key, &start, &empty);
+            links::score(&ctx, &results, "The page at the URL in `links`", None).await?.0
+        };
+        for (l, p) in results.iter().zip(scores) {
+            self.add_lead(&l.url, &l.text, std::slice::from_ref(&start), k, p, p);
+        }
+        Ok(true)
+    }
+
+    /// Question `k`'s result, as [`Search::conclude`] makes it from the question's own state.
+    fn conclude(&mut self, k: usize, client: &Client, api_key: &str) -> Result<Rendered> {
+        let a = &mut self.asked[k];
+        Search {
+            site: self.site.clone(),
+            max: self.max,
+            threshold: self.threshold,
+            pages: a.pages,
+            opened: a.opened,
+            leads: Vec::new(),
+            visited: HashSet::new(),
+            read: HashSet::new(),
+            known: HashSet::new(),
+            field_scores: FieldScores::new(),
+            robots: RobotsByHost::default(),
+            found: std::mem::take(&mut a.found),
+            closest: a.closest.take(),
+            log: std::mem::take(&mut a.log),
+            cold: a.cold,
+            start_served: a.start_served,
+        }
+        .conclude(&a.args, client, api_key)
+    }
+}
+
+/// The best score of a lead for the questions in `active`.
+fn best_of(lead: &JointLead, active: &[usize]) -> f64 {
+    active.iter().map(|&k| lead.score[k]).fold(0.0, f64::max)
+}
+
+/// [`rank_next_step`] for several questions at once: one request, with a choice per question over the same leads. The result has
+/// each question's probability for each lead, in `leads` order. None when Jev gives no choice.
+async fn rank_next_steps(ctxs: &[Ctx<'_>], leads: &[&JointLead]) -> Result<Option<Vec<Vec<f64>>>> {
+    let n = ctxs.len();
+    let items: Vec<Item> = leads
+        .iter()
+        .enumerate()
+        .map(|(i, l)| Item {
+            state: json!({ "i": i, "text": l.text, "path": l.url.path(), "found_on": l.path.last().map(|u| u.path()) }),
+            questions: Vec::new(),
+        })
+        .collect();
+    let mut criteria = Map::new();
+    for (i, l) in leads.iter().enumerate() {
+        let name = if l.text.is_empty() { l.url.path().to_string() } else { format!("{} ({})", l.text, l.url.path()) };
+        criteria.insert(format!("o{i}"), json!(name));
+    }
+    criteria.insert("none".into(), json!("None of these pages has the answer or leads to it"));
+    let mut extra = Map::new();
+    for (k, ctx) in ctxs.iter().enumerate() {
+        let q = ctx.ask();
+        let pick = crate::decide::choice(
+            &format!(
+                "Looking for the answer to this question on this site: which of these pages is the best next step, the page \
+                 that has the answer or the one that leads to it? {q}"
+            ),
+            Value::Object(criteria.clone()),
+        );
+        extra.insert(format!("next{}", tag(k, n)), pick);
+    }
+    let shares: Vec<(&AtomicU64, u64)> = ctxs.iter().map(|c| (c.args.spent.as_ref(), 1)).collect();
+    let a = match ctxs[0].judge_shared("links", items, extra, &shares).await {
+        Ok(a) => a,
+        Err(e) if is_api_error(&e) => return Err(e),
+        Err(_) => return Ok(None),
+    };
+    let probs: Vec<Option<HashMap<String, f64>>> =
+        (0..n).map(|k| a.probabilities(&format!("next{}", tag(k, n)))).collect();
+    if probs.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    Ok(Some(
+        probs
+            .iter()
+            .map(|p| {
+                (0..leads.len())
+                    .map(|i| p.as_ref().and_then(|p| p.get(&format!("o{i}")).copied()).unwrap_or(0.0))
+                    .collect()
+            })
+            .collect(),
+    ))
+}
+
+/// [`site_hints`] for several questions: each question's own list of the site's pages (cut to the same cap, in its order), with
+/// every page numbered once for all the lists, so a page on several lists is one item carrying each question that lists it.
+async fn site_hints_shared(
+    args: &[Args],
+    client: &Client,
+    api_key: &str,
+    start: &Url,
+    site: &Site,
+    lang: Option<&StartLanguage>,
+    listed: Listed,
+) -> Result<Vec<Vec<ScoredLink>>> {
+    let mut lists: Vec<Vec<Link>> = args
+        .iter()
+        .map(|a| {
+            let mut links = candidates(a.ask.as_deref().unwrap_or_default(), listed.clone(), lang, MAX_HINTS);
+            // The start page is scored as a candidate too, first (see [`site_hints`]).
+            links.retain(|l| links::key(&l.url) != links::key(start));
+            links.insert(
+                0,
+                Link { i: 0, url: start.clone(), text: String::new(), context: String::new(), marginal: false },
+            );
+            links
+        })
+        .collect();
+    let mut number: HashMap<String, usize> = HashMap::new();
+    for list in &mut lists {
+        for l in list.iter_mut() {
+            let next = number.len();
+            l.i = *number.entry(links::key(&l.url)).or_insert(next);
+        }
+    }
+    let empty = Extracted::default();
+    let ctxs: Vec<Ctx> = args.iter().map(|a| site.ctx(a, client, api_key, start, &empty)).collect();
+    let refs: Vec<&[Link]> = lists.iter().map(Vec::as_slice).collect();
+    let fields: Vec<Option<&FieldScores>> = vec![None; lists.len()];
+    let scored: Vec<Vec<f64>> = match links::score_shared(&ctxs, &refs, "The page at the URL in `links`", &fields).await
+    {
+        Ok(s) => s.into_iter().map(|(scores, _)| scores).collect(),
+        Err(e) if is_api_error(&e) => return Err(e),
+        Err(_) => lists.iter().map(|l| vec![0.0; l.len()]).collect(),
+    };
+    Ok(lists
+        .into_iter()
+        .zip(scored)
+        .map(|(links, scores)| {
+            links.into_iter().zip(scores).map(|(l, p)| ScoredLink { url: l.url, text: l.text, p }).collect()
+        })
+        .collect())
+}
+
+/// `--questions-file`: every question of `args` answered in one search of the site (see [`Joint`]). The result has one answer per
+/// question, in order: JSON is an array of them, each as a single run prints it, with the question's `question_usage` (its pages and
+/// its share of Jev's input tokens); the run's `usage` is on each. Exits 1 when no question is answered.
+pub async fn run_many(
+    args: &Args,
+    cfg: &Config,
+    client: &Client,
+    api_key: &str,
+    start: Url,
+    t: &mut Timer,
+) -> Result<Rendered> {
+    let questions: Vec<Args> = args
+        .questions
+        .iter()
+        .map(|q| Args { ask: Some(q.clone()), spent: Arc::new(AtomicU64::new(0)), ..args.clone() })
+        .collect();
+    let (_, mut joint) = crate::fetch::start_with_alternate(&start, args.timing, async |u| {
+        Ok((u.clone(), Joint::start(questions.clone(), cfg, client, api_key, u, t).await?))
+    })
+    .await?;
+    joint.read_all(cfg, client, api_key, t).await?;
+    let mut items = Vec::with_capacity(joint.asked.len());
+    let mut text = String::new();
+    let mut answered = 0;
+    for k in 0..joint.asked.len() {
+        let ask = joint.asked[k].args.ask.clone().unwrap_or_default();
+        let usage = json!({
+            "pages": joint.asked[k].pages,
+            "opened": joint.asked[k].opened,
+            "jev_input_tokens": joint.asked[k].args.spent.load(Relaxed),
+        });
+        let result = joint.conclude(k, client, api_key);
+        match result {
+            Ok(rendered) => {
+                answered += 1;
+                let mut doc = rendered.json;
+                doc["question_usage"] = usage;
+                text += &format!("# {ask}\n\n{}", rendered.text);
+                items.push(doc);
+            }
+            Err(e) if is_not_found(&e) => {
+                let mut doc = miss_json(&joint.asked[k].args, &e);
+                doc["question_usage"] = usage;
+                text += &format!("# {ask}\n{e:#}\n\n");
+                items.push(doc);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let n = items.len();
+    let rendered = Rendered { text, json: Value::Array(items) };
+    if answered == 0 {
+        return Err(missed(format!("none of the {n} questions is answered"), rendered));
+    }
+    Ok(rendered)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1384,6 +2126,52 @@ mod tests {
         judge::BlockPage,
     };
     use test_server::{Kind, NO_FALLBACK, Served, reply, retry_off, retry_on, serve_replies, serve_routed};
+
+    #[test]
+    fn a_joint_lead_keeps_each_questions_best_score_and_the_path_of_its_best() {
+        use clap::Parser;
+        let args = Args::parse_from(["jurl", "-q", "What is it?", "x.com"]);
+        let start = Url::parse("https://x.com/").unwrap();
+        let mut joint = Joint {
+            start: start.clone(),
+            site: Site::new(&start),
+            asked: (0..2)
+                .map(|_| Asked {
+                    args: args.clone(),
+                    pages: 0,
+                    opened: 1,
+                    found: Vec::new(),
+                    closest: None,
+                    log: Vec::new(),
+                    field_scores: FieldScores::new(),
+                    stopped: false,
+                    cold: false,
+                    second_pass: false,
+                    start_served: crate::fetch::Served::default(),
+                })
+                .collect(),
+            leads: Vec::new(),
+            index: HashMap::new(),
+            visited: HashSet::new(),
+            read: HashSet::new(),
+            known: HashSet::new(),
+            robots: RobotsByHost::default(),
+            opened: 1,
+            max: 5,
+            per_run: false,
+            threshold: 0.4,
+        };
+        let link = Url::parse("https://x.com/plans").unwrap();
+        let (from_start, from_plans) = (vec![start.clone()], vec![start.clone(), link.clone()]);
+        joint.add_lead(&link, "Plans", &from_start, 0, 0.3, 0.2);
+        joint.add_lead(&link, "Plans", &from_plans, 1, 0.5, 0.4);
+        // A lower score for question 0 from another page changes nothing.
+        joint.add_lead(&link, "Plans", &from_plans, 0, 0.1, 0.05);
+        assert_eq!(joint.leads.len(), 1, "one lead per URL");
+        assert_eq!(joint.leads[0].score, vec![0.2, 0.4]);
+        assert_eq!(joint.leads[0].p, vec![0.3, 0.5]);
+        assert_eq!(joint.leads[0].path, from_plans, "the path of the best score");
+    }
 
     #[test]
     fn menus_are_the_links_outside_the_text() {
@@ -1939,7 +2727,7 @@ mod tests {
         .expect("a sidecar that is set up");
         use clap::Parser;
         let mut args = Args::parse_from(["jurl", "-q", "what does it cost?", "--follow", "2", "http://127.0.0.1:1/"]);
-        args.stealth = Some(stealth);
+        args.stealth = Some(Arc::new(stealth));
         let start = Url::parse(&format!("{base}/tienda")).expect("a URL");
         let err = Search::start(&args, &Config::default(), &test_server::client(), "key", &start, &mut Timer::new())
             .await

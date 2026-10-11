@@ -104,7 +104,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
         ctx.args.timing,
         &ctx.args.reach,
         &ctx.args.cookies,
-        ctx.args.stealth.as_ref(),
+        ctx.args.stealth.as_deref(),
         &ctx.args.fallback,
     );
     let req = clef_keys.as_ref().map(|keys| LookRequest {

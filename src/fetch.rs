@@ -1301,6 +1301,7 @@ fn dom_from_json(url: &Url, stdout: &[u8], exit: impl fmt::Display) -> Result<St
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use std::sync::Arc;
 
     use super::*;
     use test_server::{
@@ -2637,8 +2638,8 @@ mod tests {
         let mut args = crate::cli::Args::parse_from(["jurl", page]);
         args.render = render;
         let proxy = proxy.map(proxy_url);
-        args.fallback = Fallback::with(proxy.as_deref(), false);
-        args.stealth = sidecar;
+        args.fallback = Arc::new(Fallback::with(proxy.as_deref(), false));
+        args.stealth = sidecar.map(Arc::new);
         let cfg = crate::config::Config::with(&[("JURL_LIGHTPANDA", bin.to_str().expect("a path"))]);
         let target = Url::parse(page).expect("a URL");
         let mut t = crate::timing::Timer::new();
@@ -2926,7 +2927,7 @@ mod tests {
         let (proxy, proxy_served) =
             serve_routed(move |_| Some(reply("200 OK", "Content-Type: text/html\r\n", body.as_bytes())));
         let mut args = crate::cli::Args::parse_from(["jurl", &format!("{site}/precio")]);
-        args.fallback = Fallback::with(Some(&proxy_url(&proxy)), true);
+        args.fallback = Arc::new(Fallback::with(Some(&proxy_url(&proxy)), true));
         let target = Url::parse(&args.url).expect("a URL");
         let mut t = crate::timing::Timer::new();
         let (_, ex, served) = crate::load(&args, &crate::config::Config::default(), &target, &mut t)

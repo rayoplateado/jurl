@@ -180,7 +180,9 @@ fn default_max(mode: &str) -> Option<usize> {
 /// `--threshold` outside the range it takes, or a `--follow` it doesn't follow. A run that needs one of them uses the
 /// own keys.
 pub(crate) fn unsupported(args: &Args) -> Option<String> {
-    if args.image || args.vision || args.find.is_some() {
+    if args.questions.len() > 1 {
+        Some("jurl cloud doesn't answer several questions in one run yet (--questions-file)".into())
+    } else if args.image || args.vision || args.find.is_some() {
         Some("jurl cloud doesn't read images yet (--image, --vision, --find)".into())
     } else if args.render {
         Some("jurl cloud doesn't render JavaScript yet (-r)".into())

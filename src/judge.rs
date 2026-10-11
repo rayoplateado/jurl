@@ -1,6 +1,8 @@
 //! Asking Jev: each candidate is an item with its questions, chunked into requests that fit the budget.
 //! A block page fails here.
 
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
 use anyhow::Result;
 use futures::future::join_all;
 use reqwest::Client;
@@ -98,7 +100,20 @@ impl<'a> Ctx<'a> {
 
     /// Chunk items so each request fits the budget, ask all chunks in parallel, merge.
     /// A page that is really a rate-limit or bot-check interstitial fails instead of printing nothing.
-    pub(crate) async fn judge(&self, field: &str, items: Vec<Item>, mut extra: Map<String, Value>) -> Result<Answers> {
+    pub(crate) async fn judge(&self, field: &str, items: Vec<Item>, extra: Map<String, Value>) -> Result<Answers> {
+        self.judge_shared(field, items, extra, &[(self.args.spent.as_ref(), 1)]).await
+    }
+
+    /// [`Ctx::judge`] for the questions of one page asked together (see `follow::run_many`): the items they share go in one
+    /// request, each question's entries carry its own id (see [`tag`]). The tokens billed are split among `shares`, each
+    /// question's counter with its weight (its number of entries), so a question's share is what its entries cost.
+    pub(crate) async fn judge_shared(
+        &self,
+        field: &str,
+        items: Vec<Item>,
+        mut extra: Map<String, Value>,
+        shares: &[(&AtomicU64, u64)],
+    ) -> Result<Answers> {
         extra.insert(
             "blocked".to_string(),
             noul(
@@ -129,6 +144,7 @@ impl<'a> Ctx<'a> {
             merged.input_tokens += a.input_tokens;
             merged.answers.extend(a.answers);
         }
+        split_tokens(merged.input_tokens, shares);
         if let Some(p) = merged.noul("blocked").filter(|&p| p >= BLOCKED_P) {
             let title = if self.title.is_empty() { String::new() } else { format!(": \"{}\"", self.title) };
             return Err(BlockPage(format!(
@@ -138,6 +154,32 @@ impl<'a> Ctx<'a> {
             .into());
         }
         Ok(merged)
+    }
+}
+
+/// The id suffix of question `k` of `n` in a request that carries several questions for one page: none when it carries one,
+/// so a single question's request is the same as it was, else `_{k}`.
+pub(crate) fn tag(k: usize, n: usize) -> String {
+    if n == 1 { String::new() } else { format!("_{k}") }
+}
+
+/// Adds `tokens` to the counters in `shares`, each by its weight (a share of weight 0 gets none). The rounding goes to the
+/// heaviest share, the first of them when several are as heavy. With no weight at all, the first counter takes them.
+fn split_tokens(tokens: u64, shares: &[(&AtomicU64, u64)]) {
+    let total: u64 = shares.iter().map(|(_, w)| w).sum();
+    let Some(first) = shares.first() else { return };
+    if total == 0 {
+        first.0.fetch_add(tokens, Relaxed);
+        return;
+    }
+    let mut parts: Vec<u64> = shares.iter().map(|(_, w)| tokens * w / total).collect();
+    let rest = tokens - parts.iter().sum::<u64>();
+    let heaviest = (0..shares.len()).reduce(|best, k| if shares[k].1 > shares[best].1 { k } else { best });
+    if let Some(k) = heaviest {
+        parts[k] += rest;
+    }
+    for ((counter, _), part) in shares.iter().zip(parts) {
+        counter.fetch_add(part, Relaxed);
     }
 }
 
@@ -225,6 +267,23 @@ mod tests {
         assert!(ctx.ask().starts_with("Where is the company headquartered? (Asked about linear.app:"), "{}", ctx.ask());
         // Each link only points at the note, which the links' state holds once.
         assert_eq!(ctx.ask_per_link(), "Where is the company headquartered? (read it as `asked_about` says)");
+    }
+
+    #[test]
+    fn a_request_bills_each_question_by_its_weight_and_the_rounding_to_the_heaviest() {
+        let (a, b, c) = (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
+        split_tokens(10, &[(&a, 1), (&b, 2), (&c, 0)]);
+        // 10 / 3 = 3 and 20 / 3 = 6; the remainder of 1 goes to b, the heaviest. c has no weight, so it has nothing.
+        assert_eq!((a.load(Relaxed), b.load(Relaxed), c.load(Relaxed)), (3, 7, 0));
+        let (a, b) = (AtomicU64::new(0), AtomicU64::new(0));
+        split_tokens(9, &[(&a, 0), (&b, 0)]);
+        assert_eq!((a.load(Relaxed), b.load(Relaxed)), (9, 0), "no weight: the first counter takes it");
+    }
+
+    #[test]
+    fn a_single_question_has_no_id_suffix_and_several_do() {
+        assert_eq!(tag(0, 1), "");
+        assert_eq!(tag(2, 3), "_2");
     }
 
     /// A block as `judge` gets it: its number, and a question unless it is a heading.

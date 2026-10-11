@@ -32,6 +32,7 @@ mod timing;
 mod update;
 mod vision;
 
+use std::sync::Arc;
 use std::{
     io::{stderr, stdout},
     path::Path,
@@ -167,8 +168,9 @@ async fn run(mut args: Args) -> Result<()> {
     reach::set_reach(&mut args).await?;
     args.country = country::configured(|key| cfg.get(key), args.timing);
     args.stealth =
-        stealth::Sidecar::configured(|key| cfg.get(key), args.public_only, args.render_sandboxed, args.timing);
-    args.fallback = fallback::Fallback::configured(|key| cfg.get(key))?;
+        stealth::Sidecar::configured(|key| cfg.get(key), args.public_only, args.render_sandboxed, args.timing)
+            .map(Arc::new);
+    args.fallback = Arc::new(fallback::Fallback::configured(|key| cfg.get(key))?);
     let access = setup::access(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
@@ -188,6 +190,23 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if !args.url.contains("://") {
         args.url = format!("https://{}", args.url);
     }
+    if let Some(file) = args.questions_file.take() {
+        if args.ask.is_some() {
+            bail!("--questions-file replaces -q: use one or the other");
+        }
+        let text = std::fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
+        args.questions =
+            text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(str::to_string).collect();
+        if args.questions.is_empty() {
+            bail!("{} has no questions in it", file.display());
+        }
+        if args.questions.len() == 1 {
+            // One question is the same run as -q.
+            args.ask = args.questions.pop();
+        } else if !args.precise || args.follow.is_none() {
+            bail!("--questions-file answers each question with --precise --follow N");
+        }
+    }
     if let Some(what) = args.find.take() {
         if args.ask.is_some() {
             bail!("--find already is the question; drop --ask");
@@ -202,10 +221,11 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.precise && (args.image || args.vision || args.links) {
         bail!("--precise picks part of a block: use it with -q or --code -q, not images or links");
     }
-    if args.precise && args.ask.is_none() {
+    let asks = args.ask.is_some() || args.questions.len() > 1;
+    if args.precise && !asks {
         bail!("--precise needs a question: add -q \"…\"");
     }
-    if args.follow.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
+    if args.follow.is_some() && (!asks || args.image || args.vision || args.links) {
         bail!("--follow looks for an answer: use it with -q (and --precise or --code), not images or links");
     }
     Ok(())
@@ -266,6 +286,9 @@ async fn read(
 ) -> Result<Rendered> {
     if args.follow.is_some() {
         let _ = warm.await;
+        if args.questions.len() > 1 {
+            return follow::run_many(args, cfg, client, key, target, t).await;
+        }
         return follow::run(args, cfg, client, key, target, t).await;
     }
     // The start's page, or its `www.` alternate when the bare domain gives no answer (see `fetch::start_with_alternate`).
@@ -319,7 +342,7 @@ async fn load_page(
         args.timing,
         &args.reach,
         &args.cookies,
-        args.stealth.as_ref(),
+        args.stealth.as_deref(),
         &args.fallback,
     );
     let (page, served) = if args.render {
@@ -474,6 +497,21 @@ async fn read_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_questions_file_is_its_questions_and_needs_precise_and_follow() {
+        use clap::Parser;
+        let path = std::env::temp_dir().join(format!("jurl-questions-{}.txt", std::process::id()));
+        std::fs::write(&path, "# two questions\nWhat is it?\n\n  How much is it?  \n").unwrap();
+        let file = path.to_str().unwrap();
+        let mut args = Args::parse_from(["jurl", "-p", "--follow", "--questions-file", file, "x.com"]);
+        prepare(&mut args).unwrap();
+        assert_eq!(args.questions, ["What is it?", "How much is it?"]);
+        assert!(args.ask.is_none());
+        let mut plain = Args::parse_from(["jurl", "--follow", "--questions-file", file, "x.com"]);
+        assert!(prepare(&mut plain).is_err(), "--questions-file answers with --precise");
+        std::fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn a_page_the_stealth_sidecar_served_is_not_rendered_again() {

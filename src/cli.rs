@@ -1,5 +1,10 @@
 //! The command line: the URL and every flag, as clap parses them and `--help` shows them.
 
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicU64},
+};
+
 use clap::Parser;
 
 use crate::answer::PRECISE_THRESHOLD;
@@ -9,7 +14,7 @@ const DEFAULT_THRESHOLD: f64 = 0.5;
 
 /// curl, but it reads the page for you. Jev picks what matters; Clef looks at
 /// the images. Everything printed is literally in the page.
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(version)]
 pub(crate) struct Args {
     /// The page to read, `init` to set up your API keys, `login`, `logout` or `status` for jurl cloud, `update` to
@@ -41,6 +46,22 @@ pub(crate) struct Args {
     /// reading up to this many pages in all [default: 5]. A search from a public address reads only public addresses
     #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]
     pub(crate) follow: Option<usize>,
+    /// With --precise --follow: answer every question in FILE (one per line, `#` for a comment) in one search of the site:
+    /// its pages are read once, and each page is checked against every question not answered yet. Prints one answer per
+    /// question (JSON: an array). Replaces -q.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) questions_file: Option<PathBuf>,
+    /// With --questions-file: each question picks its own next pages, up to --follow N of its own, and a page any question picks
+    /// is read for all of them (see `follow::run_many`). Off by default: there --follow N caps the pages the whole run reads.
+    #[arg(long)]
+    pub(crate) own_budget: bool,
+    /// The questions of --questions-file, read by `prepare`. Not a flag.
+    #[arg(skip)]
+    pub(crate) questions: Vec<String>,
+    /// Jev's input tokens for the reads of this question, its share of each request it shared with other questions (see
+    /// `Ctx::judge_shared`). Not a flag.
+    #[arg(skip)]
+    pub(crate) spent: Arc<AtomicU64>,
     /// Run the page's JavaScript with Lightpanda first (automatic when a page has scripts but no text, or unfilled template placeholders)
     #[arg(short, long)]
     pub(crate) render: bool,
@@ -59,15 +80,15 @@ pub(crate) struct Args {
     /// The cookies this run has been sent: kept in memory for this run alone, and never read from or written to a file
     /// (see `fetch.rs`). Not a flag.
     #[arg(skip)]
-    pub(crate) cookies: reqwest::cookie::Jar,
+    pub(crate) cookies: Arc<reqwest::cookie::Jar>,
     /// The stealth sidecar this run is set up with (see `stealth.rs`), when `JURL_STEALTH_URL` and its token are both set. Its
-    /// memo and its budget are this run's own. Not a flag.
+    /// memo and its budget are this run's own, shared by every question of a run (see `follow::run_many`). Not a flag.
     #[arg(skip)]
-    pub(crate) stealth: Option<crate::stealth::Sidecar>,
+    pub(crate) stealth: Option<Arc<crate::stealth::Sidecar>>,
     /// The fallback proxy this run is set up with (see `fallback.rs`), when `JURL_FALLBACK_PROXY` names one. The hosts it puts on
     /// the proxy are this run's own. Not a flag.
     #[arg(skip)]
-    pub(crate) fallback: crate::fallback::Fallback,
+    pub(crate) fallback: Arc<crate::fallback::Fallback>,
     /// The country this run reads as, from `JURL_COUNTRY` (see `country.rs`): the pages of its region come first, and a start page
     /// the site sends to another country is read again through the fallback proxy. Not a flag.
     #[arg(skip)]

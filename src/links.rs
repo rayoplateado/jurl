@@ -2,7 +2,10 @@
 //! The question is whether following a link leads to the answer, so a menu's "Pricing" counts as much as a link in
 //! the text: it is often the way there.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::atomic::AtomicU64,
+};
 
 use anyhow::Result;
 use serde_json::{Map, json};
@@ -12,7 +15,7 @@ use crate::{
     blocks::top,
     decide::{Answers, noul},
     extract::{Extracted, Link},
-    judge::{Ctx, Item},
+    judge::{Ctx, Item, tag},
     output::{Rendered, not_found},
     timing::Timer,
 };
@@ -158,17 +161,59 @@ pub async fn score(
     what: &str,
     field: Option<&FieldScores>,
 ) -> Result<(Vec<f64>, FieldScores)> {
-    if links.is_empty() {
-        return Ok((Vec::new(), FieldScores::new()));
+    Ok(score_shared(std::slice::from_ref(ctx), &[links], what, &[field]).await?.swap_remove(0))
+}
+
+/// [`score`] for the questions of one page, or of a site's listing (see `follow::run_many`): one request, in which a link that
+/// two questions score is one item carrying both questions (see [`tag`]). `lists[k]` and `fields[k]` are question `k`'s links and
+/// field scores. Each question gets its own scores, in its list's order, and the field scores it asked for.
+pub async fn score_shared(
+    ctxs: &[Ctx<'_>],
+    lists: &[&[Link]],
+    what: &str,
+    fields: &[Option<&FieldScores>],
+) -> Result<Vec<(Vec<f64>, FieldScores)>> {
+    let n = ctxs.len();
+    let per_question: Vec<Vec<Item>> =
+        (0..n).map(|k| items_tagged(&ctxs[k], lists[k], what, fields[k], &tag(k, n))).collect();
+    let (merged, weights) = merge_items(per_question);
+    let answers = if merged.is_empty() {
+        Answers::default()
+    } else {
+        let shares: Vec<(&AtomicU64, u64)> =
+            ctxs.iter().zip(&weights).map(|(c, &w)| (c.args.spent.as_ref(), w)).collect();
+        ctxs[0].judge_shared("links", merged, Map::new(), &shares).await?
+    };
+    Ok((0..n).map(|k| read_tagged(lists[k], &answers, fields[k], &tag(k, n))).collect())
+}
+
+/// Several questions' items as one request's items: an item whose state another question's item has too is the same item, carrying
+/// both questions. Also each question's number of entries, its share of the request's tokens (see `Ctx::judge_shared`).
+fn merge_items(per_question: Vec<Vec<Item>>) -> (Vec<Item>, Vec<u64>) {
+    let mut merged: Vec<Item> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    let mut weights = Vec::with_capacity(per_question.len());
+    for items in per_question {
+        weights.push(items.iter().map(|item| item.questions.len() as u64).sum());
+        for item in items {
+            let state = item.state.to_string();
+            match at.get(&state) {
+                Some(&i) => merged[i].questions.extend(item.questions),
+                None => {
+                    at.insert(state, merged.len());
+                    merged.push(item);
+                }
+            }
+        }
     }
-    let a = ctx.judge("links", items(ctx, links, what, field), Map::new()).await?;
-    Ok(read(links, &a, field))
+    (merged, weights)
 }
 
 /// What `score` asks Jev about, one item per link: its entry in the state and the question whether following it leads
 /// to the answer. A link whose field isn't known yet also gets its field question on the same item, so the two share a
-/// request and the link's state is sent once.
-fn items(ctx: &Ctx<'_>, links: &[Link], what: &str, field: Option<&FieldScores>) -> Vec<Item> {
+/// request and the link's state is sent once. Each question's id carries `tag` (see [`tag`]): several questions of the same
+/// links share a request (see [`score_shared`]).
+fn items_tagged(ctx: &Ctx<'_>, links: &[Link], what: &str, field: Option<&FieldScores>, tag: &str) -> Vec<Item> {
     let q = ctx.ask_per_link();
     // A link off the page's host says where it goes (`--links` keeps them; `--follow` only leaves for a subdomain).
     let host = |l: &Link| l.url.host_str().filter(|h| Some(*h) != ctx.url.host_str()).map(str::to_string);
@@ -180,12 +225,12 @@ fn items(ctx: &Ctx<'_>, links: &[Link], what: &str, field: Option<&FieldScores>)
                 state["host"] = json!(h);
             }
             let mut questions = vec![(
-                format!("l{}", l.i),
+                format!("l{}{tag}", l.i),
                 noul(format!("{what} with i={} is the page that answers this question, or leads to it: {q}", l.i)),
             )];
             if field.is_some_and(|known| !known.contains_key(&key(&l.url))) {
                 questions.push((
-                    format!("f{}", l.i),
+                    format!("f{}{tag}", l.i),
                     noul(format!(
                         "{what} with i={} is about the same field of knowledge as the answer to this question \
                          (chemistry, astronomy, literature, medicine…): {q}",
@@ -200,17 +245,18 @@ fn items(ctx: &Ctx<'_>, links: &[Link], what: &str, field: Option<&FieldScores>)
 
 /// Each link's score from Jev's answers, in `links` order, and the field scores asked for here (not the known ones).
 /// A field Jev left out counts for nothing on this page and isn't kept, so the next page asks it again.
-fn read(links: &[Link], a: &Answers, field: Option<&FieldScores>) -> (Vec<f64>, FieldScores) {
+/// The scores of `links` from Jev's answers to the ids [`items_tagged`] made with `tag`, and the field scores asked for here.
+fn read_tagged(links: &[Link], a: &Answers, field: Option<&FieldScores>, tag: &str) -> (Vec<f64>, FieldScores) {
     let mut asked = FieldScores::new();
     let mut scores = Vec::with_capacity(links.len());
     for l in links {
-        let p = a.noul(&format!("l{}", l.i)).unwrap_or(0.0);
+        let p = a.noul(&format!("l{}{tag}", l.i)).unwrap_or(0.0);
         let k = key(&l.url);
         let f = match field {
             None => 0.0,
             Some(known) => match known.get(&k) {
                 Some(&f) => f,
-                None => match a.noul(&format!("f{}", l.i)) {
+                None => match a.noul(&format!("f{}{tag}", l.i)) {
                     Some(f) => {
                         asked.insert(k, f);
                         f
@@ -373,6 +419,31 @@ mod tests {
     }
 
     #[test]
+    fn a_link_two_questions_score_is_one_item_with_both_questions() {
+        let state = |i: usize| json!({ "i": i, "text": "", "context": "", "path": "/pricing" });
+        let item = |i: usize, ids: &[&str]| Item {
+            state: state(i),
+            questions: ids.iter().map(|id| (id.to_string(), noul("?"))).collect(),
+        };
+        // Question 0 scores links 0 and 1; question 1 scores link 1 (the same state) and link 2.
+        let per_question =
+            vec![vec![item(0, &["l0_0"]), item(1, &["l1_0"])], vec![item(1, &["l1_1"]), item(2, &["l2_1"])]];
+        let (merged, weights) = merge_items(per_question);
+        assert_eq!(merged.len(), 3, "one item per distinct state");
+        assert_eq!(ids(&merged[1]), ["l1_0", "l1_1"]);
+        assert_eq!(weights, vec![2, 2], "each question's entries");
+    }
+
+    #[test]
+    fn a_single_question_keeps_its_ids_and_items() {
+        // One question: the request is the one `items` makes, with no suffix on its ids.
+        let (merged, weights) =
+            merge_items(vec![vec![Item { state: json!({ "i": 0 }), questions: vec![("l0".to_string(), noul("?"))] }]]);
+        assert_eq!(ids(&merged[0]), ["l0"]);
+        assert_eq!(weights, vec![1]);
+    }
+
+    #[test]
     fn same_page_key() {
         assert_eq!(key(&Url::parse("https://x.com/pricing/#plans").unwrap()), "https://x.com/pricing");
     }
@@ -399,7 +470,7 @@ mod tests {
         let links = [link(0, "/rubber"), link(1, "/polyester")];
         let leads = "Following the link in `links`";
 
-        let plain = items(&ctx, &links, leads, None);
+        let plain = items_tagged(&ctx, &links, leads, None, "");
         assert_eq!(ids(&plain[0]), ["l0"]);
         assert_eq!(plain[0].state, json!({ "i": 0, "text": "", "context": "", "path": "/rubber" }));
         assert_eq!(
@@ -413,7 +484,7 @@ mod tests {
 
         // With the field, the link's field question is on its item beside its leads question: the two share a request,
         // and the link's state is sent once.
-        let field = items(&ctx, &links, leads, Some(&FieldScores::new()));
+        let field = items_tagged(&ctx, &links, leads, Some(&FieldScores::new()), "");
         assert_eq!(field.len(), 2);
         assert_eq!(ids(&field[1]), ["l1", "f1"]);
         assert_eq!(field[1].state, plain[1].state);
@@ -447,7 +518,7 @@ mod tests {
 
         // An earlier page asked the field of the rubber page: this page doesn't ask it again.
         let known = FieldScores::from([(key(&links[0].url), 0.9)]);
-        let again = items(&ctx, &links, leads, Some(&known));
+        let again = items_tagged(&ctx, &links, leads, Some(&known), "");
         assert_eq!(ids(&again[0]), ["l0"]);
         assert_eq!(ids(&again[1]), ["l1", "f1"]);
 
@@ -460,18 +531,18 @@ mod tests {
             ..Answers::default()
         };
         // The known field counts as if it were asked; the one asked here comes back, for the search to keep.
-        let (scores, asked) = read(&links, &answers, Some(&known));
+        let (scores, asked) = read_tagged(&links, &answers, Some(&known), "");
         assert!((scores[0] - (0.2 + 0.8 * FIELD_WEIGHT * 0.9)).abs() < 1e-9, "{scores:?}");
         assert!((scores[1] - (0.1 + 0.9 * FIELD_WEIGHT * 0.5)).abs() < 1e-9, "{scores:?}");
         assert_eq!(asked, FieldScores::from([(key(&links[1].url), 0.5)]));
 
         // Without a field, a score is the leads alone, and nothing is asked.
-        let (scores, asked) = read(&links, &answers, None);
+        let (scores, asked) = read_tagged(&links, &answers, None, "");
         assert_eq!(scores, vec![0.2, 0.1]);
         assert!(asked.is_empty());
 
         // A field Jev left out counts for nothing on this page and isn't kept: the next page asks it again.
-        let (scores, asked) = read(&links, &Answers::default(), Some(&FieldScores::new()));
+        let (scores, asked) = read_tagged(&links, &Answers::default(), Some(&FieldScores::new()), "");
         assert_eq!(scores, vec![0.0, 0.0]);
         assert!(asked.is_empty());
     }

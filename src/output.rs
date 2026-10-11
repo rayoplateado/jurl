@@ -58,12 +58,18 @@ pub(crate) fn exit_code(e: &anyhow::Error) -> u8 {
 
 /// What goes to stdout. A miss prints nothing, except in JSON with --precise: what came closest, with
 /// `"answer": null`, or with nothing close, `"closest": null` too, so a script reading stdout always gets an object.
-/// The JSON carries the run's `usage` either way, so a miss can be costed too.
+/// The JSON carries the run's `usage` either way, so a miss can be costed too. A run of several questions prints an array,
+/// one object per question, each with the run's `usage`.
 pub(crate) fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::Usage) -> Result<Option<String>> {
     let json = |v: &Value| -> Result<String> {
         let mut v = v.clone();
-        if let Some(o) = v.as_object_mut() {
-            o.insert("usage".to_string(), usage.json(&args.fallback));
+        let total = usage.json(&args.fallback);
+        if let Some(items) = v.as_array_mut() {
+            for item in items.iter_mut().filter_map(Value::as_object_mut) {
+                item.insert("usage".to_string(), total.clone());
+            }
+        } else if let Some(o) = v.as_object_mut() {
+            o.insert("usage".to_string(), total);
         }
         Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
     };
@@ -84,6 +90,15 @@ pub(crate) fn write_out(out: &mut impl Write, text: &str) -> std::io::Result<()>
     match write!(out, "{text}") {
         Err(e) if e.kind() == ErrorKind::BrokenPipe => Ok(()),
         r => r,
+    }
+}
+
+/// The JSON of a question that was not answered, as `--json` prints it: what came closest, else `"answer": null` with the message.
+pub(crate) fn miss_json(args: &Args, e: &anyhow::Error) -> Value {
+    match not_found_in(e) {
+        Some(NotFound { closest: Some(r), .. }) => r.json.clone(),
+        Some(n) => no_answer(args, &n.message),
+        None => json!({}),
     }
 }
 
@@ -181,6 +196,21 @@ mod tests {
         args.json = false;
         let found = Rendered { text: "$8\n".into(), json: json!({ "answer": "$8" }) };
         assert_eq!(stdout_for(&args, &Ok(found), &usage).unwrap().as_deref(), Some("$8\n"));
+    }
+
+    #[test]
+    fn a_run_of_several_questions_prints_each_answer_with_the_run_usage() {
+        let args = Args::parse_from(["jurl", "--precise", "--json", "--follow", "-q", "price?", "jurl.dev"]);
+        let usage = decide::Usage::new();
+        usage.jev(&Answers { requests: 2, input_tokens: 99, ..Answers::default() });
+        let done = Ok(Rendered { text: String::new(), json: json!([{ "answer": "$8" }, { "answer": null }]) });
+        let out = stdout_for(&args, &done, &usage).unwrap().expect("JSON");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let items = v.as_array().expect("an array, one object per question");
+        assert_eq!(items.len(), 2);
+        for item in items {
+            assert_eq!(item["usage"]["jev"]["input_tokens"], 99);
+        }
     }
 
     /// A stdout whose reader has gone: every write fails with this kind of error.
