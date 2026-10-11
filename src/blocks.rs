@@ -7,7 +7,9 @@ use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, answer_text, precise_pick, render_precise},
+    answer::{
+        PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, answer_text, precise_pick, render_precise, structured_choices,
+    },
     decide::choice,
     extract::{self, Block, Extracted, Kind},
     judge::{Ctx, Item, STATE_TEXT_CHARS},
@@ -72,7 +74,8 @@ pub(crate) async fn structured_pick(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer
     }
     let mut block = alone.blocks[i].clone();
     block.i = ex.blocks.len();
-    let pick = Pick { block: ex.blocks.len(), range: 0..block.text.len(), p };
+    let choices = structured_choices(ctx, &alone, &scores, i, p);
+    let pick = Pick { block: ex.blocks.len(), range: 0..block.text.len(), p, choices };
     Ok(Some((block, pick)))
 }
 

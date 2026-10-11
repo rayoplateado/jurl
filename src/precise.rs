@@ -7,13 +7,18 @@ use crate::extract::{Block, Kind, collapse};
 
 /// A candidate answer: `range` of the text of block `block`, where `block` is that block's `i` (its number on the
 /// page, which is also its index in `Extracted::blocks`). A table cell carries its row and column as `label`, which is
-/// what Jev is shown ("30 s (CPU time · Paid)"); the answer is still just the cell.
+/// what Jev is shown ("30 s (CPU time · Paid)"); the answer is still just the cell. `context` is that row and column
+/// alone ("CPU time · Paid"), what a choice says the answer is for. A span inside a cell has the cell's context.
 #[derive(Debug, Clone)]
 pub(crate) struct Span {
     pub(crate) block: usize,
     pub(crate) range: Range<usize>,
     pub(crate) label: Option<String>,
+    pub(crate) context: Option<String>,
 }
+
+/// A table cell: its range, its label and its context (see [`Span`]).
+type TableCell = (Range<usize>, Option<String>, Option<String>);
 
 /// More than this and the request stops being one cheap call.
 const MAX_CANDIDATES: usize = 200;
@@ -38,10 +43,13 @@ const CURRENCY: &[&str] = &["$", "€", "£", "¥", "US$", "USD", "EUR", "GBP"];
 /// Candidate spans from `blocks`, taken from each block in turn so a long one (a big table) can't use up the
 /// whole budget. Every span is a substring of its block's text, and names that block by its `i`.
 pub(crate) fn candidates(blocks: &[&Block]) -> Vec<Span> {
+    let cells: Vec<Vec<TableCell>> = blocks.iter().map(|b| table_cells(&b.text)).collect();
     let mut queues: Vec<std::vec::IntoIter<(Range<usize>, Option<String>)>> = blocks
         .iter()
-        .map(|b| {
-            let mut spans = table_cells(&b.text);
+        .zip(&cells)
+        .map(|(b, cells)| {
+            let mut spans: Vec<(Range<usize>, Option<String>)> =
+                cells.iter().map(|(r, label, _)| (r.clone(), label.clone())).collect();
             let plain = if b.kind == Kind::Code { code_spans(&b.text) } else { prose_spans(&b.text) };
             // Rows make a table whatever the block's kind (a markdown page's table is a paragraph): its words belong to its
             // cells, so a span across a cell's border ("25 cm. | Compartimentos") is no answer. Code can hold pipes of its own.
@@ -65,7 +73,8 @@ pub(crate) fn candidates(blocks: &[&Block]) -> Vec<Span> {
                 if s.chars().count() > MAX_SPAN_CHARS || !seen.insert(label.clone().unwrap_or_else(|| s.to_string())) {
                     continue;
                 }
-                out.push(Span { block: blocks[b].i, range: r, label });
+                let context = context_of(&cells[b], &r);
+                out.push(Span { block: blocks[b].i, range: r, label, context });
                 live = true;
                 break;
             }
@@ -77,9 +86,15 @@ pub(crate) fn candidates(blocks: &[&Block]) -> Vec<Span> {
     out
 }
 
+/// The context of the table cell that `r` is in (see [`Span::context`]), if it is in one.
+fn context_of(cells: &[TableCell], r: &Range<usize>) -> Option<String> {
+    cells.iter().find(|(c, _, _)| c.start <= r.start && r.end <= c.end).and_then(|(_, _, context)| context.clone())
+}
+
 /// The cells of a table written as `| a | b |` lines, each with its row's first cell and its column's header: in a
-/// table comparing plans, "10 ms" and "30 s" only mean something next to "Free" and "Paid".
-fn table_cells(text: &str) -> Vec<(Range<usize>, Option<String>)> {
+/// table comparing plans, "10 ms" and "30 s" only mean something next to "Free" and "Paid". Each cell has its label
+/// ("30 s (CPU time · Paid)") and its context ("CPU time · Paid").
+fn table_cells(text: &str) -> Vec<TableCell> {
     let rows: Vec<Vec<Range<usize>>> = table_rows(text).into_iter().map(|row| row_cells(&row, text)).collect();
     if rows.len() < 2 {
         return Vec::new();
@@ -104,10 +119,16 @@ fn table_cells(text: &str) -> Vec<(Range<usize>, Option<String>)> {
                 continue;
             }
             let column = header.get(j).cloned().unwrap_or_default();
+            // What Jev is shown: a first-column cell is named by the cell next to it, as a glossary's formula is by its synonym.
             let row_name = if j == 0 { next.as_str() } else { name.as_str() };
-            let context = [row_name, column.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>();
-            let label = (!context.is_empty()).then(|| format!("{value} ({})", context.join(" · ")));
-            out.push((r.clone(), label));
+            let shown = [row_name, column.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>();
+            let label = (!shown.is_empty()).then(|| format!("{value} ({})", shown.join(" · ")));
+            // What a choice says it is for: a first-column cell is the row's name itself, so only its column names it. The
+            // cell next to it is another answer's value (a price), not what this one is.
+            let context = if j == 0 { vec![column.as_str()] } else { vec![name.as_str(), column.as_str()] };
+            let context = context.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>();
+            let context = (!context.is_empty()).then(|| context.join(" · "));
+            out.push((r.clone(), label, context));
         }
     }
     out
@@ -870,13 +891,13 @@ mod tests {
     #[test]
     fn short_winners_stay_whole() {
         for text in ["5,000 requests per hour", "629.88 K (356.73 °C, 674.11 °F)", "count back from the last item"] {
-            let span = Span { block: 0, range: 0..text.len(), label: None };
+            let span = Span { block: 0, range: 0..text.len(), label: None, context: None };
             assert!(!refinable(text, &span), "{text}");
         }
         let text = "| Limit | Free | Paid |";
-        let cell = Span { block: 0, range: 0..text.len(), label: Some("x".into()) };
+        let cell = Span { block: 0, range: 0..text.len(), label: Some("x".into()), context: None };
         assert!(!refinable(text, &cell));
-        assert!(refinable(FOOTER, &Span { block: 0, range: 0..FOOTER.len(), label: None }));
+        assert!(refinable(FOOTER, &Span { block: 0, range: 0..FOOTER.len(), label: None, context: None }));
     }
 
     #[test]
@@ -997,5 +1018,33 @@ mod tests {
         );
         // A sentence that ends its block has nothing after it but punctuation, which is no context.
         assert_eq!(link(&url, "Free.", &(0..4)), "https://vercel.com/kb/guide/is-vercel-soc-2-compliant#:~:text=Free");
+    }
+
+    #[test]
+    fn a_first_column_cell_is_named_by_its_column_and_not_by_the_cell_beside_it() {
+        // Jev is shown the cell beside a name as its name (#66's glossary rule: a formula by its synonym), so the label
+        // stays as it was. A choice's context is the column alone: the price beside a model is no name for the model.
+        let b = block(Kind::Table, "| Model | Input |\n| Gemini X | $0.10 |");
+        let spans = candidates(&[&b]);
+        let name = spans.iter().find(|s| &b.text[s.range.clone()] == "Gemini X").expect("the name");
+        assert_eq!(name.label.as_deref(), Some("Gemini X ($0.10 · Model)"));
+        assert_eq!(name.context.as_deref(), Some("Model"));
+        let price = spans.iter().find(|s| &b.text[s.range.clone()] == "$0.10").expect("the price");
+        assert_eq!(price.context.as_deref(), Some("Gemini X · Input"));
+    }
+
+    #[test]
+    fn a_cell_is_its_own_context_and_a_value_inside_it_has_the_cells() {
+        // The cell's context is its row and column without the value; a value inside the cell is in that context too, and
+        // a span outside any table has none.
+        let b = block(Kind::Table, "| | Bag | Place |\n| Economy | 1 bag up to 10 kg. | Overhead |");
+        let spans = candidates(&[&b]);
+        let cell =
+            spans.iter().find(|s| s.label.as_deref() == Some("1 bag up to 10 kg. (Economy · Bag)")).expect("the cell");
+        assert_eq!(cell.context.as_deref(), Some("Economy · Bag"));
+        let inner = spans.iter().find(|s| &b.text[s.range.clone()] == "10 kg").expect("the value in the cell");
+        assert_eq!(inner.label, None);
+        assert_eq!(inner.context.as_deref(), Some("Economy · Bag"));
+        assert!(candidates(&[&block(Kind::Para, "Costs $8 a month.")]).iter().all(|s| s.context.is_none()));
     }
 }

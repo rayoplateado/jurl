@@ -280,7 +280,7 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
-| `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`, `structured`), and the `level` or `lang` when the block has one |
+| `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`, `structured`), and the `level` or `lang` when the block has one. When the page has more answers to the question, a `--precise` answer also gives `choices`: the chosen answer first, then each other answer Jev scored at 0.15 or more (a JSON-LD value's other values at the answer's 0.4; with `--follow`, from every page that answers), each with `label` (what it is for: a table cell's row and column, a list item's words before its colon, else the heading above it, empty when none names it), `value` (the answer, as the page has it), `quote` (its block, or a table's header and row) and `link`. Only with two or more; a miss has none |
 | `-t, --timing` | Where the time went, on stderr |
 | `jurl init` | Set or replace your API keys, or sign in to jurl cloud |
 | `jurl login` | Sign this computer in to [jurl cloud](#jurl-cloud) |

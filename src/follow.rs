@@ -16,7 +16,7 @@ use serde_json::Map;
 use url::Url;
 
 use crate::{
-    answer::{PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, answer_text, precise_pick, render_precise},
+    answer::{Choice, PRECISE_BLOCK_FLOOR, PRECISE_BLOCKS, Pick, answer_text, finish, precise_pick, render_precise},
     blocks::{render_blocks, score_blocks, top},
     cli::Args,
     config::Config,
@@ -1179,6 +1179,7 @@ impl Search {
         self.found.sort_by(|a, b| b.rank.total_cmp(&a.rank));
         // The usage's route is the page that answers, or the start page when the search misses (see `Usage::record_route`).
         crate::decide::USAGE.record_route(self.found.first().map_or(self.start_served, |best| best.visit.served));
+        let choices = answer_choices(&self.found);
         let (ranked, missed_by) = match self.found.into_iter().next() {
             Some(best) => (best, None),
             None => match self.closest {
@@ -1217,7 +1218,8 @@ impl Search {
         let Ranked { visit: v, path, .. } = ranked;
         let ctx = self.site.ctx(args, client, api_key, &v.url, &v.ex);
         let rendered = match &v.found {
-            Some(Found::Precise(pick)) => render_precise(&ctx, &v.ex, pick, Some(&path)),
+            // The answers of every page that answers, the chosen one first (see `answer_choices`). A miss lists none.
+            Some(Found::Precise(pick)) => render_precise(&ctx, &v.ex, &Pick { choices, ..pick.clone() }, Some(&path)),
             Some(Found::Blocks { scores, keep, kind }) => {
                 render_blocks(&ctx, &v.ex, scores, keep, kind.clone(), Some(&path))?
             }
@@ -1230,6 +1232,27 @@ impl Search {
             eprintln!("jurl: found after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
         }
         Ok(rendered)
+    }
+}
+
+/// The choices of a search that found answers: the best page's answer first, then every other answer of the found pages (each
+/// with its own page's link), most likely first, without repeats. Nothing when no page answers. A page that doesn't answer
+/// adds none: its candidates are not answers to the question.
+fn answer_choices(found: &[Ranked]) -> Vec<Choice> {
+    let Some(best) = found.first().and_then(precise_of) else { return Vec::new() };
+    let Some(chosen) = best.choices.first().cloned() else { return Vec::new() };
+    // The pool starts with the best page's choices, its chosen answer first: that one is `chosen`, so it is skipped here.
+    let mut rest: Vec<Choice> =
+        found.iter().filter_map(precise_of).flat_map(|p| p.choices.iter().cloned()).skip(1).collect();
+    rest.sort_by(|a, b| b.p.total_cmp(&a.p));
+    finish(std::iter::once(chosen).chain(rest).collect())
+}
+
+/// The --precise answer of a page the search read, when it has one.
+fn precise_of(r: &Ranked) -> Option<&Pick> {
+    match &r.visit.found {
+        Some(Found::Precise(pick)) => Some(pick),
+        _ => None,
     }
 }
 
@@ -2467,5 +2490,41 @@ mod tests {
                     Sitemap: ftp://x.com/e.xml\n";
         let urls: Vec<String> = robots_sitemap_urls(body, &start, Some(&own)).iter().map(Url::to_string).collect();
         assert_eq!(urls, ["https://x.com/a.xml", "https://x.com/b.xml", "https://x.com/c.xml"]);
+    }
+
+    #[test]
+    fn a_search_lists_the_best_pages_answer_first_then_every_other_answer_by_share() {
+        let choice = |value: &str, p: f64, link: &str| Choice {
+            label: String::new(),
+            value: value.into(),
+            quote: value.into(),
+            link: link.into(),
+            p,
+        };
+        let answering = |page: &str, choices: Vec<Choice>| {
+            let mut v = visit_of(page, 1.0, choices[0].p, false, &[]);
+            let p = choices[0].p;
+            v.found = Some(Found::Precise(Pick { block: 0, range: 0..1, p, choices }));
+            v
+        };
+        let best = answering(
+            "https://x.com/pricing",
+            vec![choice("$8", 0.9, "https://x.com/pricing#a"), choice("$14", 0.2, "https://x.com/pricing#b")],
+        );
+        let other = answering("https://x.com/blog", vec![choice("$3", 0.5, "https://x.com/blog#c")]);
+        let found = [
+            Ranked { rank: 0.9, visit: best, path: vec![u("https://x.com/pricing")] },
+            Ranked { rank: 0.45, visit: other, path: vec![u("https://x.com/blog")] },
+        ];
+        let got: Vec<(String, String)> = answer_choices(&found).into_iter().map(|c| (c.value, c.link)).collect();
+        assert_eq!(
+            got,
+            [
+                ("$8".to_string(), "https://x.com/pricing#a".to_string()),
+                ("$3".to_string(), "https://x.com/blog#c".to_string()),
+                ("$14".to_string(), "https://x.com/pricing#b".to_string()),
+            ]
+        );
+        assert!(answer_choices(&[]).is_empty());
     }
 }
