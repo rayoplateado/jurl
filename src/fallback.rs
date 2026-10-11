@@ -1,5 +1,5 @@
 //! Rung 3 of the read ladder: a residential fallback proxy, used only for a host that refused the direct clients in this run
-//! with HTTP 202, 401, 403 or 429 (or from its first request under `JURL_PROXY_FIRST=1`).
+//! with HTTP 202, 401, 403 or 429, or after the server reset its stream (or from its first request under `JURL_PROXY_FIRST=1`).
 //!
 //! The credential is `JURL_FALLBACK_PROXY=http://user:pass@host:port`. jurl does not print it: a `-t` line names the host only,
 //! and an error from a request through the proxy has the URL and credential taken out of it (see [`Fallback::scrubbed`]).
@@ -20,7 +20,7 @@ use reqwest::{Client, StatusCode, redirect::Policy};
 use url::Url;
 
 use crate::{
-    fetch::{RenderRefused, host_key},
+    fetch::{RenderRefused, ServerReset, host_key},
     reach,
 };
 
@@ -115,10 +115,15 @@ impl Fallback {
     /// The error of a request, scrubbed of the proxy's URL and credential when the request went through the proxy (see
     /// [`scrub_with`]). A direct request's error is returned as it is, and so is the guard's refusal, which names no address and
     /// is looked for by its type. So is a render's refusal ([`RenderRefused`]): its message is the page's URL, status and
-    /// Retry-After, never the proxy's.
+    /// Retry-After, never the proxy's. So is a reset of the stream ([`ServerReset`]), whose message is its reason alone.
     pub(crate) fn scrubbed(&self, via_proxy: bool, err: anyhow::Error) -> anyhow::Error {
         match &self.proxy {
-            Some(proxy) if via_proxy && !reach::refused(err.as_ref()) && !err.is::<RenderRefused>() => {
+            Some(proxy)
+                if via_proxy
+                    && !reach::refused(err.as_ref())
+                    && !err.is::<RenderRefused>()
+                    && !err.is::<ServerReset>() =>
+            {
                 anyhow!(scrub_with(&proxy.url, &format!("{err:#}")))
             }
             _ => err,
@@ -343,6 +348,14 @@ mod tests {
         assert!(refused.downcast_ref::<reach::NotPublic>().is_some(), "the guard's refusal keeps its type");
         let proxied = fb.scrubbed(true, anyhow!("via http://user:s3cret@proxy.test:8080"));
         assert!(!format!("{proxied:#}").contains("s3cret"), "{proxied:#}");
+    }
+
+    #[test]
+    fn a_stream_reset_keeps_its_type_through_the_proxy_scrub() {
+        let fb = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
+        let reset = ServerReset { reason: h2::Reason::INTERNAL_ERROR, via_proxy: true };
+        let kept = fb.scrubbed(true, reset.into());
+        assert!(kept.downcast_ref::<ServerReset>().is_some(), "{kept:#}");
     }
 
     #[test]

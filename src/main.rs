@@ -266,7 +266,9 @@ async fn read(
         let _ = warm.await;
         return follow::run(args, cfg, client, key, target, t).await;
     }
-    let (url, ex, served) = load(args, cfg, &target, t).await?;
+    // The start's page, or its `www.` alternate when the bare domain gives no answer (see `fetch::start_with_alternate`).
+    let (url, ex, served) =
+        fetch::start_with_alternate(&target, args.timing, async |u| load(args, cfg, u, t).await).await?;
     decide::USAGE.record_route(served);
     let _ = warm.await;
 

@@ -1294,7 +1294,12 @@ pub async fn run(
     start: Url,
     t: &mut Timer,
 ) -> Result<Rendered> {
-    let mut search = Search::start(args, cfg, client, api_key, &start, t).await?;
+    // The search starts from the address that answers, its start page's `www.` alternate when the bare domain gives no answer
+    // (see `fetch::start_with_alternate`): the site's own files are read from that address too.
+    let (start, mut search) = crate::fetch::start_with_alternate(&start, args.timing, async |u| {
+        Ok((u.clone(), Search::start(args, cfg, client, api_key, u, t).await?))
+    })
+    .await?;
     let empty = Extracted::default();
     let site_ctx = search.site.ctx(args, client, api_key, &start, &empty);
     read_batches(args, cfg, client, api_key, &mut search, &site_ctx, t).await?;
