@@ -88,19 +88,24 @@ async fn structured_or(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer, otherwise: 
     }
 }
 
-/// Jev's probability for each block (None for headings and blocks too short to judge alone), and the page's kind.
+/// Whether Jev is asked about a block: a paragraph or list item of a sentence or more (not in --code), a code block, and a
+/// heading only when it is a headline (`Block::href`). A section title is shown with the block after it, and never answers.
+fn is_candidate(code: bool, b: &Block) -> bool {
+    match b.kind {
+        Kind::Heading => !code && b.href.is_some() && b.text.chars().count() >= extract::SHORT_BLOCK_CHARS,
+        Kind::Code => !b.text.trim().is_empty(),
+        _ => !code && b.text.chars().count() >= extract::SHORT_BLOCK_CHARS,
+    }
+}
+
+/// Jev's probability for each block (None for section titles and blocks too short to judge alone), and the page's kind.
 pub(crate) async fn score_blocks(
     ctx: &Ctx<'_>,
     ex: &Extracted,
     t: &mut Timer,
 ) -> Result<(Vec<Option<f64>>, Option<(String, f64)>)> {
     let args = ctx.args;
-    let is_candidate = |b: &Block| match b.kind {
-        Kind::Heading => false,
-        Kind::Code => !b.text.trim().is_empty(),
-        _ => !args.code && b.text.chars().count() >= extract::SHORT_BLOCK_CHARS,
-    };
-    if !ex.blocks.iter().any(is_candidate) {
+    if !ex.blocks.iter().any(|b| is_candidate(args.code, b)) {
         if args.code {
             return Err(not_found(format!("no code blocks in {}", ctx.url)));
         }
@@ -121,7 +126,7 @@ pub(crate) async fn score_blocks(
         .iter()
         .map(|b| Item {
             state: json!({ "i": b.i, "kind": b.kind, "text": b.text.chars().take(STATE_TEXT_CHARS).collect::<String>() }),
-            questions: if is_candidate(b) {
+            questions: if is_candidate(args.code, b) {
                 vec![(format!("b{}", b.i), ctx.question(&format!("The block in `blocks` with i={}", b.i), default))]
             } else {
                 Vec::new()
@@ -158,6 +163,25 @@ fn page_questions(precise: bool) -> Map<String, Value> {
     )])
 }
 
+/// The blocks to print, in page order: the kept ones, and the short list items that go with a kept item. A section title
+/// is printed just before the next block that is printed; a kept headline is a block of its own.
+fn selected_blocks<'a>(ex: &'a Extracted, kept: &HashSet<usize>) -> Vec<&'a Block> {
+    let mut pending_heading = None;
+    let mut selected = Vec::new();
+    let items = extract::short_items_of_kept_lists(&ex.blocks, |i| kept.contains(&i));
+    for b in &ex.blocks {
+        if b.kind == Kind::Heading && !kept.contains(&b.i) {
+            pending_heading = Some(b);
+        } else if kept.contains(&b.i) || items.contains(&b.i) {
+            if let Some(h) = pending_heading.take() {
+                selected.push(h);
+            }
+            selected.push(b);
+        }
+    }
+    selected
+}
+
 /// The kept blocks in page order, each with its heading, as markdown and JSON. `path` is how --follow got here.
 pub(crate) fn render_blocks(
     ctx: &Ctx<'_>,
@@ -169,19 +193,7 @@ pub(crate) fn render_blocks(
 ) -> Result<Rendered> {
     let args = ctx.args;
     let kept: HashSet<usize> = keep.iter().map(|&(i, _)| i).collect();
-    let mut pending_heading = None;
-    let mut selected = Vec::new();
-    let items = extract::short_items_of_kept_lists(&ex.blocks, |i| kept.contains(&i));
-    for b in &ex.blocks {
-        if b.kind == Kind::Heading {
-            pending_heading = Some(b);
-        } else if kept.contains(&b.i) || items.contains(&b.i) {
-            if let Some(h) = pending_heading.take() {
-                selected.push(h);
-            }
-            selected.push(b);
-        }
-    }
+    let selected = selected_blocks(ex, &kept);
     if selected.is_empty() {
         if args.ask.is_some() {
             return Err(not_found(format!("nothing in {} answers that (try a lower --threshold)", ctx.url)));
@@ -249,5 +261,44 @@ mod tests {
         // --precise prints the answer, not the kind of page, so Jev isn't asked for the kind.
         assert!(page_questions(false).contains_key("page_kind"));
         assert!(page_questions(true).is_empty());
+    }
+
+    #[test]
+    fn only_a_headline_or_a_sentence_is_a_candidate() {
+        let page = r#"<body><main><article><h2><a href="/news/x">A headline long enough to be judged here</a></h2>
+            <h2><a href="/pricing">Pricing</a></h2><h2>Opinión de la semana sobre el tema</h2>
+            <p>A paragraph of the page that is long enough to be judged on its own.</p></article></main></body>"#;
+        let ex = crate::extract::html(page, &url::Url::parse("https://example.com/post/").unwrap());
+        let by = |t: &str| ex.blocks.iter().find(|b| b.text == t).unwrap();
+        assert!(is_candidate(false, by("A headline long enough to be judged here")));
+        assert!(!is_candidate(true, by("A headline long enough to be judged here")), "not with --code");
+        assert!(!is_candidate(false, by("Pricing")), "a link too short to be judged alone");
+        assert!(!is_candidate(false, by("Opinión de la semana sobre el tema")), "a section title");
+        assert!(is_candidate(false, by("A paragraph of the page that is long enough to be judged on its own.")));
+    }
+
+    #[test]
+    fn a_kept_headline_is_printed_and_a_section_title_goes_with_the_block_after_it() {
+        let page = r#"<body><main><h2>Opinión de la semana sobre el tema</h2>
+            <h2><a href="/news/x">A headline long enough to be judged here</a></h2>
+            <p>A paragraph of the page that is long enough to be judged on its own.</p></main></body>"#;
+        let ex = crate::extract::html(page, &url::Url::parse("https://example.com/post/").unwrap());
+        let printed = |kept: usize| -> Vec<&str> {
+            let kept: HashSet<usize> = [kept].into_iter().collect();
+            selected_blocks(&ex, &kept).into_iter().map(|b| b.text.as_str()).collect()
+        };
+        let headline = ex.blocks.iter().position(|b| b.text.starts_with("A headline")).unwrap();
+        let para = ex.blocks.iter().position(|b| b.text.starts_with("A paragraph")).unwrap();
+        assert_eq!(
+            printed(headline),
+            ["Opinión de la semana sobre el tema", "A headline long enough to be judged here"]
+        );
+        assert_eq!(
+            printed(para),
+            [
+                "A headline long enough to be judged here",
+                "A paragraph of the page that is long enough to be judged on its own."
+            ]
+        );
     }
 }

@@ -1,0 +1,107 @@
+[
+ {
+  "start": "cal.com",
+  "q": "What is the monthly price of the cheapest paid plan?",
+  "group": "pricing",
+  "answer": "$12",
+  "right": true,
+  "pages": 3,
+  "tokens": 80285,
+  "ms": 3831,
+  "path": [
+   "https://cal.com/",
+   "https://cal.com/pricing"
+  ]
+ },
+ {
+  "start": "developers.cloudflare.com",
+  "q": "What is the CPU time limit for Workers on the paid plan?",
+  "group": "docs",
+  "answer": "5 min (default: 30 seconds)",
+  "right": true,
+  "pages": 4,
+  "tokens": 84242,
+  "ms": 3685,
+  "path": [
+   "https://developers.cloudflare.com/",
+   "https://developers.cloudflare.com/workers/platform/limits/"
+  ]
+ },
+ {
+  "start": "basecamp.com",
+  "q": "Who is the CEO of Basecamp?",
+  "group": "company",
+  "answer": "Liza Randall",
+  "right": false,
+  "pages": 1,
+  "tokens": 52496,
+  "ms": 1157,
+  "path": [
+   "https://basecamp.com/"
+  ]
+ },
+ {
+  "start": "www.ikea.com/us/en/",
+  "q": "How many days do I have to return new, unopened products to IKEA?",
+  "group": "support",
+  "answer": "365 days",
+  "right": true,
+  "pages": 3,
+  "tokens": 39036,
+  "ms": 2653,
+  "path": [
+   "https://www.ikea.com/us/en/",
+   "https://www.ikea.com/us/en/customer-service/returns-claims/"
+  ]
+ },
+ {
+  "start": "telegram.org",
+  "q": "What is the largest file you can send on Telegram without Premium?",
+  "group": "product",
+  "answer": "2 GB",
+  "right": true,
+  "pages": 3,
+  "tokens": 107360,
+  "ms": 2355,
+  "path": [
+   "https://telegram.org/",
+   "https://telegram.org/faq"
+  ]
+ },
+ {
+  "start": "once.es",
+  "q": "¿En qué año se creó la ONCE?",
+  "group": "es",
+  "answer": "1938",
+  "right": true,
+  "pages": 3,
+  "tokens": 26448,
+  "ms": 2894,
+  "path": [
+   "https://www.once.es/",
+   "https://www.once.es/conocenos/la-historia"
+  ]
+ },
+ {
+  "start": "canonical.com",
+  "q": "What was Canonical's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 103007,
+  "ms": 13674,
+  "path": []
+ },
+ {
+  "start": "todoist.com",
+  "q": "What was Doist's revenue in 2024?",
+  "group": "trap",
+  "answer": null,
+  "right": true,
+  "pages": 5,
+  "tokens": 114191,
+  "ms": 4480,
+  "path": []
+ }
+]
