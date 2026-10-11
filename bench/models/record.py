@@ -6,26 +6,33 @@
 #   TYPESAFE_API_KEY=… python3 record.py --out results/jev-pricing.jsonl     # upstream: Jev, port 18100
 #   python3 record.py --upstream http://127.0.0.1:8000/v1/systemone --port 18101 --out results/cand-follow.jsonl
 #   python3 record.py --from results/base.jsonl --out results/check.jsonl --port 18102
-# --from answers from a recording and never forwards: a POST whose body (canonical JSON) is in base.jsonl gets its
-# recorded answer, any other gets 500 {"error": "not in the recording"}, so a jurl that asks Jev something new fails.
-# With --from, each line of --out gets "replayed": true|false. Hits and misses go to stderr, with the totals at exit.
+#   TYPESAFE_API_KEY=… python3 record.py --from results/base.jsonl --upstream https://api.typesafe.ai/v1/systemone \
+#       --out results/after.jsonl     # a recording with fall-through: replays what it has, forwards and records the rest
+# --from answers from a recording and never forwards (unless --upstream is given too): a POST whose body (canonical JSON)
+# is in base.jsonl gets its recorded answer, any other gets 500 {"error": "not in the recording"}, so a jurl that asks Jev
+# something new fails. With --from and --upstream, such a body is forwarded and appended, so only what changed costs money.
+# With --from, each line of --out gets "replayed": true|false. Hits and misses go to stderr, with the totals at exit,
+# and so do the input tokens that were forwarded live (the ones that cost money) and the ones replayed for nothing.
 # Appending to an existing file continues its `seq`, so several runs (GROUP=pricing, then docs) make one corpus.
 import argparse, collections, http.client, json, os, signal, sys, threading, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+JEV = "https://api.typesafe.ai/v1/systemone"
 ap = argparse.ArgumentParser()
-ap.add_argument("--upstream", default="https://api.typesafe.ai/v1/systemone")
+ap.add_argument("--upstream", default=None, help=f"default: {JEV} (Jev)")
 ap.add_argument("--port", type=int, default=18100)
 ap.add_argument("--out", required=True)
-ap.add_argument("--from", dest="recording", help="answer from this recording instead of forwarding")
+ap.add_argument("--from", dest="recording", help="answer from this recording (and, with --upstream, forward the rest)")
 # Cloudflare (in front of Jev, and of Runpod's proxy) rejects Python's default client.
 ap.add_argument("--user-agent", default="curl/8.7.1")
 a = ap.parse_args()
 if a.recording and os.path.abspath(a.recording) == os.path.abspath(a.out):
     ap.error("--out is the --from recording itself: appending to it would change the recording")
-U = urllib.parse.urlsplit(a.upstream)
+upstream = a.upstream or JEV
+fallthrough = bool(a.recording and a.upstream)  # --from with an upstream: misses are forwarded and recorded
+U = urllib.parse.urlsplit(upstream)
 JEV_KEY = None
-if U.hostname == "api.typesafe.ai" and not a.recording:  # --from never forwards: no key needed
+if U.hostname == "api.typesafe.ai" and (not a.recording or fallthrough):  # --from alone never forwards: no key needed
     JEV_KEY = os.environ.get("TYPESAFE_API_KEY")
     if not JEV_KEY:
         raise SystemExit("recording Jev needs TYPESAFE_API_KEY in this proxy's environment")
@@ -55,7 +62,13 @@ def index_of(path):  # canonical request -> (status, response) of its recorded a
 
 
 recorded = index_of(a.recording) if a.recording else None
-stats = collections.Counter()
+stats = collections.Counter()  # hit: replayed; miss: refused (--from alone) or forwarded (fall-through or plain recording)
+
+
+def totals():
+    return (f"hits {stats['hit']} ({stats['hit_tokens']} input tokens replayed, free), "
+            f"forwarded {stats['forwarded']} ({stats['live_tokens']} input tokens live, "
+            f"${stats['live_tokens'] * 0.042 / 1e6:.4f} at $0.042/M)")
 
 
 def conn(fresh=False):
@@ -93,14 +106,21 @@ def forward(raw, auth):  # to Jev with the proxy's own key; to another upstream 
                 return 599, json.dumps({"proxy_error": str(e)}).encode()
 
 
-def answer(raw):  # --from: the recorded answer to this body, or a 500 for a body the recording doesn't have
+def answer(raw):  # --from: the recorded answer to this body, or None when the recording doesn't have it
     hit = recorded.get(canon(loads(raw)))
     if hit is None:
-        return 500, json.dumps({"error": "not in the recording"}).encode(), False
+        return None
     status, response = hit
     if isinstance(response, str):  # a body that wasn't JSON was saved as its text
         return status, response.encode(), True
     return status, json.dumps(response).encode(), True
+
+
+def input_tokens(body):  # what Jev reports it read for one answer (usage.input_tokens), 0 when it reports none
+    try:
+        return int(json.loads(body)["usage"]["input_tokens"])
+    except (ValueError, KeyError, TypeError):
+        return 0
 
 
 def page_of(req):  # for stderr: the page a request is about, and how many questions it asks
@@ -120,10 +140,15 @@ class Handler(BaseHTTPRequestHandler):
         global seq
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         t0 = time.time()
-        if recorded is None:
+        got = answer(raw) if recorded is not None else None
+        forwarded = got is None and (recorded is None or fallthrough)
+        if got is not None:
+            status, body, hit = got
+        elif forwarded:
             status, body = forward(raw, self.headers.get("Authorization"))
-        else:
-            status, body, hit = answer(raw)
+            hit = False
+        else:  # --from alone: a body the recording doesn't have fails the call, and nothing is forwarded
+            status, body, hit = 500, json.dumps({"error": "not in the recording"}).encode(), False
         dt = time.time() - t0
         with lock:
             seq += 1
@@ -132,8 +157,14 @@ class Handler(BaseHTTPRequestHandler):
             if recorded is not None:
                 row["replayed"] = hit
                 stats["hit" if hit else "miss"] += 1
-                print(f"{'hit' if hit else 'MISS':4} seq {seq} {page_of(row['request'])} "
+                if hit:
+                    stats["hit_tokens"] += input_tokens(body)
+                label = "hit" if hit else "FWD" if forwarded else "MISS"
+                print(f"{label:4} seq {seq} {page_of(row['request'])} "
                       f"(hits {stats['hit']}, misses {stats['miss']} so far)", file=sys.stderr, flush=True)
+            if forwarded:
+                stats["forwarded"] += 1
+                stats["live_tokens"] += input_tokens(body)
             out.write(json.dumps(row, ensure_ascii=False) + "\n")
             out.flush()
         self.send_response(status)
@@ -150,14 +181,16 @@ class Server(ThreadingHTTPServer):
 
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # ends serve_forever as Ctrl-C does: the totals still print
 if recorded is None:
-    print(f"recording {a.upstream} on http://127.0.0.1:{a.port}{U.path} into {a.out} (from seq {seq + 1})", flush=True)
+    print(f"recording {upstream} on http://127.0.0.1:{a.port}{U.path} into {a.out} (from seq {seq + 1})", flush=True)
 else:
     print(f"serving {len(recorded)} distinct recorded bodies from {a.recording} on http://127.0.0.1:{a.port}{U.path} "
-          f"into {a.out} (from seq {seq + 1})", flush=True)
+          f"into {a.out} (from seq {seq + 1})" + (f", forwarding the rest to {upstream}" if fallthrough else ""), flush=True)
 try:
     Server(("127.0.0.1", a.port), Handler).serve_forever()
 except KeyboardInterrupt:
     pass
 finally:
     if recorded is not None:
-        print(f"served from {a.recording}: hits {stats['hit']}, misses {stats['miss']}", file=sys.stderr, flush=True)
+        print(f"served from {a.recording}: {totals()}", file=sys.stderr, flush=True)
+    else:
+        print(f"recorded into {a.out}: {totals()}", file=sys.stderr, flush=True)

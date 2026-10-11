@@ -42,12 +42,16 @@ pub struct Block {
     /// Which `<ul>`/`<ol>` a list item belongs to, numbered in page order.
     #[serde(skip)]
     pub list: Option<usize>,
+    /// The page a headline links to, absolute (see `html::headline_href`). Only a heading can have one, and only one that
+    /// is a teaser's title: Jev is asked about it as about a paragraph, where a section title is shown with its section.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
 }
 
 impl Block {
-    /// A block with no heading level, code language or list: callers set those with struct update syntax.
+    /// A block with no heading level, code language, list or link: callers set those with struct update syntax.
     pub fn new(i: usize, kind: Kind, text: String) -> Block {
-        Block { i, kind, level: None, lang: None, text, list: None }
+        Block { i, kind, level: None, lang: None, text, list: None, href: None }
     }
 
     pub fn markdown(&self) -> String {
