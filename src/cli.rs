@@ -77,6 +77,10 @@ pub(crate) struct Args {
     /// the site sends to another country is read again through the fallback proxy. Not a flag.
     #[arg(skip)]
     pub(crate) country: Option<String>,
+    /// The pages this run has loaded, for `--with-pages` (see `output::PagesLog`). Its own to each run, as the cookies are.
+    /// Not a flag.
+    #[arg(skip)]
+    pub(crate) pages_log: crate::output::PagesLog,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,
@@ -89,6 +93,10 @@ pub(crate) struct Args {
     /// Print the result as JSON, with `usage` for what the run cost
     #[arg(long)]
     pub(crate) json: bool,
+    /// With --json: the text of every page the run loaded, as `pages`, in load order (also the ones the answer doesn't come
+    /// from). A miss or an error prints the JSON too, with `error`
+    #[arg(long)]
+    pub(crate) with_pages: bool,
     /// Per-phase timings on stderr
     #[arg(short, long)]
     pub(crate) timing: bool,

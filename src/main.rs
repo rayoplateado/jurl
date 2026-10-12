@@ -218,6 +218,9 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.follow.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
         bail!("--follow looks for an answer: use it with -q (and --precise or --code), not images or links");
     }
+    if args.with_pages && !args.json {
+        bail!("--with-pages puts the pages in the JSON: add --json");
+    }
     Ok(())
 }
 
@@ -370,6 +373,8 @@ async fn load_page(
     start: bool,
     t: &mut Timer,
 ) -> Result<(url::Url, Extracted, fetch::Served)> {
+    // Numbered before anything waits, so the loads a `--follow` batch starts together are listed in the order they start.
+    let number = args.pages_log.start();
     // A host switching to the browser client is said on stderr under -t, once, where the switch happens.
     let retry = fetch::Retry::for_run(
         args.no_browser_retry,
@@ -400,6 +405,10 @@ async fn load_page(
     // --precise may answer with the page's JSON-LD values (see `extract::json_ld`), read from the HTML the page was read as.
     if args.precise && !page.is_markdown {
         extract::json_ld::add_to(&mut ex, &page.body);
+    }
+    // `--with-pages` lists the page as the run reads it: the blocks a -q read is given, JSON-LD values included.
+    if args.with_pages {
+        args.pages_log.record(number, &page.url, served, &ex.blocks);
     }
     Ok((page.url, ex, served))
 }
@@ -569,5 +578,13 @@ mod tests {
             check(&["jurl", "-q", "x?", "--pages", "2", "--precise", "x.com"]).is_ok(),
             "a precise answer may be on any page"
         );
+    }
+
+    #[test]
+    fn with_pages_is_part_of_the_json() {
+        let check = |argv: &[&str]| prepare(&mut Args::parse_from(argv));
+        assert!(check(&["jurl", "--with-pages", "x.com"]).is_err(), "the pages are in the JSON only");
+        assert!(check(&["jurl", "--json", "--with-pages", "x.com"]).is_ok());
+        assert!(check(&["jurl", "--json", "x.com"]).is_ok(), "without it, the JSON is as it was");
     }
 }

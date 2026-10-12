@@ -192,6 +192,8 @@ pub(crate) fn unsupported(args: &Args) -> Option<String> {
         Some("jurl cloud doesn't take --code with --precise yet".into())
     } else if args.pages > 1 {
         Some("jurl cloud doesn't read the next pages of a list yet (--pages)".into())
+    } else if args.with_pages {
+        Some("jurl cloud doesn't return the pages a read loaded yet (--with-pages)".into())
     } else if let Some(pages) = args.follow {
         if !args.precise {
             Some("jurl cloud follows links only with --precise".into())
@@ -587,6 +589,7 @@ mod tests {
         assert!(unsupported(&args(&["jurl", "-p", "-c", "-q", "x?", "x.com"])).unwrap().contains("--code"));
         assert!(unsupported(&args(&["jurl", "-q", "x?", "--pages", "3", "x.com"])).unwrap().contains("--pages"));
         assert!(unsupported(&args(&["jurl", "-q", "x?", "--pages", "1", "x.com"])).is_none());
+        assert!(unsupported(&args(&["jurl", "--json", "--with-pages", "x.com"])).unwrap().contains("--with-pages"));
     }
 
     #[tokio::test]

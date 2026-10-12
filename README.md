@@ -282,6 +282,7 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | `-a, --all` | No limit: everything above the threshold |
 | `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
 | `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`, `structured`), and the `level` or `lang` when the block has one. Its `context` is the whole table or list the answer is in, as the page has it: a table's header and rows, or a list's items one per line. Past 60 rows (a table's header included) or 6,000 characters, `context` keeps a table's header, the answer's row and the rows nearest it that fit, and `context_truncated` is `true`. `context` is left out for other blocks, and a `jurl login` answer doesn't carry it yet. A block that is a record of a repeated list (a concert calendar's card, a row of a card grid) has `record`, its number in the run, and its pieces are one block with a line each (the text prints the same record under a `[record N]` line). A list read over `--pages` gives each block its `page` and the run its `pages` |
+| `--with-pages` | With `--json`: the text of every page the run loaded, as `pages`, in load order. Each entry has its `url` (the final address), its `route` (`direct`, `browser`, `proxy` or `stealth`), whether it was `rendered`, and its `blocks`: every block of the page as the run read it, not only the ones it kept. Pages the answer doesn't come from are in it too. It replaces the list of URLs a `--pages` read gives under `pages`, since each entry has its URL. A miss or a failure still prints the JSON, with `error` and the pages |
 | `-t, --timing` | Where the time went, on stderr |
 | `jurl init` | Set or replace your API keys, or sign in to jurl cloud |
 | `jurl login` | Sign this computer in to [jurl cloud](#jurl-cloud) |
@@ -327,6 +328,8 @@ As with grep, a script can tell "not there" from "something broke":
 | 0 | Something was printed: an answer, blocks, links or images |
 | 1 | The page (or the site, with `--follow`) was read and has nothing that answers: no exact answer, no image that looks like that, nothing above `--threshold`. With `--precise --json`, the JSON is still printed (`"answer": null` and what came `closest`); without `--precise`, nothing is printed |
 | 2 | An error: the page couldn't be read (HTTP error, timeout, a block page, no readable text, or over 8 MB), the API couldn't be asked (a bad key, no credits), or the arguments are wrong |
+
+With `--with-pages --json`, the JSON is printed on exit 1 and 2 as well: `error` says why there is no answer, and `pages` has the pages the run loaded.
 
 Before 0.1.11 every failure exited 1, and a `--json` miss exited 0.
 
@@ -392,7 +395,7 @@ A run reads with jurl cloud or with your own keys, by the first of these that ap
 3. A sign-in saved by `jurl login`: jurl cloud.
 4. Otherwise: your own keys.
 
-jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `-r`, and `--code` with `--precise`. `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
+jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `-r`, `--code` with `--precise`, and `--with-pages`. `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
 
 `JURL_CLOUD_URL` points jurl at another jurl cloud, such as a self-hosted one: `JURL_CLOUD_URL=http://127.0.0.1:3211 jurl login` saves it. A key only goes over https, or to this computer.
 
