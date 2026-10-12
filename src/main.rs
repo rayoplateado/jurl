@@ -408,7 +408,7 @@ async fn load_page(
     }
     // `--with-pages` lists the page as the run reads it: the blocks a -q read is given, JSON-LD values included.
     if args.with_pages {
-        args.pages_log.record(number, &page.url, served, &ex.blocks);
+        args.pages_log.record(number, &page.url, served, &ex.blocks, &ex.links);
     }
     Ok((page.url, ex, served))
 }

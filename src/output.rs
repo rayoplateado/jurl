@@ -12,7 +12,13 @@ use std::{
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::{cli::Args, decide, extract::Block, fetch::Served, links};
+use crate::{
+    cli::Args,
+    decide,
+    extract::{Block, Link},
+    fetch::Served,
+    links,
+};
 
 /// What a mode found, both ways: the text a person reads and the JSON a script reads. The CLI prints one of them
 /// (`--json`); `jurl mcp` hands an agent both.
@@ -78,6 +84,8 @@ struct Loaded {
     route: &'static str,
     rendered: bool,
     blocks: Vec<Block>,
+    /// The links the page gives (see `record`): the address and the anchor text, in page order.
+    links: Vec<(String, String)>,
 }
 
 impl PagesLog {
@@ -86,20 +94,28 @@ impl PagesLog {
         self.started.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Notes a page that loaded, under the number `start` gave its load, with the blocks the run read it as.
-    pub(crate) fn record(&self, number: usize, url: &url::Url, served: Served, blocks: &[Block]) {
+    /// Notes a page that loaded, under the number `start` gave its load, with the blocks the run read it as and the links it
+    /// gives. A footnote mark or an image with no text is left out (see `Link::marginal`), and an address is listed once.
+    pub(crate) fn record(&self, number: usize, url: &url::Url, served: Served, blocks: &[Block], links: &[Link]) {
+        let mut seen = HashSet::new();
+        let page_links = links
+            .iter()
+            .filter(|l| !l.marginal && seen.insert(l.url.as_str()))
+            .map(|l| (l.url.as_str().to_string(), l.text.clone()))
+            .collect();
         let page = Loaded {
             number,
             url: url.clone(),
             route: served.route.name(),
             rendered: served.rendered,
             blocks: blocks.to_vec(),
+            links: page_links,
         };
         self.loaded.lock().unwrap_or_else(PoisonError::into_inner).push(page);
     }
 
     /// The `pages` of the JSON: in load order, once per final URL (its first load, by `links::key`), each with its route,
-    /// whether it was rendered, and its blocks.
+    /// whether it was rendered, its blocks, and its links as `{url, text}`.
     pub(crate) fn json(&self) -> Result<Value> {
         let loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         let mut in_order: Vec<&Loaded> = loaded.iter().collect();
@@ -112,6 +128,7 @@ impl PagesLog {
                 "route": p.route,
                 "rendered": p.rendered,
                 "blocks": serde_json::to_value(&p.blocks)?,
+                "links": p.links.iter().map(|(url, text)| json!({ "url": url, "text": text })).collect::<Vec<_>>(),
             }));
         }
         Ok(Value::Array(pages))
@@ -311,7 +328,7 @@ mod tests {
         let done = Ok(Rendered { text: String::new(), json: json!({ "answer": "$8" }) });
         let plain = stdout_for(&args, &done, &usage).unwrap().expect("JSON");
         // Pages loaded and kept, but not asked for: the output is the same, with no `pages` key.
-        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("$8"));
+        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("$8"), &[]);
         assert_eq!(stdout_for(&args, &done, &usage).unwrap().expect("JSON"), plain);
         let expected = json!({ "answer": "$8", "usage": usage.json(&args.fallback) });
         assert_eq!(plain, format!("{}\n", serde_json::to_string_pretty(&expected).unwrap()));
@@ -322,7 +339,13 @@ mod tests {
         let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "price?", "https://x.com/"]);
         prepare(&mut args).unwrap();
         let usage = decide::Usage::new();
-        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("Nothing on prices."));
+        args.pages_log.record(
+            0,
+            &Url::parse("https://x.com/").unwrap(),
+            served(),
+            &a_page_of("Nothing on prices."),
+            &[],
+        );
         let json_of = |done: Result<Rendered>| -> Value {
             let out = stdout_for(&args, &done, &usage).unwrap().expect("JSON");
             serde_json::from_str(&out).unwrap()
@@ -350,7 +373,7 @@ mod tests {
     fn with_pages_a_precise_miss_keeps_its_shape_and_lists_the_pages() {
         let mut args = Args::parse_from(["jurl", "--precise", "--json", "--with-pages", "-q", "books?", "jurl.dev"]);
         prepare(&mut args).unwrap();
-        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("Docs."));
+        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("Docs."), &[]);
         let miss: Result<Rendered> = Err(not_found("nothing in https://jurl.dev/ answers that".into()));
         let out = stdout_for(&args, &miss, &decide::Usage::new()).unwrap().expect("JSON on a miss");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -363,8 +386,8 @@ mod tests {
     fn with_pages_the_entries_take_the_key_a_pages_read_gives_its_urls_under() {
         let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "x?", "https://x.com/"]);
         prepare(&mut args).unwrap();
-        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("one"));
-        args.pages_log.record(1, &Url::parse("https://x.com/2").unwrap(), served(), &a_page_of("two"));
+        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("one"), &[]);
+        args.pages_log.record(1, &Url::parse("https://x.com/2").unwrap(), served(), &a_page_of("two"), &[]);
         let read = Ok(Rendered {
             text: String::new(),
             json: json!({ "answer": null, "pages": ["https://x.com/", "https://x.com/2"] }),
@@ -385,9 +408,9 @@ mod tests {
         let log = PagesLog::default();
         let (first, second, third) = (log.start(), log.start(), log.start());
         // The loads finish out of order, and the third is the second page again, with a trailing slash.
-        log.record(second, &Url::parse("https://x.com/b").unwrap(), served(), &a_page_of("b"));
-        log.record(first, &Url::parse("https://x.com/a").unwrap(), served(), &a_page_of("a"));
-        log.record(third, &Url::parse("https://x.com/b/").unwrap(), served(), &a_page_of("b again"));
+        log.record(second, &Url::parse("https://x.com/b").unwrap(), served(), &a_page_of("b"), &[]);
+        log.record(first, &Url::parse("https://x.com/a").unwrap(), served(), &a_page_of("a"), &[]);
+        log.record(third, &Url::parse("https://x.com/b/").unwrap(), served(), &a_page_of("b again"), &[]);
         let pages = log.json().unwrap();
         let listed: Vec<(&str, &str)> = pages
             .as_array()
@@ -463,5 +486,34 @@ mod tests {
         assert_eq!(listed, [format!("{base}/slow"), format!("{base}/fast")]);
         assert_eq!(pages[0]["blocks"][0]["text"], "The slow page.");
         assert_eq!((pages[0]["route"].as_str(), pages[0]["rendered"].as_bool()), (Some("direct"), Some(false)));
+    }
+
+    #[test]
+    fn with_pages_each_page_lists_its_links_in_page_order_once_and_without_footnote_marks() {
+        let log = PagesLog::default();
+        let link = |i: usize, url: &str, text: &str, marginal: bool| Link {
+            i,
+            url: Url::parse(url).unwrap(),
+            text: text.into(),
+            context: String::new(),
+            marginal,
+        };
+        let links = [
+            link(0, "https://x.com/pricing", "Pricing", false),
+            link(1, "https://x.com/note", "[1]", true),
+            link(2, "https://x.com/docs", "Docs", false),
+            link(3, "https://x.com/pricing", "Prices again", false),
+        ];
+        log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("home"), &links);
+        log.record(1, &Url::parse("https://x.com/pricing").unwrap(), served(), &a_page_of("pricing"), &[]);
+        let pages = log.json().unwrap();
+        assert_eq!(
+            pages[0]["links"],
+            json!([
+                { "url": "https://x.com/pricing", "text": "Pricing" },
+                { "url": "https://x.com/docs", "text": "Docs" },
+            ])
+        );
+        assert_eq!(pages[1]["links"], json!([]));
     }
 }
