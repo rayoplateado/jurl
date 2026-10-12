@@ -69,21 +69,21 @@ struct Site {
     front_door: bool,
     /// The language the start page declares, as it was fetched (see [`other_language`]). None when it declares none.
     language: Option<String>,
-    /// The language the run asks for (`JURL_ACCEPT_LANGUAGE`, its primary subtag), when it is not the start page's own: the
-    /// site's pages in it are read beside the start page's (see [`Site::refuses`], [`candidates`] and
-    /// [`without_language_copies`]). None when the run asks for no language, or for the start page's own.
-    run: Option<String>,
+    /// The languages the run asks for, other than the start page's own (`JURL_ACCEPT_LANGUAGE`, their primary subtags, most preferred
+    /// first; see [`langtag::run_languages`]): the site's pages in them are read beside the start page's (see [`Site::refuses`],
+    /// [`candidates`] and [`without_language_copies`]). Empty when the run asks for none but the start page's own.
+    run: Vec<String>,
     /// The market the run reads as, whether or not it is the start page's own (see [`RunMarket`]).
     market: RunMarket,
 }
 
-/// The market a run reads as: its country (`JURL_COUNTRY`) and the language it asks for (`JURL_ACCEPT_LANGUAGE`, its primary
-/// subtag), each whether or not it is the start page's own. A page that declares another version of itself for the market is
-/// offered that version (see [`market_offer`]), and a sitemap index's children are ranked by it (see [`child_rank`]).
+/// The market a run reads as: its country (`JURL_COUNTRY`) and the languages it asks for (`JURL_ACCEPT_LANGUAGE`, their primary
+/// subtags, most preferred first), each whether or not it is the start page's own. A page that declares another version of itself
+/// for the market is offered that version (see [`market_offer`]), and a sitemap index's children are ranked by it (see [`child_rank`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 struct RunMarket {
     country: Option<String>,
-    language: Option<String>,
+    languages: Vec<String>,
 }
 
 impl RunMarket {
@@ -92,12 +92,13 @@ impl RunMarket {
     const NO_MATCH: u8 = 2;
 
     /// How well a locale (see [`langtag::url_locale`]) matches the run's market, best first: its region is the run's country and its
-    /// language the run's language; its region is the country; otherwise [`RunMarket::NO_MATCH`]. A language alone does not rank a
-    /// locale of another market: the market matters, not the language, as for a page's alternates (see [`langtag::market_alternate`]).
+    /// language one of the run's languages; its region is the country; otherwise [`RunMarket::NO_MATCH`]. A language alone does not
+    /// rank a locale of another market: the market matters, not the language, as for a page's alternates (see
+    /// [`langtag::market_alternate`]).
     fn rank(&self, locale: &langtag::Locale) -> u8 {
         let region =
             self.country.as_deref().zip(locale.region.as_deref()).is_some_and(|(c, r)| c.eq_ignore_ascii_case(r));
-        let language = self.language.as_deref().zip(locale.language.as_deref()).is_some_and(|(l, x)| l == x);
+        let language = locale.language.as_deref().is_some_and(|x| self.languages.iter().any(|l| l == x));
         match (region, language) {
             (true, true) => 0,
             (true, false) => 1,
@@ -113,7 +114,7 @@ impl Site {
             root,
             front_door: u.path() == "/" && u.query().is_none(),
             language: None,
-            run: None,
+            run: Vec::new(),
             market: RunMarket::default(),
         }
     }
@@ -121,7 +122,7 @@ impl Site {
     /// Why a page that declares `page` is not read, when it declares another language than the start page's (see
     /// [`other_language`]): unless the run asks for that language (see [`Site::run`]).
     fn refuses(&self, page: Option<&str>) -> Option<OtherLanguage> {
-        other_language(self.language.as_deref(), page).filter(|other| self.run.as_deref() != Some(other.page.as_str()))
+        other_language(self.language.as_deref(), page).filter(|other| !self.run.contains(&other.page))
     }
 
     /// Whose site it is, for [`Ctx::ask`]: only from the front door. Started from a page (an article, a repo),
@@ -199,8 +200,8 @@ struct StartLanguage {
     tag: String,
     prefix: Option<String>,
     country: Option<String>,
-    /// The language the run asks for, when it is another than the start page's (see [`Site::run`]).
-    run: Option<String>,
+    /// The languages the run asks for, when they are others than the start page's (see [`Site::run`]).
+    run: Vec<String>,
 }
 
 impl StartLanguage {
@@ -209,20 +210,22 @@ impl StartLanguage {
     fn of(url: &Url, declared: Option<&str>, country: Option<&str>) -> Option<Self> {
         let tag = langtag::declared(declared?)?;
         let prefix = first_segment(url).filter(|s| langtag::segment(s).is_some());
-        Some(StartLanguage { tag, prefix, country: country.map(str::to_string), run: None })
+        Some(StartLanguage { tag, prefix, country: country.map(str::to_string), run: Vec::new() })
     }
 
-    /// The same start page's language, with the language the run asks for (see [`Site::run`]).
-    fn with_run(mut self, run: Option<String>) -> Self {
+    /// The same start page's language, with the languages the run asks for (see [`Site::run`]).
+    fn with_run(mut self, run: Vec<String>) -> Self {
         self.run = run;
         self
     }
 
-    /// Whether a page is in the language the run asks for, when that is another than the start page's (see [`Site::run`]).
+    /// Whether a page is in one of the languages the run asks for, when they are others than the start page's (see [`Site::run`]).
     /// Such a page is not placed among the others (see [`candidates`]): it is read beside the start page's own.
     fn accepts_run(&self, url: &Url, declared: Option<&str>) -> bool {
-        let Some(run) = self.run.as_deref() else { return false };
-        langtag::page_tag(url, declared).as_deref().and_then(primary_subtag).as_deref() == Some(run)
+        langtag::page_tag(url, declared)
+            .as_deref()
+            .and_then(primary_subtag)
+            .is_some_and(|page| self.run.contains(&page))
     }
 
     /// How a page's language relates to the start page's (see [`Relation`]). A page under the start page's own prefix is
@@ -596,8 +599,8 @@ impl SiteIndex {
             let text = u.path().to_string();
             add(u, text, declared_tag.as_deref().and_then(langtag::declared));
         }
-        let listed =
-            Listed { links: without_language_copies(start, lang.and_then(|l| l.run.as_deref()), out), declared };
+        let run = lang.map(|lang| lang.run.as_slice()).unwrap_or_default();
+        let listed = Listed { links: without_language_copies(start, run, out), declared };
         SiteFiles { robots: self.robots, listed }
     }
 }
@@ -686,12 +689,12 @@ fn locale_key(u: &Url) -> (Option<String>, String) {
 }
 
 /// A page the site lists in several languages keeps one copy: the one in the start page's language if the site lists
-/// it, else the one with no language prefix. A copy in the language the run asks for (`run`, see [`Site::run`]) is kept
+/// it, else the one with no language prefix. A copy in a language the run asks for (`run`, see [`Site::run`]) is kept
 /// as well. A page listed only in other languages keeps all of them. Renumbers the links that stay.
-fn without_language_copies(start: &Url, run: Option<&str>, links: Vec<Link>) -> Vec<Link> {
+fn without_language_copies(start: &Url, run: &[String], links: Vec<Link>) -> Vec<Link> {
     let own = locale_key(start).0;
     let asked = |locale: &Option<String>| {
-        run.is_some_and(|run| locale.as_deref().and_then(primary_subtag).as_deref() == Some(run))
+        locale.as_deref().and_then(primary_subtag).is_some_and(|language| run.contains(&language))
     };
     let keys: Vec<(Option<String>, String)> = links.iter().map(|l| locale_key(&l.url)).collect();
     let own_pages: HashSet<&str> =
@@ -819,7 +822,7 @@ fn market_offer(site: &Site, page: &Url, alternates: &[Alternate]) -> Option<Lin
     let declared: Vec<(String, &Alternate)> =
         alternates.iter().filter_map(|alt| Some((langtag::declared(&alt.hreflang)?, alt))).collect();
     let tags: Vec<&str> = declared.iter().map(|(tag, _)| tag.as_str()).collect();
-    let (tag, alt) = &declared[langtag::market_alternate(country, site.market.language.as_deref(), &tags)?];
+    let (tag, alt) = &declared[langtag::market_alternate(country, &site.market.languages, &tags)?];
     let offered = links::key(&alt.url) != links::key(page) && site.contains(&alt.url);
     offered.then(|| Link {
         i: 0,
@@ -1051,10 +1054,8 @@ impl Search {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let mut site = Site::new(start);
-        site.market = RunMarket {
-            country: args.country.clone(),
-            language: crate::fetch::accept_language().and_then(|value| langtag::run_language(&value)),
-        };
+        let asked = crate::fetch::accept_language().map(|value| langtag::run_languages(&value)).unwrap_or_default();
+        site.market = RunMarket { country: args.country.clone(), languages: asked.clone() };
         let retry = Retry::for_run(
             args.no_browser_retry,
             args.timing,
@@ -1069,11 +1070,9 @@ impl Search {
         // The start page's language is the one it declares as fetched, after any redirect. The start page is judged
         // here, not through `visit`, so it is never skipped for its language.
         site.language = ex.lang.clone();
-        // The language the run asks for, when the start page is in another one (see [`Site::run`]).
+        // The languages the run asks for, other than the start page's own (see [`Site::run`]).
         let start_language = site.language.as_deref().and_then(primary_subtag);
-        site.run = crate::fetch::accept_language()
-            .and_then(|value| langtag::run_language(&value))
-            .filter(|run| start_language.as_deref() != Some(run.as_str()));
+        site.run = asked.into_iter().filter(|run| start_language.as_deref() != Some(run.as_str())).collect();
         let lang = StartLanguage::of(&url, ex.lang.as_deref(), args.country.as_deref())
             .map(|lang| lang.with_run(site.run.clone()));
         // The hosts the page links to on its own registrable domain (docs.stripe.com from stripe.com): their llms.txt is
@@ -2164,7 +2163,7 @@ mod tests {
 
     /// The URLs that stay of `urls` once the site's language copies are dropped, as `site_map` keeps them.
     fn kept(start: &str, urls: &[&str]) -> Vec<String> {
-        without_language_copies(&u(start), None, listed(urls)).iter().map(|l| l.url.as_str().to_string()).collect()
+        without_language_copies(&u(start), &[], listed(urls)).iter().map(|l| l.url.as_str().to_string()).collect()
     }
 
     #[test]
@@ -2191,7 +2190,7 @@ mod tests {
         // The links that stay are renumbered.
         let out = without_language_copies(
             &u("https://x.com/"),
-            None,
+            &[],
             listed(&["https://x.com/de/a", "https://x.com/a", "https://x.com/b"]),
         );
         assert_eq!(out.iter().map(|l| (l.i, l.url.path())).collect::<Vec<_>>(), [(0, "/a"), (1, "/b")]);
@@ -2206,10 +2205,17 @@ mod tests {
             "https://www.klm.es/es-es/information/baggage",
         ];
         assert_eq!(kept("https://www.klm.es/", &urls), ["https://www.klm.es/information/baggage"]);
-        let asked = without_language_copies(&u("https://www.klm.es/"), Some("en"), listed(&urls));
+        let asked = without_language_copies(&u("https://www.klm.es/"), &["en".to_string()], listed(&urls));
         assert_eq!(
             asked.iter().map(|l| l.url.path()).collect::<Vec<_>>(),
             ["/information/baggage", "/en-es/information/baggage"]
+        );
+        // Each language the run asks for keeps its copy: English and Spanish both.
+        let both = ["en", "es"].map(String::from);
+        let both = without_language_copies(&u("https://www.klm.es/"), &both, listed(&urls));
+        assert_eq!(
+            both.iter().map(|l| l.url.path()).collect::<Vec<_>>(),
+            ["/information/baggage", "/en-es/information/baggage", "/es-es/information/baggage"]
         );
     }
 
@@ -2218,10 +2224,15 @@ mod tests {
         let mut site = Site::new(&u("https://www.ryanair.com/es/es"));
         site.language = Some("es".to_string());
         assert_eq!(site.refuses(Some("en")).map(|other| other.page), Some("en".to_string()));
-        site.run = Some("en".to_string());
+        site.run = vec!["en".to_string()];
         assert_eq!(site.refuses(Some("en")), None);
         assert_eq!(site.refuses(Some("es-ES")), None);
         // A page in a language the run does not ask for is still refused, as mi.com's Chinese page is (#59).
+        assert_eq!(site.refuses(Some("zh")).map(|other| other.page), Some("zh".to_string()));
+        // Every language the run asks for is read beside the start page's, not only the first one (`en,fr;q=0.8`).
+        site.run = vec!["en".to_string(), "fr".to_string()];
+        assert_eq!(site.refuses(Some("en")), None);
+        assert_eq!(site.refuses(Some("fr-FR")), None);
         assert_eq!(site.refuses(Some("zh")).map(|other| other.page), Some("zh".to_string()));
     }
 
@@ -2230,7 +2241,7 @@ mod tests {
         // A start page in Spanish and a run that asks for English: the English pages take turns with the Spanish ones, so a long
         // Spanish listing cannot keep them out of the cap.
         let start = StartLanguage::of(&u("https://x.com/"), Some("es"), None).expect("a declared language");
-        let start = start.with_run(Some("en".to_string()));
+        let start = start.with_run(vec!["en".to_string()]);
         let mut urls: Vec<String> = (0..12).map(|i| format!("https://x.com/es/ayuda/cabina-{i}")).collect();
         urls.extend((0..12).map(|i| format!("https://x.com/en/help/cabin-{i}")));
         let urls: Vec<&str> = urls.iter().map(String::as_str).collect();
@@ -2246,9 +2257,14 @@ mod tests {
         let plain = StartLanguage::of(&u("https://x.com/"), Some("es"), None).expect("a declared language");
         assert!(!plain.accepts_run(&u("https://x.com/en/help"), None));
         let asked = StartLanguage::of(&u("https://x.com/"), Some("es"), None).expect("a declared language");
-        let asked = asked.with_run(Some("en".to_string()));
+        let asked = asked.with_run(vec!["en".to_string()]);
         assert!(asked.accepts_run(&u("https://x.com/en/help"), None));
         assert!(!asked.accepts_run(&u("https://x.com/es/ayuda"), None));
+        let both = StartLanguage::of(&u("https://x.com/"), Some("es"), None).expect("a declared language");
+        let both = both.with_run(vec!["en".to_string(), "fr".to_string()]);
+        assert!(both.accepts_run(&u("https://x.com/en/help"), None));
+        assert!(both.accepts_run(&u("https://x.com/fr/aide"), None));
+        assert!(!both.accepts_run(&u("https://x.com/de/hilfe"), None));
     }
 
     #[test]
@@ -2595,7 +2611,7 @@ mod tests {
             <sitemap><loc>https://x.com/de-de/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
             </sitemapindex>";
         let start = StartLanguage::of(&u("https://x.com/"), Some("es"), Some("ES")).expect("a declared language");
-        let market = RunMarket { country: Some("ES".to_string()), language: None };
+        let market = RunMarket { country: Some("ES".to_string()), languages: Vec::new() };
         let read = crate::sitemaps::index_children(xml, |loc| child_rank(&market, Some(&start), loc));
         assert_eq!(
             read,
@@ -2616,7 +2632,7 @@ mod tests {
             </sitemapindex>";
         // Spain in English: the Spanish market in English first, then the Spanish market. English in other markets is not a
         // market match, so those children keep the generic order (the newest, here Germany's), as the market matters, not the language.
-        let spain_english = RunMarket { country: Some("ES".to_string()), language: Some("en".to_string()) };
+        let spain_english = RunMarket { country: Some("ES".to_string()), languages: vec!["en".to_string()] };
         assert_eq!(
             crate::sitemaps::index_children(xml, |loc| child_rank(&spain_english, None, loc)),
             [
@@ -2625,6 +2641,17 @@ mod tests {
                 "https://x.com/de/iberia-de-de-general-sitemap.xml",
             ]
         );
+        // Spain in English and in Spanish: each language the run asks for is a language of its market, so both Spanish-market children
+        // come first, in either order, and then Germany's.
+        let both = RunMarket { country: Some("ES".to_string()), languages: vec!["en".to_string(), "es".to_string()] };
+        let read = crate::sitemaps::index_children(xml, |loc| child_rank(&both, None, loc));
+        let mut first_two: Vec<&str> = read.iter().take(2).map(String::as_str).collect();
+        first_two.sort();
+        assert_eq!(
+            first_two,
+            ["https://x.com/es/iberia-es-en-general-sitemap.xml", "https://x.com/es/iberia-es-es-general-sitemap.xml"]
+        );
+        assert_eq!(read.get(2).map(String::as_str), Some("https://x.com/de/iberia-de-de-general-sitemap.xml"));
         // Without a market, the children rank by their place alone: the newest three.
         let none = RunMarket::default();
         assert_eq!(
@@ -2647,7 +2674,7 @@ mod tests {
             alt("x-default", "https://x.com/"),
         ];
         let spain_english = Site {
-            market: RunMarket { country: Some("ES".to_string()), language: Some("en".to_string()) },
+            market: RunMarket { country: Some("ES".to_string()), languages: vec!["en".to_string()] },
             ..Site::new(&u("https://x.com/"))
         };
         let offer = market_offer(&spain_english, &u("https://x.com/gb/luggage/"), &alts).expect("an offer");
