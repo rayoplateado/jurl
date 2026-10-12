@@ -3,8 +3,11 @@
 //! and the language a page's own entry declares for it (Google's hreflang extension in sitemaps). Pure text: the reading
 //! of the files is `follow.rs`'s.
 
-/// How many of a sitemap index's sitemaps are read: the first [`index_children`] ranks them.
-pub const CHILD_SITEMAPS: usize = 3;
+/// How many of a sitemap index's sitemaps are read: the first [`index_children`] ranks them. Eight, not three: a site's
+/// sitemaps are split by section and by market, and the page a question is about can sit in the fourth to eighth child
+/// (Atlassian's company sitemap is the sixth of eight; Intercom's legal one the fifth of seven). Each child is one small
+/// XML file, read beside the others, and an index of more children is cut to these eight by the same rank.
+pub const CHILD_SITEMAPS: usize = 8;
 /// How many of robots.txt's `Sitemap:` lines are read, besides /sitemap.xml: in file order.
 pub const ROBOTS_SITEMAPS: usize = 3;
 
@@ -174,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn an_index_lists_its_three_newest_sitemaps_first() {
+    fn an_index_lists_its_newest_sitemaps_first_and_reads_no_more_than_the_bound() {
         let xml = "<?xml version=\"1.0\"?><sitemapindex>\
             <sitemap><loc>https://a.test/s/2019.xml</loc><lastmod>2019-12-31</lastmod></sitemap>\
             <sitemap><loc>https://a.test/s/2024.xml</loc><lastmod>2024-06-02T09:00:00Z</lastmod></sitemap>\
@@ -184,8 +187,18 @@ mod tests {
             </sitemapindex>";
         assert_eq!(
             index_children(xml, |_| ()),
-            ["https://a.test/s/2025.xml?a=1&b=2", "https://a.test/s/2024.xml", "https://a.test/s/2023.xml"]
+            [
+                "https://a.test/s/2025.xml?a=1&b=2",
+                "https://a.test/s/2024.xml",
+                "https://a.test/s/2023.xml",
+                "https://a.test/s/2019.xml",
+                "https://a.test/s/undated.xml"
+            ]
         );
+        // Past the bound, the children are cut to the first CHILD_SITEMAPS by the same order.
+        let many: String = (0..10).map(|i| format!("<sitemap><loc>https://a.test/s/{i}.xml</loc></sitemap>")).collect();
+        let many = format!("<sitemapindex>{many}</sitemapindex>");
+        assert_eq!(index_children(&many, |_| ()).len(), CHILD_SITEMAPS);
     }
 
     #[test]
@@ -205,16 +218,20 @@ mod tests {
             [
                 "https://a.test/es-ar/sitemap.xml",
                 "https://a.test/es-es/sitemap.xml",
-                "https://a.test/es-mx/sitemap.xml"
+                "https://a.test/es-mx/sitemap.xml",
+                "https://a.test/de-de/sitemap.xml",
+                "https://a.test/en-gb/sitemap.xml"
             ]
         );
-        // Ranked alike, the children are the three newest, as before.
+        // Ranked alike, the children are the newest first, as before.
         assert_eq!(
             index_children(xml, |_| ()),
             [
                 "https://a.test/de-de/sitemap.xml",
                 "https://a.test/en-gb/sitemap.xml",
-                "https://a.test/es-ar/sitemap.xml"
+                "https://a.test/es-ar/sitemap.xml",
+                "https://a.test/es-es/sitemap.xml",
+                "https://a.test/es-mx/sitemap.xml"
             ]
         );
     }
@@ -253,7 +270,7 @@ mod tests {
                    <sitemap><loc>https://a.test/4.xml</loc></sitemap></sitemapindex>";
         assert_eq!(
             index_children(xml, |_| ()),
-            ["https://a.test/1.xml", "https://a.test/2.xml", "https://a.test/3.xml"]
+            ["https://a.test/1.xml", "https://a.test/2.xml", "https://a.test/3.xml", "https://a.test/4.xml"]
         );
     }
 }

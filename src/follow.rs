@@ -1728,6 +1728,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_gzipped_sitemap_served_without_content_encoding_is_read_as_its_xml() {
+        // An `.xml.gz` sitemap is a gzip file, not a gzip Content-Encoding: its magic bytes say so, and it is read as the
+        // XML it holds (upc.edu's sitemap.xml.gz lists its pages this way).
+        let xml = "<?xml version=\"1.0\"?><urlset><url><loc>https://a.test/en/masters/ai</loc></url></urlset>";
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut enc, xml.as_bytes()).expect("gzip");
+        let body = enc.finish().expect("gzip");
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-gzip\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let url = Url::parse(&test_server::serve(head.into(), body, true)).unwrap();
+        assert_eq!(small_text(&url, retry_off()).await.as_deref(), Some(xml));
+    }
+
+    #[tokio::test]
     async fn a_small_file_past_its_cap_is_refused_and_one_at_it_is_read() {
         let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
         let url = |body: Vec<u8>| Url::parse(&test_server::serve(head.into(), body, true)).unwrap();
@@ -2397,7 +2410,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_sitemap_index_is_read_through_its_three_newest_sitemaps() {
+    async fn a_sitemap_index_is_read_through_its_sitemaps_up_to_the_bound() {
         let (start, served) = site_at(vec![
             (
                 "/sitemap.xml",
@@ -2416,9 +2429,9 @@ mod tests {
         let links = site_files(&start, &Site::new(&start), None, retry_off()).await.links;
         let mut paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();
         paths.sort();
-        assert_eq!(paths, ["/news/2021.html", "/news/2023.html", "/news/2024.html"]);
-        // robots.txt, llms.txt, /sitemap.xml and the three children: the 2019 sitemap is never asked for.
-        assert_eq!(served.count(), 6);
+        assert_eq!(paths, ["/news/2019.html", "/news/2021.html", "/news/2023.html", "/news/2024.html"]);
+        // robots.txt, llms.txt, /sitemap.xml and the four children: an index of up to CHILD_SITEMAPS children is read whole.
+        assert_eq!(served.count(), 7);
     }
 
     #[tokio::test]
@@ -2447,10 +2460,9 @@ mod tests {
         let listing = site_files(&start, &Site::new(&start), Some(&lang), retry_off()).await;
         let mut paths: Vec<&str> = listing.links.iter().map(|l| l.url.path()).collect();
         paths.sort();
-        assert_eq!(paths, ["/de-ch/gepaeck", "/es-ar/equipaje", "/es-es/equipaje"]);
-        // robots.txt, llms.txt, /sitemap.xml and the three children read.
-        assert_eq!(served.count(), 6);
-        assert!(served.heads().iter().all(|h| !h.contains("/de-de/") && !h.contains("/en-be/")));
+        assert_eq!(paths, ["/de-ch/gepaeck", "/de-de/gepaeck", "/en-be/baggage", "/es-ar/equipaje", "/es-es/equipaje"]);
+        // robots.txt, llms.txt, /sitemap.xml and the five children, which are under the bound.
+        assert_eq!(served.count(), 8);
     }
 
     #[tokio::test]
@@ -2585,8 +2597,13 @@ mod tests {
         let read = crate::sitemaps::index_children(xml, |loc| child_rank(&market, Some(&start), loc));
         assert_eq!(
             read,
-            ["https://x.com/es-es/sitemap.xml", "https://x.com/es-ar/sitemap.xml", "https://x.com/es-mx/sitemap.xml"],
-            "Spain first, then the other Spanish regions newest first; German is not read"
+            [
+                "https://x.com/es-es/sitemap.xml",
+                "https://x.com/es-ar/sitemap.xml",
+                "https://x.com/es-mx/sitemap.xml",
+                "https://x.com/de-de/sitemap.xml"
+            ],
+            "Spain first, then the other Spanish regions newest first; German comes last"
         );
     }
 
@@ -2609,9 +2626,11 @@ mod tests {
                 "https://x.com/es/iberia-es-en-general-sitemap.xml",
                 "https://x.com/es/iberia-es-es-general-sitemap.xml",
                 "https://x.com/de/iberia-de-de-general-sitemap.xml",
+                "https://x.com/ar/iberia-ar-en-general-sitemap.xml",
+                "https://x.com/gb/iberia-gb-en-general-sitemap.xml",
             ]
         );
-        // Without a market, the children rank by their place alone: the newest three.
+        // Without a market, the children rank by their place alone: the newest first, the undated ones last in file order.
         let none = RunMarket::default();
         assert_eq!(
             crate::sitemaps::index_children(xml, |loc| child_rank(&none, None, loc)),
@@ -2619,6 +2638,8 @@ mod tests {
                 "https://x.com/de/iberia-de-de-general-sitemap.xml",
                 "https://x.com/ar/iberia-ar-en-general-sitemap.xml",
                 "https://x.com/gb/iberia-gb-en-general-sitemap.xml",
+                "https://x.com/es/iberia-es-es-general-sitemap.xml",
+                "https://x.com/es/iberia-es-en-general-sitemap.xml",
             ]
         );
     }
