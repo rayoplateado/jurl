@@ -93,13 +93,39 @@ pub fn declared(tag: &str) -> Option<String> {
     (2..=3).contains(&parsed.primary_language().len()).then(|| canon.to_ascii_lowercase())
 }
 
-/// The language a run asks for, from an Accept-Language value (what `JURL_ACCEPT_LANGUAGE` sets): the primary subtag of its first
-/// tag, when the registry lists that tag (`en` for `en-GB,en;q=0.9`). None for an empty value, `*`, or a tag the registry does
-/// not list.
-pub fn run_language(accept_language: &str) -> Option<String> {
-    let first = accept_language.split(',').next()?.split(';').next()?.trim();
-    let tag = declared(first)?;
-    tag.split('-').next().map(str::to_string)
+/// The languages a run asks for, from an Accept-Language value (what `JURL_ACCEPT_LANGUAGE` sets): the primary subtag of each tag,
+/// most preferred first. The tags are ordered by their weight (`q`, RFC 9110), the tags of equal weight in the order written, and
+/// a tag weighted 0 (`es;q=0`) is not asked for. A tag the registry does not list, or `*`, is left out on its own, and each language
+/// is kept once: `en-GB,en;q=0.9` is `en`, `es;q=0.5,en` is `en` then `es`, `english-GB,es` is `es`. Empty for an empty value.
+pub fn run_languages(accept_language: &str) -> Vec<String> {
+    let mut asked: Vec<(f32, String)> = accept_language
+        .split(',')
+        .filter_map(|item| {
+            let mut parts = item.split(';');
+            let tag = declared(parts.next()?.trim())?;
+            let weight = parts.find_map(weight_of).unwrap_or(1.0);
+            (weight > 0.0).then(|| (weight, primary(&tag).to_string()))
+        })
+        .collect();
+    // A stable sort: tags of equal weight keep the order they are written in.
+    asked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut languages: Vec<String> = Vec::new();
+    for (_, language) in asked {
+        if !languages.contains(&language) {
+            languages.push(language);
+        }
+    }
+    languages
+}
+
+/// The weight an Accept-Language parameter gives its tag, when the parameter is `q` (in any case) and its value a number from 0
+/// to 1. Any other parameter, and a value that is no weight, give none.
+fn weight_of(param: &str) -> Option<f32> {
+    let (name, value) = param.split_once('=')?;
+    if !name.trim().eq_ignore_ascii_case("q") {
+        return None;
+    }
+    value.trim().parse::<f32>().ok().filter(|weight| (0.0..=1.0).contains(weight))
 }
 
 /// The language a path segment names, normalized: a language (`de`), or a language and a region (`es-es`, `es_ES`,
@@ -272,16 +298,18 @@ pub fn likely_language(region: &str) -> Option<String> {
     (language != "und").then_some(language)
 }
 
-/// The alternate a page offers a run in `country` (two uppercase letters) and in `language` (a primary subtag, when the run asks for
-/// one), out of the page's alternates' tags (each normalized, see [`declared`]): the index of the one whose region is the country and
-/// whose language is the run's; else the one in the country's likely language (see [`likely_language`]); else the country's first in
-/// the page's own order, which is the site's own default for that region. None when no alternate is in the country.
-pub fn market_alternate(country: &str, language: Option<&str>, tags: &[&str]) -> Option<usize> {
+/// The alternate a page offers a run in `country` (two uppercase letters) and in `languages` (the run's primary subtags, most
+/// preferred first, as [`run_languages`] gives them), out of the page's alternates' tags (each normalized, see [`declared`]): the
+/// index of the one whose region is the country and whose language is the first of the run's that the country has one in; else
+/// the one in the country's likely language (see [`likely_language`]); else the country's first in the page's own order, which is
+/// the site's own default for that region. None when no alternate is in the country.
+pub fn market_alternate(country: &str, languages: &[String], tags: &[&str]) -> Option<usize> {
     let in_country: Vec<usize> =
         (0..tags.len()).filter(|&i| region(tags[i]).is_some_and(|r| r.eq_ignore_ascii_case(country))).collect();
     let in_language = |wanted: &str| in_country.iter().copied().find(|&i| primary(tags[i]) == wanted);
-    language
-        .and_then(in_language)
+    languages
+        .iter()
+        .find_map(|language| in_language(language))
         .or_else(|| likely_language(country).as_deref().and_then(in_language))
         .or_else(|| in_country.first().copied())
 }
@@ -323,14 +351,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_language_a_run_asks_for_is_the_primary_subtag_of_its_first_tag() {
-        assert_eq!(run_language("en").as_deref(), Some("en"));
-        assert_eq!(run_language("en-GB,en;q=0.9").as_deref(), Some("en"));
-        assert_eq!(run_language(" es-ES ; q=1").as_deref(), Some("es"));
-        assert_eq!(run_language("zh_CN").as_deref(), Some("zh"));
-        assert_eq!(run_language("*"), None);
-        assert_eq!(run_language(""), None);
-        assert_eq!(run_language("english-GB"), None);
+    fn the_languages_a_run_asks_for_are_the_primary_subtags_of_its_tags_most_preferred_first() {
+        assert_eq!(run_languages("en"), ["en"]);
+        assert_eq!(run_languages("en-GB,en;q=0.9"), ["en"], "a region, and a repeat of the language, count once");
+        assert_eq!(run_languages(" es-ES ; q=1"), ["es"]);
+        assert_eq!(run_languages("zh_CN"), ["zh"]);
+        assert_eq!(run_languages("en,es"), ["en", "es"], "every tag the header lists");
+        assert_eq!(run_languages("en,es;q=0.8"), ["en", "es"]);
+        assert_eq!(run_languages("es;q=0.5,en"), ["en", "es"], "the weight orders them, an unweighted tag is 1");
+        assert_eq!(run_languages("en;Q=0.000,es"), ["es"], "the parameter's name is in any case, and 0.000 is 0");
+        assert_eq!(run_languages("en,*,es"), ["en", "es"], "a wildcard is left out, the tags around it kept");
+        assert_eq!(run_languages("english-GB,es"), ["es"], "a tag the registry does not list is left out on its own");
+        assert!(run_languages("es;q=0").is_empty(), "a tag weighted 0 is not asked for");
+        assert!(run_languages("es;q=0.0, en;q=0").is_empty());
+        assert!(run_languages("*").is_empty());
+        assert!(run_languages("").is_empty());
+        assert!(run_languages("english-GB").is_empty());
     }
 
     fn url(s: &str) -> Url {
@@ -500,20 +536,23 @@ mod tests {
 
     #[test]
     fn a_run_is_offered_the_alternate_of_its_country_in_its_language_then_the_countrys_own() {
-        let pick = |country: &str, language: Option<&str>, tags: &[&str]| market_alternate(country, language, tags);
+        let pick = |country: &str, languages: &[&str], tags: &[&str]| {
+            let languages: Vec<String> = languages.iter().map(|language| language.to_string()).collect();
+            market_alternate(country, &languages, tags)
+        };
         let tags = ["es-es", "en-es", "en-gb", "de-at"];
-        assert_eq!(pick("ES", Some("en"), &tags), Some(1), "the country's region in the run's language");
-        assert_eq!(pick("ES", Some("fr"), &tags), Some(0), "no French for Spain: the country's likely language");
-        assert_eq!(pick("ES", None, &tags), Some(0), "no run language: the country's likely language");
-        assert_eq!(pick("GB", Some("es"), &tags), Some(2), "a region's only alternate is the one");
-        assert_eq!(pick("AT", Some("fr"), &tags), Some(3), "Austria's likely language is German");
-        assert_eq!(pick("US", Some("en"), &tags), None, "no alternate in the country");
-        assert_eq!(
-            pick("MX", Some("de"), &["pt-mx", "fr-mx"]),
-            Some(0),
-            "no likely language declared: the site's first"
-        );
-        assert_eq!(pick("ES", Some("en"), &["en"]), None, "a language alone is in no country");
+        assert_eq!(pick("ES", &["en"], &tags), Some(1), "the country's region in the run's language");
+        assert_eq!(pick("ES", &["fr"], &tags), Some(0), "no French for Spain: the country's likely language");
+        assert_eq!(pick("ES", &[], &tags), Some(0), "no run language: the country's likely language");
+        assert_eq!(pick("GB", &["es"], &tags), Some(2), "a region's only alternate is the one");
+        assert_eq!(pick("AT", &["fr"], &tags), Some(3), "Austria's likely language is German");
+        assert_eq!(pick("US", &["en"], &tags), None, "no alternate in the country");
+        assert_eq!(pick("MX", &["de"], &["pt-mx", "fr-mx"]), Some(0), "no likely language declared: the site's first");
+        assert_eq!(pick("ES", &["en"], &["en"]), None, "a language alone is in no country");
+        // Several languages: the first of them, in the run's order, that the country has an alternate in.
+        assert_eq!(pick("ES", &["fr", "en"], &tags), Some(1), "no French in Spain, so the next language, English");
+        assert_eq!(pick("ES", &["en", "es"], &tags), Some(1), "the run's first language, even over the likely one");
+        assert_eq!(pick("ES", &["de", "es"], &tags), Some(0), "no German in Spain, so Spanish");
     }
 
     #[test]
