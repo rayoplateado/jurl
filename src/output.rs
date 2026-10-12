@@ -1,11 +1,18 @@
 //! What a run prints: a result as text or JSON, and the exit code a miss or a failure gets.
 
-use std::io::{ErrorKind, Write};
+use std::{
+    collections::HashSet,
+    io::{ErrorKind, Write},
+    sync::{
+        Mutex, PoisonError,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::{cli::Args, decide};
+use crate::{cli::Args, decide, extract::Block, fetch::Served, links};
 
 /// What a mode found, both ways: the text a person reads and the JSON a script reads. The CLI prints one of them
 /// (`--json`); `jurl mcp` hands an agent both.
@@ -56,14 +63,75 @@ pub(crate) fn exit_code(e: &anyhow::Error) -> u8 {
     if is_not_found(e) { 1 } else { 2 }
 }
 
+/// The pages a run has loaded, for `--with-pages` (see `Args::pages_log`). Pages load side by side under `--follow`, so each
+/// is numbered as its load starts, and the list keeps that order, not the order the loads finish in.
+#[derive(Default)]
+pub(crate) struct PagesLog {
+    started: AtomicUsize,
+    loaded: Mutex<Vec<Loaded>>,
+}
+
+/// A page as it was loaded: its number (see [`PagesLog::start`]), its final URL, and what `pages` says of it.
+struct Loaded {
+    number: usize,
+    url: url::Url,
+    route: &'static str,
+    rendered: bool,
+    blocks: Vec<Block>,
+}
+
+impl PagesLog {
+    /// The number of a page whose load is starting now.
+    pub(crate) fn start(&self) -> usize {
+        self.started.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Notes a page that loaded, under the number `start` gave its load, with the blocks the run read it as.
+    pub(crate) fn record(&self, number: usize, url: &url::Url, served: Served, blocks: &[Block]) {
+        let page = Loaded {
+            number,
+            url: url.clone(),
+            route: served.route.name(),
+            rendered: served.rendered,
+            blocks: blocks.to_vec(),
+        };
+        self.loaded.lock().unwrap_or_else(PoisonError::into_inner).push(page);
+    }
+
+    /// The `pages` of the JSON: in load order, once per final URL (its first load, by `links::key`), each with its route,
+    /// whether it was rendered, and its blocks.
+    pub(crate) fn json(&self) -> Result<Value> {
+        let loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut in_order: Vec<&Loaded> = loaded.iter().collect();
+        in_order.sort_by_key(|p| p.number);
+        let mut seen = HashSet::new();
+        let mut pages = Vec::new();
+        for p in in_order.into_iter().filter(|p| seen.insert(links::key(&p.url))) {
+            pages.push(json!({
+                "url": p.url.as_str(),
+                "route": p.route,
+                "rendered": p.rendered,
+                "blocks": serde_json::to_value(&p.blocks)?,
+            }));
+        }
+        Ok(Value::Array(pages))
+    }
+}
+
 /// What goes to stdout. A miss prints nothing, except in JSON with --precise: what came closest, with
 /// `"answer": null`, or with nothing close, `"closest": null` too, so a script reading stdout always gets an object.
-/// The JSON carries the run's `usage` either way, so a miss can be costed too.
+/// The JSON carries the run's `usage` either way, so a miss can be costed too. With --with-pages the JSON is an object for
+/// every outcome: a miss or a failure has its `error`, and the pages the run loaded.
 pub(crate) fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::Usage) -> Result<Option<String>> {
     let json = |v: &Value| -> Result<String> {
         let mut v = v.clone();
         if let Some(o) = v.as_object_mut() {
             o.insert("usage".to_string(), usage.json(&args.fallback));
+            // A `--pages` read gives the URLs of its list under `pages` (see `blocks.rs`): each entry here has its URL too,
+            // so the entries take the key.
+            if args.with_pages {
+                o.insert("pages".to_string(), args.pages_log.json()?);
+            }
         }
         Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
     };
@@ -74,9 +142,23 @@ pub(crate) fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::U
         Err(e) => match not_found_in(e) {
             Some(NotFound { closest: Some(r), .. }) => json(&r.json).map(Some),
             Some(n) if args.precise => json(&no_answer(args, &n.message)).map(Some),
+            _ if args.with_pages => json(&no_result(args, &format!("{e:#}"))).map(Some),
             _ => Ok(None),
         },
     }
+}
+
+/// A run with no result, under --with-pages: the URL, the question when there is one, and the error (a miss's message, or a
+/// failure's), so the JSON is still an object for a script to read.
+fn no_result(args: &Args, error: &str) -> Value {
+    let mut v = json!({
+        "url": url::Url::parse(&args.url).map_or_else(|_| args.url.clone(), String::from),
+        "error": error,
+    });
+    if let Some(ask) = &args.ask {
+        v["ask"] = json!(ask);
+    }
+    v
 }
 
 /// Prints the result. A reader that has stopped (`| head -0`) isn't a failure: the exit code is the run's own.
@@ -104,7 +186,17 @@ mod tests {
     use anyhow::anyhow;
     use clap::Parser;
 
-    use crate::{decide::Answers, prepare};
+    use futures::future::join_all;
+    use url::Url;
+
+    use crate::{
+        config::Config,
+        decide::Answers,
+        extract::Kind,
+        fetch::{Route, test_server},
+        load, prepare,
+        timing::Timer,
+    };
 
     use super::*;
 
@@ -200,5 +292,176 @@ mod tests {
         assert!(write_out(&mut Gone(ErrorKind::BrokenPipe), "$8\n").is_ok());
         // Any other write error still is one.
         assert!(write_out(&mut Gone(ErrorKind::PermissionDenied), "$8\n").is_err());
+    }
+
+    /// A page's blocks for a test: one paragraph.
+    fn a_page_of(text: &str) -> Vec<Block> {
+        vec![Block::new(0, Kind::Para, text.into())]
+    }
+
+    fn served() -> Served {
+        Served { route: Route::Direct, rendered: false }
+    }
+
+    #[test]
+    fn without_with_pages_the_json_is_the_same_whatever_was_loaded() {
+        let mut args = Args::parse_from(["jurl", "--json", "-q", "price?", "jurl.dev"]);
+        prepare(&mut args).unwrap();
+        let usage = decide::Usage::new();
+        let done = Ok(Rendered { text: String::new(), json: json!({ "answer": "$8" }) });
+        let plain = stdout_for(&args, &done, &usage).unwrap().expect("JSON");
+        // Pages loaded and kept, but not asked for: the output is the same, with no `pages` key.
+        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("$8"));
+        assert_eq!(stdout_for(&args, &done, &usage).unwrap().expect("JSON"), plain);
+        let expected = json!({ "answer": "$8", "usage": usage.json(&args.fallback) });
+        assert_eq!(plain, format!("{}\n", serde_json::to_string_pretty(&expected).unwrap()));
+    }
+
+    #[test]
+    fn with_pages_a_miss_and_a_failure_still_list_the_pages_they_loaded() {
+        let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "price?", "https://x.com/"]);
+        prepare(&mut args).unwrap();
+        let usage = decide::Usage::new();
+        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("Nothing on prices."));
+        let json_of = |done: Result<Rendered>| -> Value {
+            let out = stdout_for(&args, &done, &usage).unwrap().expect("JSON");
+            serde_json::from_str(&out).unwrap()
+        };
+        let found = json_of(Ok(Rendered { text: String::new(), json: json!({ "answer": "$8" }) }));
+        assert_eq!((found["answer"].as_str(), found["pages"][0]["url"].as_str()), (Some("$8"), Some("https://x.com/")));
+        // A miss (exit 1): an object with its error, the question, and the page it was read from.
+        let miss = not_found("read 1 page of https://x.com/ and none answers that".into());
+        assert_eq!(exit_code(&miss), 1);
+        let v = json_of(Err(miss));
+        assert_eq!(v["error"], "read 1 page of https://x.com/ and none answers that");
+        assert_eq!((v["ask"].as_str(), v["url"].as_str()), (Some("price?"), Some("https://x.com/")));
+        assert_eq!(v["pages"][0]["blocks"][0]["text"], "Nothing on prices.");
+        assert!(v.get("answer").is_none(), "not a precise run");
+        assert!(v["usage"].is_object(), "a miss is costed too");
+        // A failure after the page was read (exit 2): the same object, with the failure as its error.
+        let failure = anyhow!("api.typesafe.ai → HTTP 402: no credits");
+        assert_eq!(exit_code(&failure), 2);
+        let v = json_of(Err(failure));
+        assert_eq!(v["error"], "api.typesafe.ai → HTTP 402: no credits");
+        assert_eq!(v["pages"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn with_pages_a_precise_miss_keeps_its_shape_and_lists_the_pages() {
+        let mut args = Args::parse_from(["jurl", "--precise", "--json", "--with-pages", "-q", "books?", "jurl.dev"]);
+        prepare(&mut args).unwrap();
+        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("Docs."));
+        let miss: Result<Rendered> = Err(not_found("nothing in https://jurl.dev/ answers that".into()));
+        let out = stdout_for(&args, &miss, &decide::Usage::new()).unwrap().expect("JSON on a miss");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!((&v["answer"], &v["closest"]), (&Value::Null, &Value::Null));
+        assert_eq!(v["error"], "nothing in https://jurl.dev/ answers that");
+        assert_eq!(v["pages"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn with_pages_the_entries_take_the_key_a_pages_read_gives_its_urls_under() {
+        let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "x?", "https://x.com/"]);
+        prepare(&mut args).unwrap();
+        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("one"));
+        args.pages_log.record(1, &Url::parse("https://x.com/2").unwrap(), served(), &a_page_of("two"));
+        let read = Ok(Rendered {
+            text: String::new(),
+            json: json!({ "answer": null, "pages": ["https://x.com/", "https://x.com/2"] }),
+        });
+        let usage = decide::Usage::new();
+        let v: Value = serde_json::from_str(&stdout_for(&args, &read, &usage).unwrap().unwrap()).unwrap();
+        let urls: Vec<&str> = v["pages"].as_array().unwrap().iter().map(|p| p["url"].as_str().unwrap()).collect();
+        assert_eq!(urls, ["https://x.com/", "https://x.com/2"]);
+        assert_eq!(v["pages"][1]["blocks"][0]["text"], "two");
+        // Without the flag, the list of URLs is as the read gave it.
+        args.with_pages = false;
+        let v: Value = serde_json::from_str(&stdout_for(&args, &read, &usage).unwrap().unwrap()).unwrap();
+        assert_eq!(v["pages"], json!(["https://x.com/", "https://x.com/2"]));
+    }
+
+    #[test]
+    fn pages_are_listed_in_the_order_their_loads_started_once_per_page() {
+        let log = PagesLog::default();
+        let (first, second, third) = (log.start(), log.start(), log.start());
+        // The loads finish out of order, and the third is the second page again, with a trailing slash.
+        log.record(second, &Url::parse("https://x.com/b").unwrap(), served(), &a_page_of("b"));
+        log.record(first, &Url::parse("https://x.com/a").unwrap(), served(), &a_page_of("a"));
+        log.record(third, &Url::parse("https://x.com/b/").unwrap(), served(), &a_page_of("b again"));
+        let pages = log.json().unwrap();
+        let listed: Vec<(&str, &str)> = pages
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["url"].as_str().unwrap(), p["blocks"][0]["text"].as_str().unwrap()))
+            .collect();
+        assert_eq!(listed, [("https://x.com/a", "a"), ("https://x.com/b", "b")]);
+        assert_eq!(pages[0]["route"], "direct");
+        assert_eq!(pages[0]["rendered"], false);
+    }
+
+    /// A loopback server that answers each connection on a thread of its own, so a slow page does not hold up the others.
+    /// `reply` gives the bytes for a request's path, and may take its time.
+    fn serve_each_on_its_own_thread(reply: fn(&str) -> Vec<u8>) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let mut head = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !head.ends_with(b"\r\n\r\n") {
+                        match conn.read(&mut byte) {
+                            Ok(1) => head.push(byte[0]),
+                            _ => return,
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&head);
+                    let path = head.split_whitespace().nth(1).unwrap_or_default();
+                    let _ = conn.write_all(&reply(path));
+                });
+            }
+        });
+        base
+    }
+
+    /// The loads a `--follow` batch starts side by side (see `follow::read_batches`) are listed in the order they started,
+    /// though the first one finishes last. A page that redirects to one already listed is not listed twice.
+    #[tokio::test]
+    async fn pages_loaded_side_by_side_are_listed_in_the_order_they_started() {
+        let base = serve_each_on_its_own_thread(|path| {
+            let html = |text: &str| {
+                let body = format!("<html><body><article><p>{text}</p></article></body></html>");
+                test_server::reply("200 OK", "Content-Type: text/html; charset=utf-8\r\n", body.as_bytes())
+            };
+            match path {
+                "/slow" => {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    html("The slow page.")
+                }
+                "/fast" => html("The fast page."),
+                "/moved" => test_server::reply("301 Moved Permanently", "Location: /fast\r\n", b""),
+                _ => test_server::reply("404 Not Found", "", b""),
+            }
+        });
+        let args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "fast?", base.as_str()]);
+        let config = Config::default();
+        let urls: Vec<Url> =
+            ["/slow", "/fast", "/moved"].iter().map(|p| Url::parse(&format!("{base}{p}")).unwrap()).collect();
+        let loads = join_all(urls.iter().map(|u| {
+            let (args, config) = (&args, &config);
+            async move {
+                let mut t = Timer::new();
+                load(args, config, u, &mut t).await
+            }
+        }))
+        .await;
+        assert!(loads.iter().all(Result::is_ok), "every load reads its page");
+        let pages = args.pages_log.json().unwrap();
+        let listed: Vec<&str> = pages.as_array().unwrap().iter().map(|p| p["url"].as_str().unwrap()).collect();
+        assert_eq!(listed, [format!("{base}/slow"), format!("{base}/fast")]);
+        assert_eq!(pages[0]["blocks"][0]["text"], "The slow page.");
+        assert_eq!((pages[0]["route"].as_str(), pages[0]["rendered"].as_bool()), (Some("direct"), Some(false)));
     }
 }
