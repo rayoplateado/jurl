@@ -924,11 +924,19 @@ enum Stop {
     Cold,
 }
 
+/// Whether a found answer ends the search: no lead left could beat it by [`BETTER_BY`]. `--follow-all` never ends it this
+/// way; the search then reads its whole budget, and only a cold trail (see [`Stop::Cold`]) ends it sooner.
+fn ends_at_answer(follow_all: bool, found: bool, best_found: f64, best_lead: Option<f64>) -> bool {
+    !follow_all && found && best_lead.is_none_or(|lead| lead <= best_found + BETTER_BY)
+}
+
 /// A search of one site, carried from page to page: the leads not opened yet, the pages read, the pages that answer.
 struct Search {
     site: Site,
     /// `--follow N`: the pages the search may open.
     max: usize,
+    /// `--follow-all`: keep reading after an answer is found (see [`ends_at_answer`]).
+    follow_all: bool,
     /// How sure a page must be of its answer to be found: `--threshold`, or the default of `--precise`.
     threshold: f64,
     /// `pages` is the pages read, which is what the search reports. `opened` is the pages opened, read or not: the
@@ -1035,6 +1043,7 @@ impl Search {
             read: HashSet::from([links::key(&first.url)]),
             site,
             max,
+            follow_all: args.follow_all,
             threshold,
             pages: 1,
             opened: 1,
@@ -1095,7 +1104,8 @@ impl Search {
     fn done(&self) -> Option<Stop> {
         // Done when no page left could beat what's been found: each lead's score is the most it could rank.
         let best_found = self.found.iter().map(|f| f.rank).fold(0.0, f64::max);
-        if !self.found.is_empty() && self.leads.first().is_none_or(|l| l.score <= best_found + BETTER_BY) {
+        let best_lead = self.leads.first().map(|l| l.score);
+        if ends_at_answer(self.follow_all, !self.found.is_empty(), best_found, best_lead) {
             return Some(Stop::Found);
         }
         if self.leads.first().is_none_or(|l| l.score < COLD_TRAIL) {
@@ -1816,6 +1826,7 @@ mod tests {
         Search {
             site: Site::new(&u("https://x.com/")),
             max: 5,
+            follow_all: false,
             threshold: PRECISE_THRESHOLD,
             pages: 1,
             opened: 1,
@@ -1910,6 +1921,20 @@ mod tests {
         // With no lead left, nothing could beat it.
         s.leads.clear();
         assert_eq!(s.done(), Some(Stop::Found));
+    }
+
+    #[test]
+    fn follow_all_reads_on_past_a_found_page_until_the_trail_is_cold() {
+        let mut s = search();
+        let visit = visit_of("https://x.com/a", 0.9, 0.9, true, &[]);
+        s.found.push(Ranked { rank: 0.5, visit, path: Vec::new() });
+        s.follow_all = true;
+        // A lead no better than the find is read anyway: the budget decides when the search ends.
+        s.leads.push(lead(0.1));
+        assert_eq!(s.done(), None);
+        // A trail that has gone cold still ends it, as before.
+        s.leads[0].score = 0.01;
+        assert_eq!(s.done(), Some(Stop::Cold));
     }
 
     #[test]

@@ -587,4 +587,14 @@ mod tests {
         assert!(check(&["jurl", "--json", "--with-pages", "x.com"]).is_ok());
         assert!(check(&["jurl", "--json", "x.com"]).is_ok(), "without it, the JSON is as it was");
     }
+
+    #[test]
+    fn follow_all_is_off_by_default_and_needs_follow() {
+        assert!(!Args::parse_from(["jurl", "-q", "x?", "--follow", "5", "x.com"]).follow_all);
+        assert!(Args::parse_from(["jurl", "-q", "x?", "--follow", "5", "--follow-all", "x.com"]).follow_all);
+        assert!(
+            Args::try_parse_from(["jurl", "-q", "x?", "--follow-all", "x.com"]).is_err(),
+            "it reads on from --follow"
+        );
+    }
 }

@@ -41,6 +41,10 @@ pub(crate) struct Args {
     /// reading up to this many pages in all [default: 5]. A search from a public address reads only public addresses
     #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]
     pub(crate) follow: Option<usize>,
+    /// With --follow: keep following until the page budget is used, even after an answer is found. The answer is still the
+    /// best of all the pages read. Off by default: a found answer ends the search once no lead left could beat it
+    #[arg(long, requires = "follow")]
+    pub(crate) follow_all: bool,
     /// Read up to this many pages of a list (50 at most): the page's own next-page links (`rel="next"`, or a `?page=2` one
     /// page on), one after another, judged as one list. The default block count is multiplied by the pages read; -a keeps
     /// all. Not with --follow, --links, --image or --vision
