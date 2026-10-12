@@ -104,12 +104,23 @@ pub struct Link {
     pub marginal: bool,
 }
 
+/// Another version of the page that the page declares (`<link rel="alternate" hreflang>`): the same page in another
+/// language or market (see [`html`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Alternate {
+    /// The `hreflang` as the page writes it (`en-GB`, `x-default`).
+    pub hreflang: String,
+    pub url: url::Url,
+}
+
 #[derive(Default)]
 pub struct Extracted {
     pub title: String,
     /// The language the page declares (BCP 47), as written: its `<html lang>`, else its `xml:lang`. None when it
     /// declares none, and always for markdown.
     pub lang: Option<String>,
+    /// The other versions of the page that it declares, in the order it lists them. Empty for markdown.
+    pub alternates: Vec<Alternate>,
     pub blocks: Vec<Block>,
     /// The page's JSON-LD values (see [`json_ld`]): --precise answers from them only when its text gives no answer.
     pub structured: Vec<Block>,

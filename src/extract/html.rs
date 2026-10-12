@@ -8,7 +8,7 @@ use url::Url;
 
 use super::cards::{self, Member};
 use super::join::join_short;
-use super::{BREAK, Block, Extracted, Image, Kind, Link, collapse, push_image, push_link};
+use super::{Alternate, BREAK, Block, Extracted, Image, Kind, Link, collapse, push_image, push_link};
 use crate::paging;
 
 const SKIP: &[&str] = &[
@@ -45,6 +45,7 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
     Extracted {
         title: collapse(&page_title(doc)),
         lang: declared_lang(doc),
+        alternates: alternates(doc, base),
         blocks,
         structured: Vec::new(),
         images: collect_images(doc, root, in_body, base),
@@ -69,6 +70,21 @@ fn next_page(doc: &Html, site_links: &[Link], base: &Url) -> Option<Url> {
         })
         .find(|u| u != base && matches!(u.scheme(), "http" | "https") && paging::same_site(base, u));
     standard.or_else(|| paging::numbered_next(base, site_links.iter().map(|l| &l.url)))
+}
+
+/// The other versions of the page the page declares: each `<link rel="alternate" hreflang="…" href="…">`, its `href` on the page's
+/// base and without its fragment, when it is an http or https address (Google's localized versions). A link without an
+/// `hreflang` is not one. `x-default` is kept here; the follower reads its tag.
+fn alternates(doc: &Html, base: &Url) -> Vec<Alternate> {
+    doc.select(&sel("link[rel~=alternate][hreflang][href]"))
+        .filter_map(|e| {
+            let hreflang = e.value().attr("hreflang")?.trim();
+            let mut url = base.join(e.value().attr("href")?.trim()).ok()?;
+            url.set_fragment(None);
+            let http = matches!(url.scheme(), "http" | "https");
+            (!hreflang.is_empty() && http).then(|| Alternate { hreflang: hreflang.to_string(), url })
+        })
+        .collect()
 }
 
 /// The page's title: `og:title`, else the `<title>`, else the first `<h1>`.
@@ -904,6 +920,31 @@ mod tests {
         assert_eq!(lang(r#"<html lang="  "><body><p>Text</p></body></html>"#), None);
         assert_eq!(lang("<body><p>A page with no html element</p></body>"), None);
         assert_eq!(crate::extract::markdown("# Hola\n\nTexto.", &base()).lang, None, "markdown declares none");
+    }
+
+    #[test]
+    fn a_page_declares_its_alternates_by_hreflang_on_its_own_base() {
+        let page = r#"<html><head>
+            <link rel="alternate" hreflang="en-GB" href="/gb/luggage/"/>
+            <link rel="alternate" hreflang='es-ES' href="https://x.test/es/equipaje#top"/>
+            <link rel="alternate" hreflang="x-default" href="/"/>
+            <link rel="alternate" href="/feed.xml" type="application/rss+xml"/>
+            <link rel="alternate" hreflang="fr" href="mailto:nobody@x.test"/>
+            <link rel="alternate" hreflang="" href="/blank"/>
+            <link rel="stylesheet" hreflang="de" href="/de/"/>
+            </head><body><p>Hola</p></body></html>"#;
+        let base = Url::parse("https://x.test/es/equipaje").unwrap();
+        let alternates: Vec<(String, String)> =
+            html(page, &base).alternates.into_iter().map(|a| (a.hreflang, a.url.to_string())).collect();
+        assert_eq!(
+            alternates,
+            [
+                ("en-GB".to_string(), "https://x.test/gb/luggage/".to_string()),
+                ("es-ES".to_string(), "https://x.test/es/equipaje".to_string()),
+                ("x-default".to_string(), "https://x.test/".to_string()),
+            ]
+        );
+        assert!(html("<p>no alternates</p>", &base).alternates.is_empty());
     }
 
     #[test]
