@@ -407,6 +407,7 @@ async fn run(client: &Client, argv: &[String]) -> Value {
             args.timing,
         );
         args.fallback = crate::fallback::Fallback::configured(|key| cfg.get(key))?;
+        args.jev_budget = crate::follow::jev_budget(|key| cfg.get(key), args.timing);
         let access = crate::setup::saved_access(&cfg)?;
         crate::page(&args, &cfg, client, &access, &mut Timer::new()).await
     }

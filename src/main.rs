@@ -171,6 +171,7 @@ async fn run(mut args: Args) -> Result<()> {
     args.stealth =
         stealth::Sidecar::configured(|key| cfg.get(key), args.public_only, args.render_sandboxed, args.timing);
     args.fallback = fallback::Fallback::configured(|key| cfg.get(key))?;
+    args.jev_budget = follow::jev_budget(|key| cfg.get(key), args.timing);
     let access = setup::access(&mut cfg, &client).await?;
 
     let mut t = Timer::new();
