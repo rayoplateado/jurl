@@ -1728,6 +1728,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_gzipped_sitemap_served_without_content_encoding_is_read_as_its_xml() {
+        // An `.xml.gz` sitemap is a gzip file, not a gzip Content-Encoding: its magic bytes say so, and the pages it
+        // lists are its candidates (upc.edu's sitemap.xml.gz lists its pages this way).
+        let xml = "<?xml version=\"1.0\"?><urlset><url><loc>https://a.test/en/masters/ai</loc></url></urlset>";
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut enc, xml.as_bytes()).expect("gzip");
+        let body = enc.finish().expect("gzip");
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-gzip\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let url = Url::parse(&test_server::serve(head.into(), body, true)).unwrap();
+        let pages = sitemap_entries(&url, None, &RunMarket::default(), retry_off()).await;
+        assert_eq!(pages, [("https://a.test/en/masters/ai".to_string(), None)]);
+    }
+
+    #[tokio::test]
     async fn a_small_file_past_its_cap_is_refused_and_one_at_it_is_read() {
         let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
         let url = |body: Vec<u8>| Url::parse(&test_server::serve(head.into(), body, true)).unwrap();
