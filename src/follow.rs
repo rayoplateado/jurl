@@ -21,7 +21,7 @@ use crate::{
     cli::Args,
     config::Config,
     decide::is_api_error,
-    extract::{self, Extracted, Kind, Link},
+    extract::{self, Alternate, Extracted, Kind, Link},
     fetch::{Retry, Served},
     judge::{Ctx, Item, is_block_page},
     langtag::{self, Market, Place, Relation},
@@ -73,12 +73,49 @@ struct Site {
     /// site's pages in it are read beside the start page's (see [`Site::refuses`], [`candidates`] and
     /// [`without_language_copies`]). None when the run asks for no language, or for the start page's own.
     run: Option<String>,
+    /// The market the run reads as, whether or not it is the start page's own (see [`RunMarket`]).
+    market: RunMarket,
+}
+
+/// The market a run reads as: its country (`JURL_COUNTRY`) and the language it asks for (`JURL_ACCEPT_LANGUAGE`, its primary
+/// subtag), each whether or not it is the start page's own. A page that declares another version of itself for the market is
+/// offered that version (see [`market_offer`]), and a sitemap index's children are ranked by it (see [`child_rank`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct RunMarket {
+    country: Option<String>,
+    language: Option<String>,
+}
+
+impl RunMarket {
+    /// The rank of a locale outside the run's country, and of one that names no region: the generic order, behind every child of
+    /// the country (see [`RunMarket::rank`]).
+    const NO_MATCH: u8 = 2;
+
+    /// How well a locale (see [`langtag::url_locale`]) matches the run's market, best first: its region is the run's country and its
+    /// language the run's language; its region is the country; otherwise [`RunMarket::NO_MATCH`]. A language alone does not rank a
+    /// locale of another market: the market matters, not the language, as for a page's alternates (see [`langtag::market_alternate`]).
+    fn rank(&self, locale: &langtag::Locale) -> u8 {
+        let region =
+            self.country.as_deref().zip(locale.region.as_deref()).is_some_and(|(c, r)| c.eq_ignore_ascii_case(r));
+        let language = self.language.as_deref().zip(locale.language.as_deref()).is_some_and(|(l, x)| l == x);
+        match (region, language) {
+            (true, true) => 0,
+            (true, false) => 1,
+            _ => Self::NO_MATCH,
+        }
+    }
 }
 
 impl Site {
     fn new(u: &Url) -> Self {
         let root = u.host_str().unwrap_or_default().trim_start_matches("www.").to_string();
-        Site { root, front_door: u.path() == "/" && u.query().is_none(), language: None, run: None }
+        Site {
+            root,
+            front_door: u.path() == "/" && u.query().is_none(),
+            language: None,
+            run: None,
+            market: RunMarket::default(),
+        }
     }
 
     /// Why a page that declares `page` is not read, when it declares another language than the start page's (see
@@ -400,13 +437,18 @@ async fn small_text_within(url: &Url, max: usize, retry: Retry<'_>) -> Option<St
 }
 
 /// The pages a sitemap body lists, each with the language its own entry declares (see [`crate::sitemaps::url_entries`]).
-/// A sitemap index is read through the children [`crate::sitemaps::index_children`] picks: the start page's language
-/// first (see [`child_rank`]), then the newest.
-async fn pages_of(body: &str, lang: Option<&StartLanguage>, retry: Retry<'_>) -> Vec<(String, Option<String>)> {
+/// A sitemap index is read through the children [`crate::sitemaps::index_children`] picks: the run's market first, then the
+/// start page's language (see [`child_rank`]), then the newest.
+async fn pages_of(
+    body: &str,
+    lang: Option<&StartLanguage>,
+    market: &RunMarket,
+    retry: Retry<'_>,
+) -> Vec<(String, Option<String>)> {
     if !body.contains("<sitemapindex") {
         return crate::sitemaps::url_entries(body);
     }
-    let children: Vec<Url> = crate::sitemaps::index_children(body, |loc| child_rank(lang, loc))
+    let children: Vec<Url> = crate::sitemaps::index_children(body, |loc| child_rank(market, lang, loc))
         .iter()
         .filter_map(|c| Url::parse(c).ok())
         .collect();
@@ -423,23 +465,27 @@ async fn pages_of(body: &str, lang: Option<&StartLanguage>, retry: Retry<'_>) ->
 async fn sitemap_entries(
     sitemap: &Url,
     lang: Option<&StartLanguage>,
+    market: &RunMarket,
     retry: Retry<'_>,
 ) -> Vec<(String, Option<String>)> {
     match small_text(sitemap, retry).await {
-        Some(body) => pages_of(&body, lang, retry).await,
+        Some(body) => pages_of(&body, lang, market, retry).await,
         None => Vec::new(),
     }
 }
 
-/// Where a sitemap index's child ranks (see [`crate::sitemaps::index_children`]): by the language its URL names, and the
-/// region of it (see [`StartLanguage::place`]). Without a start language every child ranks alike, so the newest are read,
-/// as they were.
-fn child_rank(lang: Option<&StartLanguage>, loc: &str) -> Place {
-    match (lang, Url::parse(loc)) {
-        (Some(lang), Ok(url)) => lang.place(&url, None),
+/// Where a sitemap index's child ranks (see [`crate::sitemaps::index_children`]): first by whether its URL's locale is the run's
+/// market (see [`RunMarket::rank`]), then by the language its URL names, and the region of it (see [`StartLanguage::place`]). Without
+/// a start language, and without a run market, every child ranks alike by its place, so the newest are read, as they were.
+fn child_rank(market: &RunMarket, lang: Option<&StartLanguage>, loc: &str) -> (u8, Place) {
+    let url = Url::parse(loc);
+    let place = match (lang, &url) {
+        (Some(lang), Ok(url)) => lang.place(url, None),
         (Some(_), Err(_)) => Place::Other,
         (None, _) => NO_LANGUAGE,
-    }
+    };
+    let run = url.map_or(RunMarket::NO_MATCH, |url| market.rank(&langtag::url_locale(&url)));
+    (run, place)
 }
 
 /// The sitemaps robots.txt names that are read: [`crate::sitemaps::ROBOTS_SITEMAPS`] of them, in file order, each once,
@@ -522,10 +568,10 @@ async fn site_index(start: &Url, retry: Retry<'_>) -> SiteIndex {
 
 impl SiteIndex {
     /// The site's pages, in the order the search keeps them. Each sitemap is read as its body says: a page list, or an
-    /// index through the children [`pages_of`] picks, the start page's language first. `lang` is the start page's
-    /// language, when it declares one.
+    /// index through the children [`pages_of`] picks, the run's market first, then the start page's language. `lang` is the
+    /// start page's language, when it declares one.
     async fn pages(self, start: &Url, site: &Site, lang: Option<&StartLanguage>, retry: Retry<'_>) -> SiteFiles {
-        let read = join_all(self.sitemaps.iter().map(|body| pages_of(body, lang, retry))).await;
+        let read = join_all(self.sitemaps.iter().map(|body| pages_of(body, lang, &site.market, retry))).await;
         let mut pages: Vec<(Url, Option<String>)> =
             read.into_iter().flatten().filter_map(|(loc, declared)| Some((Url::parse(&loc).ok()?, declared))).collect();
         pages.sort_by_key(|(u, _)| {
@@ -559,7 +605,13 @@ impl SiteIndex {
 /// The pages the sitemaps of each of `hosts` list (see [`crate::hosts::linked_hosts`]): the host's /sitemap.xml and the
 /// sitemaps its robots.txt names, read as the start site's own are (see [`SiteIndex::pages`]). Kept when they share the
 /// start page's registrable domain.
-async fn linked_sitemaps(start: &Url, hosts: &[Url], lang: Option<&StartLanguage>, retry: Retry<'_>) -> Listed {
+async fn linked_sitemaps(
+    start: &Url,
+    hosts: &[Url],
+    lang: Option<&StartLanguage>,
+    market: &RunMarket,
+    retry: Retry<'_>,
+) -> Listed {
     let per_host = join_all(hosts.iter().map(|origin| async move {
         let own = origin.join("/sitemap.xml").ok();
         let robots = match origin.join("/robots.txt") {
@@ -568,10 +620,10 @@ async fn linked_sitemaps(start: &Url, hosts: &[Url], lang: Option<&StartLanguage
         };
         let mut entries: Vec<(String, Option<String>)> = Vec::new();
         if let Some(own) = &own {
-            entries.extend(sitemap_entries(own, lang, retry).await);
+            entries.extend(sitemap_entries(own, lang, market, retry).await);
         }
         for listed in robots_sitemap_urls(robots.as_deref().unwrap_or_default(), origin, own.as_ref()) {
-            entries.extend(sitemap_entries(&listed, lang, retry).await);
+            entries.extend(sitemap_entries(&listed, lang, market, retry).await);
         }
         entries
     }))
@@ -758,6 +810,26 @@ async fn visit(
     judge(args, client, api_key, url, ex, site, known, field_scores, read, served).await
 }
 
+/// The version of a page that the run's market is offered: the alternate that `langtag::market_alternate` picks out of the page's
+/// declared alternates, when it is another page than this one and on the site. Its link is scored with the page's others (see
+/// [`judge`]): a page is not swapped for its market's version, so the search still starts where the run does, and the version is
+/// read only where Jev says it leads to the answer.
+fn market_offer(site: &Site, page: &Url, alternates: &[Alternate]) -> Option<Link> {
+    let country = site.market.country.as_deref()?;
+    let declared: Vec<(String, &Alternate)> =
+        alternates.iter().filter_map(|alt| Some((langtag::declared(&alt.hreflang)?, alt))).collect();
+    let tags: Vec<&str> = declared.iter().map(|(tag, _)| tag.as_str()).collect();
+    let (tag, alt) = &declared[langtag::market_alternate(country, site.market.language.as_deref(), &tags)?];
+    let offered = links::key(&alt.url) != links::key(page) && site.contains(&alt.url);
+    offered.then(|| Link {
+        i: 0,
+        url: alt.url.clone(),
+        text: String::new(),
+        context: format!("the {tag} version of this page"),
+        marginal: false,
+    })
+}
+
 /// Is the answer on a page that is loaded, and which of its links lead on? Both questions go to Jev at once. `known` holds
 /// the menu links of the pages read before, and `field_scores` the field scores the search has so far.
 #[allow(clippy::too_many_arguments)]
@@ -785,10 +857,16 @@ async fn judge(
         // the page gives them, so a link to another domain is a candidate like any other, and is scored like one. A menu
         // link is scored on the first page it's on, not again on every page: on a page far from the question, the
         // site's "Main page" and "Search" would outscore everything in its text.
-        let candidates = links::candidates(&ctx, &ex, &bare, |u| {
+        let mut candidates = links::candidates(&ctx, &ex, &bare, |u| {
             let k = links::key(u);
             Site::reachable(u) && !(menus.contains(&k) && known.contains(&k))
         });
+        // The page's version for the run's market, when it declares one (see [`market_offer`]): added after the cap on the page's
+        // own links, so it is scored whatever the page's length.
+        if let Some(mut offer) = market_offer(site, &url, &ex.alternates) {
+            offer.i = candidates.len();
+            candidates.push(offer);
+        }
         // The answer the way `-q` finds it (score_blocks), and with --precise, the way --precise picks it.
         let answer = async {
             let mut t = Timer::new();
@@ -973,6 +1051,10 @@ impl Search {
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let mut site = Site::new(start);
+        site.market = RunMarket {
+            country: args.country.clone(),
+            language: crate::fetch::accept_language().and_then(|value| langtag::run_language(&value)),
+        };
         let retry = Retry::for_run(
             args.no_browser_retry,
             args.timing,
@@ -1010,7 +1092,7 @@ impl Search {
                 let SiteFiles { robots, mut listed } = index.pages(start, &site, lang.as_ref(), retry).await;
                 let (llms, linked_listed) = tokio::join!(
                     linked_llms(start, &linked, retry),
-                    linked_sitemaps(start, &linked, lang.as_ref(), retry),
+                    linked_sitemaps(start, &linked, lang.as_ref(), &site.market, retry),
                 );
                 listed.links.extend(llms);
                 listed.append(linked_listed);
@@ -2499,12 +2581,76 @@ mod tests {
             <sitemap><loc>https://x.com/de-de/sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
             </sitemapindex>";
         let start = StartLanguage::of(&u("https://x.com/"), Some("es"), Some("ES")).expect("a declared language");
-        let read = crate::sitemaps::index_children(xml, |loc| child_rank(Some(&start), loc));
+        let market = RunMarket { country: Some("ES".to_string()), language: None };
+        let read = crate::sitemaps::index_children(xml, |loc| child_rank(&market, Some(&start), loc));
         assert_eq!(
             read,
             ["https://x.com/es-es/sitemap.xml", "https://x.com/es-ar/sitemap.xml", "https://x.com/es-mx/sitemap.xml"],
             "Spain first, then the other Spanish regions newest first; German is not read"
         );
+    }
+
+    #[test]
+    fn a_sitemap_index_reads_the_children_of_the_run_market_before_the_rest() {
+        // Iberia's index names each child's market and language in its path and file name (see `langtag::url_locale`).
+        let xml = "<sitemapindex>\
+            <sitemap><loc>https://x.com/ar/iberia-ar-en-general-sitemap.xml</loc><lastmod>2026-09-16</lastmod></sitemap>\
+            <sitemap><loc>https://x.com/es/iberia-es-es-general-sitemap.xml</loc></sitemap>\
+            <sitemap><loc>https://x.com/gb/iberia-gb-en-general-sitemap.xml</loc><lastmod>2026-09-01</lastmod></sitemap>\
+            <sitemap><loc>https://x.com/de/iberia-de-de-general-sitemap.xml</loc><lastmod>2026-09-17</lastmod></sitemap>\
+            <sitemap><loc>https://x.com/es/iberia-es-en-general-sitemap.xml</loc></sitemap>\
+            </sitemapindex>";
+        // Spain in English: the Spanish market in English first, then the Spanish market. English in other markets is not a
+        // market match, so those children keep the generic order (the newest, here Germany's), as the market matters, not the language.
+        let spain_english = RunMarket { country: Some("ES".to_string()), language: Some("en".to_string()) };
+        assert_eq!(
+            crate::sitemaps::index_children(xml, |loc| child_rank(&spain_english, None, loc)),
+            [
+                "https://x.com/es/iberia-es-en-general-sitemap.xml",
+                "https://x.com/es/iberia-es-es-general-sitemap.xml",
+                "https://x.com/de/iberia-de-de-general-sitemap.xml",
+            ]
+        );
+        // Without a market, the children rank by their place alone: the newest three.
+        let none = RunMarket::default();
+        assert_eq!(
+            crate::sitemaps::index_children(xml, |loc| child_rank(&none, None, loc)),
+            [
+                "https://x.com/de/iberia-de-de-general-sitemap.xml",
+                "https://x.com/ar/iberia-ar-en-general-sitemap.xml",
+                "https://x.com/gb/iberia-gb-en-general-sitemap.xml",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_page_offers_its_version_for_the_run_market_unless_that_is_the_page_itself() {
+        let alt = |hreflang: &str, href: &str| Alternate { hreflang: hreflang.to_string(), url: u(href) };
+        let alts = [
+            alt("en-GB", "https://x.com/gb/luggage/"),
+            alt("es-ES", "https://x.com/es/equipaje/"),
+            alt("en-ES", "https://x.com/es/equipaje/?language=en"),
+            alt("x-default", "https://x.com/"),
+        ];
+        let spain_english = Site {
+            market: RunMarket { country: Some("ES".to_string()), language: Some("en".to_string()) },
+            ..Site::new(&u("https://x.com/"))
+        };
+        let offer = market_offer(&spain_english, &u("https://x.com/gb/luggage/"), &alts).expect("an offer");
+        assert_eq!(
+            offer.url.as_str(),
+            "https://x.com/es/equipaje/?language=en",
+            "the run's country in the run's language"
+        );
+        assert_eq!(offer.context, "the en-es version of this page");
+        assert!(
+            market_offer(&spain_english, &u("https://x.com/es/equipaje/?language=en"), &alts).is_none(),
+            "the country's own version is the page itself"
+        );
+        let no_country = Site::new(&u("https://x.com/"));
+        assert!(market_offer(&no_country, &u("https://x.com/gb/luggage/"), &alts).is_none(), "no country, no offer");
+        let elsewhere = [alt("es-ES", "https://other.test/es/")];
+        assert!(market_offer(&spain_english, &u("https://x.com/gb/"), &elsewhere).is_none(), "not on the site");
     }
 
     #[test]
@@ -2580,7 +2726,8 @@ mod tests {
             ("/feeds/docs.xml", "<urlset><url><loc>http://{host}/rate-limits</loc></url></urlset>"),
         ]);
         let start = Url::parse(&format!("http://127.0.0.1:{}/", linked.port().unwrap())).unwrap();
-        let links = linked_sitemaps(&start, std::slice::from_ref(&linked), None, retry_off()).await.links;
+        let market = RunMarket::default();
+        let links = linked_sitemaps(&start, std::slice::from_ref(&linked), None, &market, retry_off()).await.links;
         let urls: Vec<String> = links.iter().map(|l| l.url.path().to_string()).collect();
         assert_eq!(urls, ["/rate-limits"]);
     }

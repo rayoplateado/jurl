@@ -73,6 +73,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
     Extracted {
         title,
         lang: None,
+        alternates: Vec::new(),
         blocks: join_short(blocks),
         structured: Vec::new(),
         images,

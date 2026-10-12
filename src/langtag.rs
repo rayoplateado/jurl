@@ -263,6 +263,50 @@ pub fn likely_region(language: &str) -> Option<String> {
     id.region.map(|region| region.as_str().to_ascii_lowercase())
 }
 
+/// The language CLDR's likely subtags give a region, lowercase: `es` for `ES`, `de` for `AT`. None when the compiled-in data (the same
+/// as [`likely_region`]'s) gives the region none: `GB` is one, so a page for `GB` falls back to the site's own order.
+pub fn likely_language(region: &str) -> Option<String> {
+    let mut id: LanguageIdentifier = format!("und-{region}").parse().ok()?;
+    LocaleExpander::new_common().maximize(&mut id);
+    let language = id.language.as_str().to_ascii_lowercase();
+    (language != "und").then_some(language)
+}
+
+/// The alternate a page offers a run in `country` (two uppercase letters) and in `language` (a primary subtag, when the run asks for
+/// one), out of the page's alternates' tags (each normalized, see [`declared`]): the index of the one whose region is the country and
+/// whose language is the run's; else the one in the country's likely language (see [`likely_language`]); else the country's first in
+/// the page's own order, which is the site's own default for that region. None when no alternate is in the country.
+pub fn market_alternate(country: &str, language: Option<&str>, tags: &[&str]) -> Option<usize> {
+    let in_country: Vec<usize> =
+        (0..tags.len()).filter(|&i| region(tags[i]).is_some_and(|r| r.eq_ignore_ascii_case(country))).collect();
+    let in_language = |wanted: &str| in_country.iter().copied().find(|&i| primary(tags[i]) == wanted);
+    language
+        .and_then(in_language)
+        .or_else(|| likely_language(country).as_deref().and_then(in_language))
+        .or_else(|| in_country.first().copied())
+}
+
+/// The locale a URL names: its path's (see [`path_locale`]), with the language and the region its file name names side by side
+/// (`iberia-gb-en-general-sitemap.xml` is `en-GB`, `sitemap_es-es.xml` is `es-ES`), which a sitemap's children are told apart by. The
+/// file name's own locale is read from its adjacent pairs of tokens (split at `-`, `_` and `.`), as a path's is; a lone language token
+/// in a file name is not read, since `is` and `no` are words too.
+pub fn url_locale(url: &Url) -> Locale {
+    let path = path_locale(url);
+    let file = url.path_segments().and_then(|mut segments| segments.rfind(|s| !s.is_empty())).map(file_locale);
+    let file = file.unwrap_or_default();
+    Locale { language: file.language.or(path.language), region: file.region.or(path.region) }
+}
+
+/// The locale a file name's adjacent tokens name together, when they name a language and a region: the first such pair.
+fn file_locale(name: &str) -> Locale {
+    let tokens: Vec<&str> = name.split(['-', '_', '.']).filter(|t| !t.is_empty()).collect();
+    tokens
+        .windows(2)
+        .map(|pair_of| pair(pair_of[0], pair_of[1]))
+        .find(|l| l.language.is_some() && l.region.is_some())
+        .unwrap_or_default()
+}
+
 /// How a page's language relates to the start page's (`page`, normalized, None when it declares none) and the start page's
 /// (`start`, normalized).
 pub fn relation(start: &str, page: Option<&str>) -> Relation {
@@ -443,5 +487,52 @@ mod tests {
         assert_eq!(likely_region("fr").as_deref(), Some("fr"));
         assert_eq!(likely_region("pt").as_deref(), Some("br"));
         assert_eq!(likely_region("und"), None, "no language, no likely region");
+    }
+
+    #[test]
+    fn cldr_gives_the_likely_language_of_a_region() {
+        assert_eq!(likely_language("ES").as_deref(), Some("es"));
+        assert_eq!(likely_language("AT").as_deref(), Some("de"));
+        assert_eq!(likely_language("MX").as_deref(), Some("es"));
+        assert_eq!(likely_language("GB"), None, "the compiled-in data gives GB no likely language");
+        assert_eq!(likely_language("ZZ"), None, "a region the data does not know");
+    }
+
+    #[test]
+    fn a_run_is_offered_the_alternate_of_its_country_in_its_language_then_the_countrys_own() {
+        let pick = |country: &str, language: Option<&str>, tags: &[&str]| market_alternate(country, language, tags);
+        let tags = ["es-es", "en-es", "en-gb", "de-at"];
+        assert_eq!(pick("ES", Some("en"), &tags), Some(1), "the country's region in the run's language");
+        assert_eq!(pick("ES", Some("fr"), &tags), Some(0), "no French for Spain: the country's likely language");
+        assert_eq!(pick("ES", None, &tags), Some(0), "no run language: the country's likely language");
+        assert_eq!(pick("GB", Some("es"), &tags), Some(2), "a region's only alternate is the one");
+        assert_eq!(pick("AT", Some("fr"), &tags), Some(3), "Austria's likely language is German");
+        assert_eq!(pick("US", Some("en"), &tags), None, "no alternate in the country");
+        assert_eq!(
+            pick("MX", Some("de"), &["pt-mx", "fr-mx"]),
+            Some(0),
+            "no likely language declared: the site's first"
+        );
+        assert_eq!(pick("ES", Some("en"), &["en"]), None, "a language alone is in no country");
+    }
+
+    #[test]
+    fn a_sitemap_child_names_its_locale_in_its_path_or_its_file_name() {
+        let locale = |s: &str| {
+            let l = url_locale(&url(s));
+            (l.language, l.region)
+        };
+        let s = |language: &str, region: &str| (Some(language.to_string()), Some(region.to_string()));
+        // Iberia's index: the market is the path's, the language and the market are the file name's.
+        assert_eq!(locale("https://www.iberia.com/gb/iberia-gb-en-general-sitemap.xml"), s("en", "gb"));
+        assert_eq!(locale("https://www.iberia.com/es/iberia-es-es-vb-sitemap.xml"), s("es", "es"));
+        assert_eq!(locale("https://www.iberia.com/ar/iberia-ar-en-vb-T3-sitemap.xml"), s("en", "ar"));
+        // KLM's sitemaps: the locale is in the path, or the file name.
+        assert_eq!(locale("https://www.klm.es/en-es/sitemap_en-es.xml"), s("en", "es"));
+        assert_eq!(locale("https://www.klm.es/sitemap_es-es.xml"), s("es", "es"));
+        assert_eq!(locale("https://x.test/sitemap-page-2.xml"), (None, None), "no locale, no language");
+        // A language in the path, with no region the file name names: the language alone.
+        assert_eq!(locale("https://x.test/de/sitemap-is.xml"), (Some("de".to_string()), None));
+        assert_eq!(locale("https://x.test/sitemap.xml"), (None, None));
     }
 }
