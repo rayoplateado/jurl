@@ -1037,6 +1037,8 @@ struct Search {
     cold: bool,
     /// How the start page was served: the usage's `route` when the search misses (see `conclude`).
     start_served: Served,
+    /// Jev's input tokens when the search started: what it has spent is the count since (see [`Search::over_budget`]).
+    jev_start: u64,
 }
 
 impl Search {
@@ -1051,6 +1053,7 @@ impl Search {
         start: &Url,
         t: &mut Timer,
     ) -> Result<Search> {
+        let jev_start = jev_tokens();
         let max = args.follow.unwrap_or(5).max(1);
         let threshold = args.threshold_for(args.precise);
         let mut site = Site::new(start);
@@ -1128,6 +1131,7 @@ impl Search {
             log: Vec::new(),
             cold: false,
             start_served: served,
+            jev_start,
         };
         let first_path = vec![first.url.clone()];
         search.absorb(first, start_fit, 1.0, first_path);
@@ -1189,6 +1193,14 @@ impl Search {
     /// Each step sorts the leads, drops the visited and disallowed ones, and Jev picks among the best few.
     async fn next_batch(&mut self, ctx: &Ctx<'_>, t: &mut Timer) -> Result<Option<Vec<Lead>>> {
         if self.opened >= self.max {
+            return Ok(None);
+        }
+        if let Some((spent, cap)) = self.over_budget(ctx.args) {
+            if ctx.args.timing {
+                eprintln!(
+                    "jurl: the search spent {spent} Jev tokens, reaching JURL_JEV_MAX_TOKENS ({cap}); it opens no more pages"
+                );
+            }
             return Ok(None);
         }
         self.leads.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -1258,6 +1270,15 @@ impl Search {
         Ok(Some(batch))
     }
 
+    /// The tokens spent and the cap, when the search has spent its Jev budget (`JURL_JEV_MAX_TOKENS`): it then opens no more
+    /// pages and concludes with what it has, as when `--follow N` runs out. The pages already being read finish, so a search
+    /// may spend up to one batch past the cap.
+    fn over_budget(&self, args: &Args) -> Option<(u64, u64)> {
+        let cap = args.jev_budget?;
+        let spent = jev_tokens().saturating_sub(self.jev_start);
+        (spent >= cap).then_some((spent, cap))
+    }
+
     /// Takes the results of a batch, in batch order. A page read is absorbed; one that failed to load, was a block
     /// page, or is in another language than the start page's (see [`other_language`]), is skipped (and said so under
     /// -t), its links never become leads; an API error ends the search.
@@ -1290,7 +1311,7 @@ impl Search {
             for Reading { url, warmth, score } in &self.log {
                 eprintln!("   warmth {warmth:.2} · answer {score:.2} · {url}");
             }
-            let tokens = crate::decide::USAGE.jev_tokens.load(std::sync::atomic::Ordering::Relaxed);
+            let tokens = jev_tokens().saturating_sub(self.jev_start);
             eprintln!("   {pages} pages · {tokens} tokens");
         }
         self.found.sort_by(|a, b| b.rank.total_cmp(&a.rank));
@@ -1470,11 +1491,32 @@ pub async fn run(
     let site_ctx = search.site.ctx(args, client, api_key, &start, &empty);
     read_batches(args, cfg, client, api_key, &mut search, &site_ctx, t).await?;
     // A precise search that found no answer gets a second pass: the site's own search (see `site_search`) adds its results
-    // as leads, and the budget grows. A search that found one never gets here, so answered cells are not changed.
-    if args.precise && search.found.is_empty() && second_pass(args, &start, &mut search, &site_ctx).await? {
+    // as leads, and the budget grows. A search that found one never gets here, so answered cells are not changed. Nor does
+    // one that spent its Jev budget (`JURL_JEV_MAX_TOKENS`).
+    if args.precise
+        && search.found.is_empty()
+        && search.over_budget(args).is_none()
+        && second_pass(args, &start, &mut search, &site_ctx).await?
+    {
         read_batches(args, cfg, client, api_key, &mut search, &site_ctx, t).await?;
     }
     search.conclude(args, client, api_key)
+}
+
+/// The Jev input tokens this process has spent so far.
+fn jev_tokens() -> u64 {
+    crate::decide::USAGE.jev_tokens.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The Jev budget of a `--follow` search, from `JURL_JEV_MAX_TOKENS`: a whole number of input tokens above zero. Unset means
+/// no cap; a value that is not such a number is not used, and -t says so.
+pub(crate) fn jev_budget(get: impl Fn(&str) -> Option<String>, timing: bool) -> Option<u64> {
+    let raw = get("JURL_JEV_MAX_TOKENS").map(|v| v.trim().to_string()).filter(|v| !v.is_empty())?;
+    let cap = raw.parse::<u64>().ok().filter(|&cap| cap > 0);
+    if cap.is_none() && timing {
+        eprintln!("jurl: JURL_JEV_MAX_TOKENS is not a number of tokens above zero, so it is not used");
+    }
+    cap
 }
 
 /// The pages a search opens, a batch at a time, until its budget or its trail runs out (or it finds an answer).
@@ -1925,7 +1967,37 @@ mod tests {
             log: Vec::new(),
             cold: false,
             start_served: crate::fetch::Served::default(),
+            jev_start: 0,
         }
+    }
+
+    #[test]
+    fn a_search_past_its_jev_budget_says_so() {
+        // The count is the process's, shared with the tests running beside this one, so the search's start is taken from it.
+        use clap::Parser;
+        let mut args = Args::parse_from(["jurl", "-q", "what does it cost?", "--follow", "5", "http://127.0.0.1:1/"]);
+        let mut s = search();
+        s.jev_start = jev_tokens();
+        args.jev_budget = Some(1_000);
+        assert_eq!(s.over_budget(&args), None, "nothing spent yet");
+        crate::decide::USAGE.jev(&crate::decide::Answers { input_tokens: 1_000, ..Default::default() });
+        let (spent, cap) = s.over_budget(&args).expect("the budget is spent");
+        assert!(spent >= 1_000);
+        assert_eq!(cap, 1_000);
+        args.jev_budget = None;
+        assert_eq!(s.over_budget(&args), None, "no cap, no stop");
+    }
+
+    #[test]
+    fn the_jev_budget_is_a_whole_number_of_tokens_above_zero() {
+        let budget = |v: &str| jev_budget(|k| (k == "JURL_JEV_MAX_TOKENS").then(|| v.to_string()), false);
+        assert_eq!(budget("1000000"), Some(1_000_000));
+        assert_eq!(budget(" 500 "), Some(500));
+        assert_eq!(budget(""), None);
+        assert_eq!(budget("0"), None);
+        assert_eq!(budget("-5"), None);
+        assert_eq!(budget("lots"), None);
+        assert_eq!(jev_budget(|_| None, false), None);
     }
 
     fn lead(score: f64) -> Lead {

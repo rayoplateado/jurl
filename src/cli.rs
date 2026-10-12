@@ -77,6 +77,10 @@ pub(crate) struct Args {
     /// the site sends to another country is read again through the fallback proxy. Not a flag.
     #[arg(skip)]
     pub(crate) country: Option<String>,
+    /// The Jev input tokens a `--follow` search may spend before it stops opening pages, from `JURL_JEV_MAX_TOKENS` (see
+    /// `follow::jev_budget`). None: no cap. Not a flag.
+    #[arg(skip)]
+    pub(crate) jev_budget: Option<u64>,
     /// The pages this run has loaded, for `--with-pages` (see `output::PagesLog`). Its own to each run, as the cookies are.
     /// Not a flag.
     #[arg(skip)]
