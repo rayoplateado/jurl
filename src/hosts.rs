@@ -30,26 +30,34 @@ pub fn same_registrable(a: &Url, b: &Url) -> bool {
 }
 
 /// The origins (scheme, host and port, as `/`) of the hosts among `urls` that share `start`'s registrable domain but are
-/// not `start`'s own host: each host once, in the order the links name them, at most `max`. The links are the page's own.
+/// not `start`'s own host, at most `max`: the hosts that the most distinct links name come first, then the others in the
+/// order the links first name them. The links are the page's own.
 pub fn linked_hosts<'a>(start: &Url, urls: impl IntoIterator<Item = &'a Url>, max: usize) -> Vec<Url> {
-    let mut hosts: Vec<Url> = Vec::new();
+    // Each host with how many distinct links name it, in the order the links first name the hosts.
+    let mut hosts: Vec<(Url, usize)> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for u in urls {
         if !matches!(u.scheme(), "http" | "https") || u.host_str() == start.host_str() || !same_registrable(start, u) {
             continue;
         }
-        if hosts.iter().any(|h| h.host_str() == u.host_str()) {
+        if !seen.insert(u.as_str()) {
             continue;
         }
-        let mut origin = u.clone();
-        origin.set_path("/");
-        origin.set_query(None);
-        origin.set_fragment(None);
-        hosts.push(origin);
-        if hosts.len() == max {
-            break;
+        match hosts.iter_mut().find(|(origin, _)| origin.host_str() == u.host_str()) {
+            Some((_, named)) => *named += 1,
+            None => {
+                let mut origin = u.clone();
+                origin.set_path("/");
+                origin.set_query(None);
+                origin.set_fragment(None);
+                hosts.push((origin, 1));
+            }
         }
     }
-    hosts
+    // A site names its own sub-sites in its menus and in its text alike, and the ones it names most are the ones it means.
+    // The sort is stable, so hosts named alike keep the order the links first name them in.
+    hosts.sort_by_key(|(_, named)| std::cmp::Reverse(*named));
+    hosts.into_iter().take(max).map(|(origin, _)| origin).collect()
 }
 
 /// The URLs a text writes out in full: each word that starts with `http://` or `https://` and parses as a URL, without the
@@ -121,6 +129,21 @@ mod tests {
         let hosts = linked_hosts(&start, links.iter(), LINKED_HOSTS);
         let shown: Vec<String> = hosts.iter().map(Url::to_string).collect();
         assert_eq!(shown, ["https://docs.stripe.com/", "https://dashboard.stripe.com/", "https://status.stripe.com/"]);
+    }
+
+    #[test]
+    fn the_hosts_a_site_names_most_come_first() {
+        let start = u("https://x.com/");
+        // a.x.com is named once and first; b.x.com is named by three links, so it comes first.
+        let links = [
+            u("https://a.x.com/"),
+            u("https://b.x.com/1"),
+            u("https://b.x.com/2"),
+            u("https://c.x.com/"),
+            u("https://b.x.com/3"),
+        ];
+        let shown: Vec<String> = linked_hosts(&start, links.iter(), 2).iter().map(Url::to_string).collect();
+        assert_eq!(shown, ["https://b.x.com/", "https://a.x.com/"]);
     }
 
     #[test]

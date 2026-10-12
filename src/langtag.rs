@@ -93,6 +93,15 @@ pub fn declared(tag: &str) -> Option<String> {
     (2..=3).contains(&parsed.primary_language().len()).then(|| canon.to_ascii_lowercase())
 }
 
+/// The language a run asks for, from an Accept-Language value (what `JURL_ACCEPT_LANGUAGE` sets): the primary subtag of its first
+/// tag, when the registry lists that tag (`en` for `en-GB,en;q=0.9`). None for an empty value, `*`, or a tag the registry does
+/// not list.
+pub fn run_language(accept_language: &str) -> Option<String> {
+    let first = accept_language.split(',').next()?.split(';').next()?.trim();
+    let tag = declared(first)?;
+    tag.split('-').next().map(str::to_string)
+}
+
 /// The language a path segment names, normalized: a language (`de`), or a language and a region (`es-es`, `es_ES`,
 /// `de-ch`, `pt-BR`, `es-419`), and nothing else (`my-account` is not one: `account` is no region).
 ///
@@ -268,6 +277,17 @@ pub fn relation(start: &str, page: Option<&str>) -> Relation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_language_a_run_asks_for_is_the_primary_subtag_of_its_first_tag() {
+        assert_eq!(run_language("en").as_deref(), Some("en"));
+        assert_eq!(run_language("en-GB,en;q=0.9").as_deref(), Some("en"));
+        assert_eq!(run_language(" es-ES ; q=1").as_deref(), Some("es"));
+        assert_eq!(run_language("zh_CN").as_deref(), Some("zh"));
+        assert_eq!(run_language("*"), None);
+        assert_eq!(run_language(""), None);
+        assert_eq!(run_language("english-GB"), None);
+    }
 
     fn url(s: &str) -> Url {
         Url::parse(s).expect("a test URL")
