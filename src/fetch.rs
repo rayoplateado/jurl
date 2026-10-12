@@ -463,7 +463,7 @@ pub(crate) async fn fetch_small(
             res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
         let bytes = read_capped(&mut res, max).await.ok().flatten()?;
         retry.fallback.count(via_proxy, bytes.len());
-        return Some(decode(&content_type, &bytes));
+        return Some(decode(&content_type, &inflated(bytes, max)?));
     }
     crate::decide::USAGE.plain_refusals.fetch_add(1, Relaxed);
     let retry_after = res.headers().get(header::RETRY_AFTER).is_some();
@@ -499,7 +499,7 @@ async fn small_from_browser(res: wreq::Response, max: usize, retry: Retry<'_>) -
         res.headers().get(wreq::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
     let bytes = read_stream_capped(res.content_length(), res.bytes_stream(), max).await.ok().flatten()?;
     retry.fallback.count(false, bytes.len());
-    Some(decode(&content_type, &bytes))
+    Some(decode(&content_type, &inflated(bytes, max)?))
 }
 
 /// What a request for a page came back with: the page, or the refusal to give one.
@@ -1108,6 +1108,28 @@ pub(crate) fn decode(content_type: &str, bytes: &[u8]) -> String {
     charset_of(content_type).decode(bytes).0.into_owned()
 }
 
+/// The body of a small file as its text bytes. A gzip file (`.xml.gz`, a sitemap that some sites serve without a
+/// Content-Encoding) starts with the magic bytes 1f 8b and is inflated, within `max` bytes; any other body is kept as
+/// it is. None when the inflated text would be past `max`, as a body that is too big is refused.
+pub(crate) fn inflated(bytes: Vec<u8>, max: usize) -> Option<Vec<u8>> {
+    if !bytes.starts_with(&[0x1f, 0x8b]) {
+        return Some(bytes);
+    }
+    let mut out = Vec::new();
+    let mut decoder = flate2::read::GzDecoder::new(bytes.as_slice());
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        let n = std::io::Read::read(&mut decoder, &mut chunk).ok()?;
+        if n == 0 {
+            return Some(out);
+        }
+        if out.len() + n > max {
+            return None;
+        }
+        out.extend_from_slice(&chunk[..n]);
+    }
+}
+
 /// The encoding a Content-Type names, as reqwest's text() reads it: the `charset` parameter's label, or UTF-8 when there
 /// is no such parameter or encoding_rs knows no such label.
 fn charset_of(content_type: &str) -> &'static Encoding {
@@ -1310,6 +1332,15 @@ mod tests {
 
     /// `<p>Hello, page.</p>` as gzip, as a server sends it under Content-Encoding: gzip.
     const GZIPPED: &[u8] = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xb3\x29\xb0\xf3\x48\xcd\xc9\xc9\xd7\x51\x28\x48\x4c\x4f\xd5\xb3\xd1\x2f\xb0\x03\x00\x04\x6d\x98\xda\x13\x00\x00\x00";
+
+    #[test]
+    fn a_gzip_body_is_inflated_within_its_cap_and_any_other_body_is_kept() {
+        // GZIPPED is `<p>Hello, page.</p>` as gzip: inflated when the text fits the cap, refused past it. A body that
+        // is not gzip is kept as it is.
+        assert_eq!(inflated(GZIPPED.to_vec(), 1_000).as_deref(), Some(&b"<p>Hello, page.</p>"[..]));
+        assert_eq!(inflated(GZIPPED.to_vec(), 5), None);
+        assert_eq!(inflated(b"<urlset/>".to_vec(), 5).as_deref(), Some(&b"<urlset/>"[..]));
+    }
 
     /// The memo's name for the server at `url`.
     fn host_of(url: &str) -> String {
@@ -1807,6 +1838,20 @@ mod tests {
         assert_eq!(body.as_deref(), Some(file));
         assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
         assert!(memo.on_browser(&host_of(&base), now), "the host is learned");
+    }
+
+    #[tokio::test]
+    async fn a_gzipped_small_file_from_the_browser_client_is_inflated_too() {
+        // A gzip file that the plain client is refused is read from the browser client, and inflated there too.
+        let (base, served) = serve_by_client(
+            reply("403 Forbidden", "", b""),
+            reply("200 OK", "Content-Type: application/x-gzip\r\n", GZIPPED),
+        );
+        let memo = Memo::default();
+        let body =
+            fetch_small(&file_at(&base, "/sitemap.xml.gz"), PAGE_MAX, WAIT, retry_on(&memo), Instant::now()).await;
+        assert_eq!(body.as_deref(), Some("<p>Hello, page.</p>"));
+        assert_eq!(served.kinds(), [Kind::Plain, Kind::Browser]);
     }
 
     #[tokio::test]
