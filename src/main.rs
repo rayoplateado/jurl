@@ -19,6 +19,7 @@ mod langtag;
 mod lightpanda;
 mod links;
 mod mcp;
+mod meter;
 #[cfg(test)]
 mod mock;
 mod output;

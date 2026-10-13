@@ -95,7 +95,12 @@ impl Usage {
             "plain_refusals": n(&self.plain_refusals),
             "browser_requests": n(&self.browser_requests),
             "route": route,
-            "bytes": { "direct": run.bytes(false), "proxy": run.bytes(true) },
+            "bytes": {
+                "direct": run.bytes(false),
+                "proxy": run.bytes(true),
+                "proxy_wire": run.proxy_wire().json(),
+                "proxy_render_wire": run.render_wire().json(),
+            },
             "proxied_renders": run.renders(),
             "proxied_hosts": run.hosts(),
             "jev": { "requests": n(&self.jev_requests), "input_tokens": n(&self.jev_tokens) },
@@ -295,6 +300,17 @@ mod tests {
     }
 
     #[test]
+    fn the_usage_reports_the_wire_bytes_the_run_measured_through_the_proxy() {
+        let u = Usage::new();
+        let run = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
+        run.count_render_wire(crate::meter::Wire { up: 11, down: 22 });
+        let bytes = &u.json(&run)["bytes"];
+        assert_eq!(bytes["proxy_wire"], json!({ "up": 11, "down": 22 }));
+        assert_eq!(bytes["proxy_render_wire"], json!({ "up": 11, "down": 22 }));
+        assert_eq!(bytes["proxy"], json!(0), "the decoded body count is kept as it was");
+    }
+
+    #[test]
     fn usage_adds_up_jev_and_clef() {
         let u = Usage::new();
         u.pages.fetch_add(2, Relaxed);
@@ -310,7 +326,12 @@ mod tests {
                 "plain_refusals": 0,
                 "browser_requests": 0,
                 "route": null,
-                "bytes": { "direct": 0, "proxy": 0 },
+                "bytes": {
+                    "direct": 0,
+                    "proxy": 0,
+                    "proxy_wire": { "up": 0, "down": 0 },
+                    "proxy_render_wire": { "up": 0, "down": 0 },
+                },
                 "proxied_renders": 0,
                 "proxied_hosts": [],
                 "jev": { "requests": 4, "input_tokens": 2000 },
