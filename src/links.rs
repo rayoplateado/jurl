@@ -280,9 +280,10 @@ pub(crate) async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Resul
 /// The bar the --with-link link needs: the answer's own `--threshold` is not for links.
 const WITH_LINK_THRESHOLD: f64 = 0.5;
 
-/// `--with-link=WHAT`: the answer, with the link of its page that WHAT names under `link` (its URL, its words, the text
-/// around it and its score), or null when no link of the page is it. Only web links count, and never the page itself.
-/// A failed scoring keeps the answer, with the reason under `link_error`, as --with-image keeps it.
+/// `--with-link=WHAT`: the answer, with the link of its page that WHAT names under `page_link` (its URL, its words, the text
+/// around it and its score), or null when no link of the page is it. Not under `link`: that is the answer's own place on its
+/// page, which stays. Only web links count, and never the page itself.
+/// A failed scoring keeps the answer, with the reason under `page_link_error`, as --with-image keeps it.
 pub(crate) async fn with_link(ctx: &Ctx<'_>, ex: &Extracted, mut answer: Rendered, t: &mut Timer) -> Result<Rendered> {
     let Some(what) = ctx.args.with_link.as_deref() else { return Ok(answer) };
     let web = page_links(ctx.url, ex, &[], |u| matches!(u.scheme(), "http" | "https"));
@@ -291,7 +292,7 @@ pub(crate) async fn with_link(ctx: &Ctx<'_>, ex: &Extracted, mut answer: Rendere
         if !ctx.args.json {
             eprintln!("jurl: no link for the answer: its page has no web links");
         }
-        answer.json["link"] = Value::Null;
+        answer.json["page_link"] = Value::Null;
         return Ok(answer);
     }
     let host = |l: &Link| l.url.host_str().filter(|h| Some(*h) != ctx.url.host_str()).map(str::to_string);
@@ -313,7 +314,7 @@ pub(crate) async fn with_link(ctx: &Ctx<'_>, ex: &Extracted, mut answer: Rendere
         Ok(a) => {
             t.lap(format!("{} links for --with-link", candidates.len()));
             let scores: Vec<Option<f64>> = candidates.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
-            answer.json["link"] = match top(&scores, WITH_LINK_THRESHOLD, 1).first() {
+            answer.json["page_link"] = match top(&scores, WITH_LINK_THRESHOLD, 1).first() {
                 Some(&(i, p)) => {
                     let l = &candidates[i];
                     answer.text = format!("{}\n\nLink: <{}>\n", answer.text.trim_end(), l.url);
@@ -329,8 +330,8 @@ pub(crate) async fn with_link(ctx: &Ctx<'_>, ex: &Extracted, mut answer: Rendere
         }
         Err(e) => {
             eprintln!("jurl: no link: {e:#}");
-            answer.json["link"] = Value::Null;
-            answer.json["link_error"] = json!(format!("{e:#}"));
+            answer.json["page_link"] = Value::Null;
+            answer.json["page_link_error"] = json!(format!("{e:#}"));
         }
     }
     Ok(answer)
@@ -571,7 +572,8 @@ mod tests {
 
     /// A read's answer as a mode renders it, for the --with-link tests.
     fn answered() -> Rendered {
-        Rendered { text: "8:00 to 18:00\n\n".into(), json: json!({ "answer": "8:00 to 18:00" }) }
+        let link = "https://x.com/#:~:text=8%3A00";
+        Rendered { text: "8:00 to 18:00\n\n".into(), json: json!({ "answer": "8:00 to 18:00", "link": link }) }
     }
 
     #[tokio::test]
@@ -591,7 +593,11 @@ mod tests {
         let client = Client::new();
         let ctx = Ctx::new(&args, &client, "", &url, &ex);
         let got = with_link(&ctx, &ex, answered(), &mut Timer::new()).await.unwrap();
-        assert_eq!(got.json, json!({ "answer": "8:00 to 18:00", "link": null }));
+        // The answer's own link stays: the page's link goes beside it.
+        assert_eq!(
+            got.json,
+            json!({ "answer": "8:00 to 18:00", "link": "https://x.com/#:~:text=8%3A00", "page_link": null })
+        );
         assert_eq!(got.text, answered().text, "no link line");
     }
 }
