@@ -12,9 +12,22 @@ const JOINED_MAX_CHARS: usize = 400;
 
 /// A heading that is only a price, so it joins its card: it starts with a currency sign, or it is figures, currency
 /// signs and separators with letters only as unit words ("$12", "€9.50", "12 €", "$10/mo", "10 per user/month").
-/// "Step 2" is a section title.
+/// "Step 2" is a section title. A price with a fee added after a "+" is a price too ("10€ + G.G.", "$25 + fees"): what
+/// the "+" adds is a word, not a figure, so the part before it must name a currency.
 fn is_price(text: &str) -> bool {
-    const CURRENCY: &[char] = &['$', '€', '£', '¥', '₹', '₩', '₽', '₺'];
+    let t = text.trim();
+    if let Some((price, _)) = t.split_once('+')
+        && price.contains(CURRENCY)
+        && bare_price(price)
+    {
+        return true;
+    }
+    bare_price(t)
+}
+
+const CURRENCY: &[char] = &['$', '€', '£', '¥', '₹', '₩', '₽', '₺'];
+
+fn bare_price(text: &str) -> bool {
     const SEPARATORS: &[char] = &['.', ',', '/', '-', '–', '|', '·'];
     // A unit word also matches with a trailing "s" ("users").
     const UNITS: &[&str] = &["a", "per", "mo", "month", "yr", "year", "user", "seat"];
@@ -137,11 +150,24 @@ mod tests {
     }
 
     #[test]
+    fn a_price_heading_with_a_fee_joins_the_event_card() {
+        // An event page sets its price as a heading, after the date's short pieces (salaclamores.es): the price is in the
+        // card a reader judges, not a section title of its own.
+        let page = "<body><h1>Clamores Comedy Club</h1><div>Wednesday</div><div>14</div><div>October</div><div>20:00</div>\
+            <h3>10€ + G.G.</h3><p>Comprar Tickets</p></body>";
+        let texts: Vec<_> = html(page, &base()).blocks.into_iter().map(|b| b.text).collect();
+        assert_eq!(texts, ["Clamores Comedy Club", "Wednesday\n14\nOctober\n20:00\n10€ + G.G.\nComprar Tickets"]);
+    }
+
+    #[test]
     fn only_figures_and_units_are_prices() {
-        for price in ["$12", "€9.50", "12 €", "$10/mo", "10 per user/month", "$10 Pro"] {
+        for price in ["$12", "€9.50", "12 €", "$10/mo", "10 per user/month", "$10 Pro", "10€ + G.G.", "$25 + fees"]
+        {
             assert!(is_price(price), "{price}");
         }
-        for title in ["Step 2", "Version 3", "Top 10 tips", "COVID-19", "2FA", "Save 25%", "100%", "Free"] {
+        for title in
+            ["Step 2", "Version 3", "Top 10 tips", "COVID-19", "2FA", "Save 25%", "100%", "Free", "1 + 1", "Step 2 + 3"]
+        {
             assert!(!is_price(title), "{title}");
         }
     }
