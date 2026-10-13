@@ -159,7 +159,7 @@ With `-q`, each link is scored by how likely following it leads to the answer. M
 
 ### The real images
 
-`--image` picks the content images by their file name, alt text and caption, with no logos, icons or tracking pixels. With `-q`, it also reads the text of the link an image sits in (a listing card's title) and the page's title. `--vision` also has Clef look at the pixels, which matters when the alt text says nothing:
+`--image` picks the content images by their file name, alt text and caption, with no logos, icons or tracking pixels. With `-q`, it also reads the words around an image that name it (its `title`, the link it sits in, or its card's heading) and the page's title. `--vision` also has Clef look at the pixels, which matters when the alt text says nothing:
 
 | Image on a Cloudflare blog post | Alt text | `--image` | `--vision` |
 | --- | --- | --- | --- |

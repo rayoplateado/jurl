@@ -177,7 +177,7 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
         let caption = figcaption(img);
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
         let at = push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
-        set_card(&mut images, at, img);
+        set_card(&mut images, at, img, Some(img));
     }
     // A responsive picture's banner is often only in its <source> srcsets, with the <img> as the fallback. Its sources are
     // renditions of one image for several breakpoints, so the picture is one candidate: the largest rendition of any of its
@@ -204,7 +204,7 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
             .map(|img| collapse(img.value().attr("alt").unwrap_or("")))
             .unwrap_or_default();
         let at = push_image(&mut images, base, &src, preview.as_deref(), alt, String::new(), None, None);
-        set_card(&mut images, at, picture);
+        set_card(&mut images, at, picture, picture.select(&sel("img")).next());
     }
     images
 }
@@ -212,16 +212,35 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
 /// The most of a card's text an image keeps: its title and a line or two, not a whole section that one link wraps.
 const CARD_MAX_CHARS: usize = 200;
 
-/// Gives the image at `at` the text of the link `el` sits in (see `Image::card`), unless it already has some.
-fn set_card(images: &mut [Image], at: Option<usize>, el: ElementRef) {
+/// How far up from an image its card's heading is looked for: a listing's card wraps its picture in a figure or two.
+const CARD_DEPTH: usize = 4;
+
+/// Gives the image at `at` the words around `el` that name it (see `Image::card`), unless it already has some: the
+/// `title` of its `img` when the alt text took the alt's place, then the text of the link it sits in, else the heading of
+/// its card (the nearest of its first ancestors that holds one heading, as a listing's card holds its show's name).
+fn set_card(images: &mut [Image], at: Option<usize>, el: ElementRef, img: Option<ElementRef>) {
     let Some(image) = at.and_then(|at| images.get_mut(at)) else { return };
     if !image.card.is_empty() {
         return;
     }
-    let link = el.ancestors().filter_map(ElementRef::wrap).find(|a| a.value().name() == "a");
-    if let Some(link) = link {
-        image.card = collapse(&inline_text(link)).chars().take(CARD_MAX_CHARS).collect();
-    }
+    let title = img.and_then(|i| i.value().attr("title")).map(collapse).filter(|t| !t.is_empty() && *t != image.alt);
+    let ancestors = || el.ancestors().filter_map(ElementRef::wrap);
+    let headings = sel("h1, h2, h3, h4, h5, h6");
+    let around = match ancestors().find(|a| a.value().name() == "a") {
+        Some(link) => collapse(&inline_text(link)),
+        None => ancestors()
+            .take(CARD_DEPTH)
+            .find_map(|a| {
+                let mut found = a.select(&headings);
+                match (found.next(), found.next()) {
+                    (Some(h), None) => Some(collapse(&inline_text(h))),
+                    _ => None,
+                }
+            })
+            .unwrap_or_default(),
+    };
+    let words: Vec<String> = title.into_iter().chain([around]).filter(|w| !w.is_empty()).collect();
+    image.card = words.join("\n").chars().take(CARD_MAX_CHARS).collect();
 }
 
 /// Whether a `<source>`'s type is one the image decoder reads, by the decoder's own list of MIME types, so a type it has no
@@ -1071,6 +1090,18 @@ mod tests {
         assert_eq!(ex.images.len(), 1);
         assert_eq!(ex.images[0].url.as_str(), "https://example.com/a.jpg");
         assert_eq!(ex.images[0].caption, "A cat");
+    }
+
+    #[test]
+    fn an_image_outside_any_link_takes_its_title_and_its_cards_heading() {
+        // A theatre's listing: the card's link covers it from beside the picture, and its heading names the show.
+        let page = r#"<body><main><div class="card"><a href="/shows/firebird"><span>Firebird</span></a>
+            <div class="content"><figure><img src="/lcb.png" title="London City Ballet - Firebird"
+            alt="A dancer in a red dress"></figure><div><h3>London City Ballet - Firebird</h3></div></div></div>
+            <p>Every show of the season, with its dates and tickets.</p></main></body>"#;
+        let ex = html(page, &base());
+        assert_eq!(ex.images[0].alt, "A dancer in a red dress");
+        assert_eq!(ex.images[0].card, "London City Ballet - Firebird\nLondon City Ballet - Firebird");
     }
 
     #[test]

@@ -88,8 +88,8 @@ pub struct Image {
     pub preview: Url,
     pub alt: String,
     pub caption: String,
-    /// The text of the link the image sits in, when it sits in one: a card's title and lines, which often say what the
-    /// image is of when its own alt text and file name don't.
+    /// The words around the image that name what it is of, when its own alt text and file name don't: its `title`, the
+    /// text of the link it sits in, or its card's heading (see `html::set_card`).
     pub card: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
