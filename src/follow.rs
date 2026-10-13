@@ -1189,6 +1189,14 @@ impl Search {
         None
     }
 
+    /// Whether a lead is left that a page could be worth opening: one not visited yet, on a host whose rules allow it, and
+    /// scored at least [`COLD_TRAIL`]. A search without one is cold, whatever its budget.
+    fn warm(&self) -> bool {
+        self.leads
+            .iter()
+            .any(|l| l.score >= COLD_TRAIL && !self.visited.contains(&links::key(&l.url)) && self.robots.allows(&l.url))
+    }
+
     /// The next pages to open, or `None` when the search is over: the budget is spent, or [`Search::done`] says so.
     /// Each step sorts the leads, drops the visited and disallowed ones, and Jev picks among the best few.
     async fn next_batch(&mut self, ctx: &Ctx<'_>, t: &mut Timer) -> Result<Option<Vec<Lead>>> {
@@ -1546,7 +1554,9 @@ async fn read_batches(
 const SECOND_PASS: usize = 3;
 
 /// The second pass (see [`run`]): the site's own search results that are not read yet become leads, scored by Jev like the
-/// others, and the search may open [`SECOND_PASS`] more pages. Returns whether there were any such leads.
+/// others, and the search may open [`SECOND_PASS`] more pages. Without such results, a search whose trail is still warm
+/// (see [`Search::warm`]) gets the same [`SECOND_PASS`] pages: the leads it already has are not stranded behind a budget that
+/// only a site search could raise. Returns whether the search may open more pages.
 async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &Ctx<'_>) -> Result<bool> {
     let retry = crate::fetch::Retry::for_run(
         args.no_browser_retry,
@@ -1560,6 +1570,10 @@ async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &C
     let mut results = crate::site_search::candidates(start, question, true, retry).await;
     results.retain(|l| !search.visited.contains(&links::key(&l.url)));
     if results.is_empty() {
+        if search.warm() {
+            search.max += SECOND_PASS;
+            return Ok(true);
+        }
         return Ok(false);
     }
     let (scores, _) = links::score(site_ctx, &results, "The page at the URL in `links`", None).await?;
@@ -2088,6 +2102,29 @@ mod tests {
         assert_eq!(s.done(), None);
         // No lead at all, and nothing found: cold too.
         assert_eq!(search().done(), Some(Stop::Cold));
+    }
+
+    #[test]
+    fn a_search_with_an_unvisited_lead_at_cold_trail_or_more_is_warm() {
+        let mut s = search();
+        s.leads.push(lead(COLD_TRAIL));
+        assert!(s.warm());
+    }
+
+    #[test]
+    fn a_search_whose_leads_are_all_below_cold_trail_or_visited_is_not_warm() {
+        let mut s = search();
+        s.leads.push(lead(COLD_TRAIL / 2.0));
+        assert!(!s.warm());
+        let read = lead(0.9);
+        s.visited.insert(links::key(&read.url));
+        s.leads.push(read);
+        assert!(!s.warm(), "a lead already visited is not a page to open");
+    }
+
+    #[test]
+    fn a_search_with_no_leads_is_not_warm() {
+        assert!(!search().warm());
     }
 
     #[test]
