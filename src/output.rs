@@ -253,7 +253,12 @@ mod tests {
             "plain_refusals": 0,
             "browser_requests": 0,
             "route": null,
-            "bytes": { "direct": 0, "proxy": 0 },
+            "bytes": {
+                "direct": 0,
+                "proxy": 0,
+                "proxy_wire": { "up": 0, "down": 0 },
+                "proxy_render_wire": { "up": 0, "down": 0 },
+            },
             "proxied_renders": 0,
             "proxied_hosts": [],
             "jev": { "requests": 4, "input_tokens": 5321 },

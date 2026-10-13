@@ -3,7 +3,9 @@
 //!
 //! The credential is `JURL_FALLBACK_PROXY=http://user:pass@host:port`. jurl does not print it: a `-t` line names the host only,
 //! and an error from a request through the proxy has the URL and credential taken out of it (see [`Fallback::scrubbed`]).
-//! Lightpanda is the one other process that is given the URL, in its arguments (see [`Fallback::lightpanda_args`]). Under
+//! Lightpanda and the run's client are given a loopback address instead of the proxy's (see `meter.rs`): a forwarder relays
+//! every byte to the proxy unchanged and counts it, so the usage's `bytes.proxy_wire` is what crosses the proxy. The URL
+//! Lightpanda is given keeps the credential in its arguments (see [`Fallback::render_meter`]). Under
 //! `JURL_PUBLIC_ONLY=1` the proxy is allowed, unlike `HTTP(S)_PROXY`: each target is checked public before its request (see
 //! `reach::check`), but the proxy resolves the name itself, so that check is not rebinding-proof (see the README).
 
@@ -21,18 +23,24 @@ use url::Url;
 
 use crate::{
     fetch::{RenderRefused, ServerReset, host_key},
+    meter::{Meter, Wire},
     reach,
 };
 
 /// What a credential becomes in an error or a trace.
 const REDACTED: &str = "proxy";
 
-/// The proxy a run reads through: its URL, and the one client that goes through it.
+/// The proxy a run reads through: its address, and the one client that goes through it, which the run's meter carries.
 struct Proxy {
     /// `JURL_FALLBACK_PROXY`, as given. Never printed.
     url: String,
+    /// The same address, parsed: a render's meter is started on it.
+    upstream: Url,
+    /// The run's own meter, which the client's connections go through: plain reads, robots files, sitemaps and images.
+    meter: Meter,
     /// The client every request through the proxy uses, built once per run and pooled. It resolves only the proxy's own host:
-    /// a request's own host is the proxy's to resolve, and `reach::check` checks it before the request is sent.
+    /// a request's own host is the proxy's to resolve, and `reach::check` checks it before the request is sent. It is given the
+    /// meter's loopback URL, so its bytes are counted.
     client: Client,
 }
 
@@ -47,10 +55,14 @@ pub(crate) struct Fallback {
     /// The hosts on the proxy in this run, by their memo name (see `fetch::host_key`).
     hosts: Mutex<BTreeSet<String>>,
     /// The decoded body bytes read directly, and through the proxy, and the renders made through it (Lightpanda's, and each
-    /// stealth sidecar call's): the usage's `bytes` and `proxied_renders`. Counted per run, so a run's usage is its own.
+    /// stealth sidecar call's): the usage's `bytes.direct`, `bytes.proxy` and `proxied_renders`. Counted per run, so a run's usage
+    /// is its own. The wire bytes through the proxy are the meters' (see `meter.rs`): the run's client's, and each render's,
+    /// which `render_up` and `render_down` add up.
     bytes_direct: AtomicU64,
     bytes_proxy: AtomicU64,
     renders: AtomicU64,
+    render_up: AtomicU64,
+    render_down: AtomicU64,
 }
 
 impl Default for Fallback {
@@ -69,31 +81,36 @@ impl Fallback {
             bytes_direct: AtomicU64::new(0),
             bytes_proxy: AtomicU64::new(0),
             renders: AtomicU64::new(0),
+            render_up: AtomicU64::new(0),
+            render_down: AtomicU64::new(0),
         }
     }
 
     /// The run's fallback, from the settings `get` gives (the environment, then the saved file, as `Config::get` does). A
-    /// `JURL_FALLBACK_PROXY` that is not an http or https proxy address is an error, and the error does not show its value.
+    /// `JURL_FALLBACK_PROXY` that is not an `http://` proxy address is an error, and the error does not show its value. So is
+    /// one that https would need: the meter speaks plain TCP to the proxy, so a TLS proxy would be read uncounted.
     pub(crate) fn configured(get: impl Fn(&str) -> Option<String>) -> Result<Self> {
         let mut fallback = Self::new();
         fallback.first = proxy_first(&get);
         let Some(url) = get("JURL_FALLBACK_PROXY").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) else {
             return Ok(fallback);
         };
-        let plain = Url::parse(&url).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
-        if !plain {
-            bail!("JURL_FALLBACK_PROXY is not an http or https proxy address (http://user:password@host:port)");
-        }
-        let proxy = reqwest::Proxy::all(url.as_str())
+        let upstream = Url::parse(&url).ok().filter(|u| u.scheme() == "http" && u.host_str().is_some());
+        let Some(upstream) = upstream else {
+            bail!("JURL_FALLBACK_PROXY is not an http proxy address (http://user:password@host:port)");
+        };
+        let meter = Meter::start(&upstream)?;
+        // The client is given the meter's loopback address, which keeps the proxy's credential: `proxy` turns off the
+        // environment's proxies, so this is the only one a request goes through. No redirects of its own: `fetch::send_get`
+        // follows them, so that each hop is checked.
+        let proxy = reqwest::Proxy::all(meter.url())
             .map_err(|_| anyhow!("JURL_FALLBACK_PROXY is not a proxy address that jurl can use"))?;
-        // `proxy` turns off the environment's proxies, so this is the only one a request goes through. No redirects of its
-        // own: `fetch::send_get` follows them, so that each hop is checked.
         let client = crate::client_builder()
             .redirect(Policy::none())
             .proxy(proxy)
             .build()
             .map_err(|_| anyhow!("the fallback proxy's client could not be built"))?;
-        fallback.proxy = Some(Proxy { url, client });
+        fallback.proxy = Some(Proxy { url, upstream, meter, client });
         Ok(fallback)
     }
 
@@ -117,6 +134,11 @@ impl Fallback {
     /// is looked for by its type. So is a render's refusal ([`RenderRefused`]): its message is the page's URL, status and
     /// Retry-After, never the proxy's. So is a reset of the stream ([`ServerReset`]), whose message is its reason alone.
     pub(crate) fn scrubbed(&self, via_proxy: bool, err: anyhow::Error) -> anyhow::Error {
+        self.scrubbed_urls(via_proxy, err, &[])
+    }
+
+    /// [`Fallback::scrubbed`], with each of `also` taken out too: a render's own loopback URL, which carries the same credential.
+    pub(crate) fn scrubbed_urls(&self, via_proxy: bool, err: anyhow::Error, also: &[String]) -> anyhow::Error {
         match &self.proxy {
             Some(proxy)
                 if via_proxy
@@ -124,10 +146,38 @@ impl Fallback {
                     && !err.is::<RenderRefused>()
                     && !err.is::<ServerReset>() =>
             {
-                anyhow!(scrub_with(&proxy.url, &format!("{err:#}")))
+                let text =
+                    also.iter().fold(scrub_with(&proxy.url, &format!("{err:#}")), |text, url| scrub_with(url, &text));
+                anyhow!(text)
             }
             _ => err,
         }
+    }
+
+    /// The meter a render of `url` goes through, when the run sends the render through the proxy (see `fetch::render`). Each
+    /// render has a meter of its own, so its bytes are its own. None for a direct render.
+    pub(crate) fn render_meter(&self, url: &Url) -> Result<Option<Meter>> {
+        match &self.proxy {
+            Some(proxy) if self.uses(url) => Meter::start(&proxy.upstream).map(Some),
+            _ => Ok(None),
+        }
+    }
+
+    /// Counts the wire bytes of one render through the proxy, or of one stealth sidecar load, as its meter (or the sidecar) counted them.
+    pub(crate) fn count_render_wire(&self, wire: Wire) {
+        self.render_up.fetch_add(wire.up, Relaxed);
+        self.render_down.fetch_add(wire.down, Relaxed);
+    }
+
+    /// The wire bytes of the renders the run made through the proxy: Lightpanda's, and the stealth sidecar's loads.
+    pub(crate) fn render_wire(&self) -> Wire {
+        Wire { up: self.render_up.load(Relaxed), down: self.render_down.load(Relaxed) }
+    }
+
+    /// The wire bytes the run sent through the proxy, both directions: the run's own client's, and every render's.
+    pub(crate) fn proxy_wire(&self) -> Wire {
+        let own = self.proxy.as_ref().map(|proxy| proxy.meter.wire()).unwrap_or_default();
+        own.plus(self.render_wire())
     }
 
     /// Puts `url`'s host on the proxy for the rest of the run, for `why` (the refusal that switched it, or `JURL_PROXY_FIRST`).
@@ -153,8 +203,8 @@ impl Fallback {
         self.hosts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Counts `n` decoded body bytes, read directly or through the proxy. The wire size is not measured: a body is counted as
-    /// jurl decodes it, and a refusal's body is not read at all.
+    /// Counts `n` decoded body bytes, read directly or through the proxy. This is not the wire size: a body is counted as jurl
+    /// decodes it, and a refusal's body is not read at all. The wire size through the proxy is `proxy_wire` (see `meter.rs`).
     pub(crate) fn count(&self, via_proxy: bool, n: usize) {
         let counter = if via_proxy { &self.bytes_proxy } else { &self.bytes_direct };
         counter.fetch_add(n as u64, Relaxed);
@@ -174,14 +224,6 @@ impl Fallback {
     /// The renders the run made through the proxy.
     pub(crate) fn renders(&self) -> u64 {
         self.renders.load(Relaxed)
-    }
-
-    /// The Lightpanda arguments that render `url` through the proxy, or none when `url` is direct.
-    pub(crate) fn lightpanda_args(&self, url: &Url) -> Vec<String> {
-        match &self.proxy {
-            Some(proxy) if self.uses(url) => vec!["--http-proxy".to_string(), proxy.url.clone()],
-            _ => Vec::new(),
-        }
     }
 
     /// A run's fallback with the proxy and `JURL_PROXY_FIRST` given, for tests.
@@ -368,11 +410,49 @@ mod tests {
     }
 
     #[test]
-    fn lightpanda_gets_the_proxy_url_for_a_proxied_host_only() {
+    fn a_render_gets_a_meter_for_a_proxied_host_only() {
         let fb = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
         let page = url("https://shop.example/");
-        assert!(fb.lightpanda_args(&page).is_empty());
+        assert!(fb.render_meter(&page).expect("no error").is_none());
         fb.put_on_proxy(&page, "403 from direct", false);
-        assert_eq!(fb.lightpanda_args(&page), ["--http-proxy", "http://user:s3cret@proxy.test:8080"]);
+        let meter = fb.render_meter(&page).expect("a meter").expect("the render goes through the proxy");
+        let given = meter.url();
+        assert!(given.starts_with("http://user:s3cret@127.0.0.1:"), "{given}");
+        assert!(!given.contains("proxy.test"), "the proxy's host is not given to the render: {given}");
+    }
+
+    #[test]
+    fn a_proxy_that_is_not_an_http_address_is_refused_without_showing_it() {
+        for proxy in ["https://user:s3cret@proxy.test", "socks5://user:s3cret@proxy.test"] {
+            let err = Fallback::configured(|key| (key == "JURL_FALLBACK_PROXY").then(|| proxy.into()))
+                .err()
+                .expect("refused");
+            let text = format!("{err:#}");
+            assert!(text.contains("http proxy address"), "{text}");
+            assert!(!text.contains("s3cret"), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_run_counts_its_renders_wire_bytes_on_top_of_its_own_clients() {
+        let fb = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
+        assert_eq!(fb.proxy_wire(), Wire::default());
+        fb.count_render_wire(Wire { up: 10, down: 20 });
+        fb.count_render_wire(Wire { up: 1, down: 2 });
+        assert_eq!(fb.render_wire(), Wire { up: 11, down: 22 });
+        assert_eq!(fb.proxy_wire(), Wire { up: 11, down: 22 }, "no client of the run has sent anything yet");
+        let direct = Fallback::default();
+        assert_eq!(direct.proxy_wire(), Wire::default(), "a run with no proxy has no proxy bytes");
+    }
+
+    #[test]
+    fn a_render_error_scrubs_its_own_loopback_url_as_well() {
+        let fb = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
+        let err = anyhow!(
+            "ran with --http-proxy http://user:s3cret@127.0.0.1:5555 and via http://user:s3cret@proxy.test:8080"
+        );
+        let text = format!("{:#}", fb.scrubbed_urls(true, err, &["http://user:s3cret@127.0.0.1:5555".to_string()]));
+        assert!(!text.contains("s3cret"), "{text}");
+        assert!(text.contains("proxy"), "{text}");
     }
 }

@@ -18,6 +18,7 @@ use url::Url;
 use crate::{
     fallback::Fallback,
     fetch::{self, Memo},
+    meter::wire_of,
     reach::{self, Reach},
 };
 
@@ -150,15 +151,16 @@ impl Sidecar {
             note(timing, format!("{url}: not asked the stealth sidecar: {why}"));
             return Ok(None);
         }
-        // The sidecar's browser load goes through the proxy when the run has one. The proxy bills that load whatever comes back,
-        // and jurl cannot measure it, so the call is counted here, as `fetch::render` counts its own.
+        // The sidecar's browser load goes through the proxy when the run has one. The proxy bills that load whatever comes back, so
+        // the call is counted here, as `fetch::render` counts its own, and the bytes the sidecar measured for it are added to the
+        // run's render wire bytes (see `call`).
         let proxy = fallback.has_proxy();
         if proxy {
             fallback.count_render();
         }
         note(timing, format!("{url}: asking the stealth sidecar"));
         let host = fetch::host_key(url);
-        match self.call(url, max, proxy).await {
+        match self.call(url, max, proxy, fallback).await {
             Ok(html) => Ok(Some(html)),
             Err(Failed::Captcha) => {
                 self.fail(host.as_deref());
@@ -224,9 +226,11 @@ impl Sidecar {
 
     /// One render call for `url`. The token travels only in the bearer header. `proxy` is whether the run has a fallback proxy:
     /// the sidecar exits through the residential proxy only when the read may use the proxy. The sidecar holds the proxy's
-    /// credential itself, so jurl sends only the flag, and no `proxy` key when the run has none. What a failure says names no
-    /// address: reqwest's own errors name the request's URL, so only the kind of failure is kept (see [`Sidecar::unreachable`]).
-    async fn call(&self, url: &Url, max: usize, proxy: bool) -> Result<String, Failed> {
+    /// credential itself, so jurl sends only the flag, and no `proxy` key when the run has none. The `proxy_wire` the reply
+    /// carries (the bytes its load sent through the proxy, measured by the sidecar) is added to the run's render wire bytes, whatever
+    /// the outcome, since the proxy bills the load either way. What a failure says names no address: reqwest's own errors name the
+    /// request's URL, so only the kind of failure is kept (see [`Sidecar::unreachable`]).
+    async fn call(&self, url: &Url, max: usize, proxy: bool, fallback: &Fallback) -> Result<String, Failed> {
         let mut body = Map::new();
         body.insert("url".into(), json!(url.as_str()));
         if let Some(lang) = &self.lang {
@@ -243,6 +247,9 @@ impl Sidecar {
         let status = res.status();
         let text = res.text().await.map_err(|e| self.unreachable(&e))?;
         let answer: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if let Some(wire) = wire_of(&answer["proxy_wire"]) {
+            fallback.count_render_wire(wire);
+        }
         if status != StatusCode::OK {
             // A busy sidecar may have room later: it is not memoized, though its call still counts against the budget.
             let busy = status == StatusCode::SERVICE_UNAVAILABLE;
@@ -741,6 +748,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_wire_bytes_a_sidecar_load_measured_are_counted_whatever_its_outcome() {
+        // A blocked load is billed as a content one is, so its measured bytes count too. A reply with no `proxy_wire` counts nothing.
+        const MEASURED: &str = r#"{"outcome":"content","status":200,"html":"<html><body><p>Precio: 5 €</p></body></html>","text":"Precio: 5 €","title":"Tienda","reason":null,"wall_s":3.1,"robots":"allowed","proxy_wire":{"up":2300,"down":1400000}}"#;
+        const MEASURED_BLOCK: &str = r#"{"outcome":"blocked","status":403,"html":"","text":"","title":"","reason":"datadome wall","wall_s":2.0,"robots":"allowed","proxy_wire":{"up":900,"down":4000}}"#;
+        let (side, _) = mock::serve(vec![(200, "", MEASURED), (200, "", MEASURED_BLOCK), (200, "", CONTENT)]);
+        let sidecar = sidecar_at(&side);
+        let proxied = Fallback::with(Some("http://user:s3cret@proxy.test:8080"), false);
+        let url = |host: &str| Url::parse(&format!("https://{host}/p")).expect("a URL");
+        let html = sidecar.read(&url("shop.example"), &PRIVATE, 1 << 20, false, &proxied).await;
+        assert!(html.expect("no CAPTCHA").is_some());
+        assert_eq!(proxied.render_wire(), crate::meter::Wire { up: 2300, down: 1_400_000 });
+        let blocked = sidecar.read(&url("tienda.example"), &PRIVATE, 1 << 20, false, &proxied).await;
+        assert!(blocked.expect("no CAPTCHA").is_none());
+        assert_eq!(
+            proxied.render_wire(),
+            crate::meter::Wire { up: 3200, down: 1_404_000 },
+            "a blocked load is measured too"
+        );
+        let plain = sidecar.read(&url("otra.example"), &PRIVATE, 1 << 20, false, &proxied).await;
+        assert!(plain.expect("no CAPTCHA").is_some());
+        assert_eq!(
+            proxied.render_wire(),
+            crate::meter::Wire { up: 3200, down: 1_404_000 },
+            "a reply with no proxy_wire adds nothing"
+        );
+    }
+
+    #[tokio::test]
     async fn a_call_through_the_fallback_proxy_says_so_and_counts_as_a_render() {
         // Three calls: two through the proxy (the second answers with no content, and is billed all the same) and one with no
         // proxy. A fourth read is refused by the budget, so it is neither asked nor counted.
@@ -865,14 +900,14 @@ mod tests {
         let page = Url::parse("https://shop.example/p").expect("a URL");
         let mut failures = Vec::new();
         for (base, timeout) in [(closed.clone(), TIMEOUT), (slow.clone(), Duration::from_millis(300))] {
-            match sidecar_with(&base, timeout, MAX_PAGES).call(&page, 1 << 20, false).await {
+            match sidecar_with(&base, timeout, MAX_PAGES).call(&page, 1 << 20, false, &Fallback::default()).await {
                 Err(Failed::Other { reason, .. }) => failures.push((base, reason)),
                 _ => panic!("a call to {base} that gets no answer is a failure"),
             }
         }
         let answers = sidecar_with(&answering, TIMEOUT, MAX_PAGES);
         for _ in 0..4 {
-            match answers.call(&page, 1 << 20, false).await {
+            match answers.call(&page, 1 << 20, false, &Fallback::default()).await {
                 Err(Failed::Other { reason, .. }) => failures.push((answering.clone(), reason)),
                 _ => panic!("a reply that is not a page is a failure"),
             }

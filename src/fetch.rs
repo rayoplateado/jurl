@@ -21,6 +21,7 @@ use url::Url;
 
 use crate::{
     fallback::{self, Fallback},
+    meter::Meter,
     reach::{self, NotPublic, Reach},
     stealth::{self, Sidecar},
 };
@@ -1257,20 +1258,37 @@ async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.
 /// Waits for the network to settle and for real visible text to appear, capped at 8s:
 /// SPAs keep background traffic going and often paint content after the network calms down.
-/// A host on the fallback proxy is rendered through it: Lightpanda is given the proxy, and every request of the render goes
-/// through it, the page's scripts and images included (see the README). An error of such a render is scrubbed of the proxy, except
-/// a [`RenderRefused`], whose message names no proxy (see `Fallback::scrubbed`).
+/// A host on the fallback proxy is rendered through it: Lightpanda is given the render's meter (see `meter.rs`) in place of the
+/// proxy, and every request of the render goes through it, the page's scripts and images included (see the README). Its bytes are
+/// counted on the wire when its process has ended. An error of such a render is scrubbed of the proxy, except a [`RenderRefused`],
+/// whose message names no proxy (see `Fallback::scrubbed`).
 pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> {
-    let proxy = fallback.lightpanda_args(url);
-    let proxied = !proxy.is_empty();
+    let meter = fallback.render_meter(url)?;
+    let local: Vec<String> = meter.iter().map(Meter::url).collect();
+    let proxied = !local.is_empty();
+    let proxy: Vec<String> = local.iter().flat_map(|url| ["--http-proxy".to_string(), url.clone()]).collect();
     if proxied {
         // A render is billed by the proxy whatever it returns, so it is counted as it starts.
         fallback.count_render();
     }
-    let body = dom_of(bin, url, &proxy).await.map_err(|e| fallback.scrubbed(proxied, e))?;
-    // The render's own requests (its scripts, its images) are not counted: only the DOM it returned is.
+    let result = dom_of(bin, url, &proxy).await;
+    end_render_meter(fallback, meter).await;
+    let body = result.map_err(|e| fallback.scrubbed_urls(proxied, e, &local))?;
+    // The render's own requests (its scripts, its images) are not counted in `bytes`: only the DOM it returned is. The wire
+    // count (`bytes.proxy_wire`) has them.
     fallback.count(proxied, body.len());
     Ok(Page { url: url.clone(), body, is_markdown: false, route: if proxied { Route::Proxy } else { Route::Direct } })
+}
+
+/// How long a render's connections may take to end after its process has (see [`render`]).
+const RENDER_WIRE_GRACE: Duration = Duration::from_secs(2);
+
+/// Ends a render's meter once its process has ended, and counts the bytes it carried as the run's render wire bytes. Its
+/// connections end with the process, so the meter waits only briefly, off the async threads.
+async fn end_render_meter(fallback: &Fallback, meter: Option<Meter>) {
+    let Some(meter) = meter else { return };
+    let wire = tokio::task::spawn_blocking(move || meter.finish(RENDER_WIRE_GRACE)).await.unwrap_or_default();
+    fallback.count_render_wire(wire);
 }
 
 /// The DOM Lightpanda returns for `url`, run with the arguments `proxy` (none for a direct render).
@@ -3035,6 +3053,31 @@ mod tests {
         let memo = Memo::default();
         let err = fetch(&format!("{site}/page"), retry_on(&memo)).await.err().expect("the site hangs up");
         assert!(err.downcast_ref::<reqwest::Error>().is_some(), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_render_meter_counts_what_its_process_sent_as_render_wire_bytes() {
+        use std::io::{Read, Write};
+
+        use crate::meter::Wire;
+        let port = crate::meter::echo_proxy();
+        let fallback = Fallback::with(Some(&format!("http://jurlcred:s3cret-pw@127.0.0.1:{port}")), true);
+        let page = Url::parse("https://shop.example/p").expect("a URL");
+        let meter = fallback.render_meter(&page).expect("no error").expect("the render goes through the proxy");
+        // The render's process talks to the URL it is given: here, the client does, and then the process ends.
+        let given = Url::parse(&meter.url()).expect("the meter's URL");
+        let mut process =
+            std::net::TcpStream::connect(("127.0.0.1", given.port().expect("a port"))).expect("the meter");
+        process.write_all(&[9u8; 300]).expect("the process writes");
+        process.shutdown(std::net::Shutdown::Write).expect("the process half-closes");
+        let mut back = Vec::new();
+        process.read_to_end(&mut back).expect("the echo ends");
+        assert_eq!(back.len(), 300);
+        end_render_meter(&fallback, Some(meter)).await;
+        assert_eq!(fallback.render_wire(), Wire { up: 300, down: 300 });
+        assert_eq!(fallback.proxy_wire(), Wire { up: 300, down: 300 }, "the run's own client sent nothing");
+        end_render_meter(&fallback, None).await;
+        assert_eq!(fallback.render_wire(), Wire { up: 300, down: 300 }, "a direct render has no meter to count");
     }
 
     #[cfg(unix)]
