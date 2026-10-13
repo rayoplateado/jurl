@@ -261,7 +261,7 @@ mod tests {
             },
             "proxied_renders": 0,
             "proxied_hosts": [],
-            "jev": { "requests": 4, "input_tokens": 5321 },
+            "jev": { "requests": 4, "input_tokens": 5321, "capped": false },
             "clef": { "requests": 0, "input_tokens": 0, "images": 0 },
         });
         let usage_of = |done: Result<Rendered>| {

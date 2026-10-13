@@ -1272,11 +1272,16 @@ impl Search {
 
     /// The tokens spent and the cap, when the search has spent its Jev budget (`JURL_JEV_MAX_TOKENS`): it then opens no more
     /// pages and concludes with what it has, as when `--follow N` runs out. The pages already being read finish, so a search
-    /// may spend up to one batch past the cap.
+    /// may spend up to one batch past the cap. A `Some` is the cap deciding the stop, so it also sets the usage's `jev.capped`:
+    /// the callers ask only where the cap would decide it (before a page is opened, and before a precise search's second pass).
     fn over_budget(&self, args: &Args) -> Option<(u64, u64)> {
         let cap = args.jev_budget?;
         let spent = jev_tokens().saturating_sub(self.jev_start);
-        (spent >= cap).then_some((spent, cap))
+        if spent < cap {
+            return None;
+        }
+        crate::decide::USAGE.jev_capped.store(true, std::sync::atomic::Ordering::Relaxed);
+        Some((spent, cap))
     }
 
     /// Takes the results of a batch, in batch order. A page read is absorbed; one that failed to load, was a block
@@ -1991,6 +1996,10 @@ mod tests {
         let (spent, cap) = s.over_budget(&args).expect("the budget is spent");
         assert!(spent >= 1_000);
         assert_eq!(cap, 1_000);
+        assert!(
+            crate::decide::USAGE.jev_capped.load(std::sync::atomic::Ordering::Relaxed),
+            "the usage says the cap stopped it"
+        );
         args.jev_budget = None;
         assert_eq!(s.over_budget(&args), None, "no cap, no stop");
     }
