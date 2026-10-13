@@ -229,8 +229,8 @@ async fn kept_images<'e>(
 
 /// Jev's items for the text-only judgement of each image.
 fn judge_items(ex: &Extracted, ask: Option<&str>) -> Vec<Item> {
-    // Text-only judgement: alt, caption, file name and size are usually enough. A question also gets the text of the link
-    // the image sits in (a listing's card names its show when the poster's file is "expo.jpg") and the page's title (on a
+    // Text-only judgement: alt, caption, file name and size are usually enough. A question also gets the words around the
+    // image (a listing's card names its show when the poster's file is "expo.jpg") and the page's title (on a
     // show's own page, "Un día perfecto | Teatro Lara", its images are of the show).
     ex.images
         .iter()
@@ -254,8 +254,8 @@ fn judge_items(ex: &Extracted, ask: Option<&str>) -> Vec<Item> {
                 image_id(i),
                 match ask {
                     Some(q) => noul(format!(
-                        "Judging by its file name, alt text, caption, the text of the link it sits in (`card`) and the \
-                         title of its page (`page_title`), the image in `images` with i={} shows: {q}",
+                        "Judging by its file name, alt text, caption, the words around it that name it (`card`: its title, \
+                         the link it sits in or its card's heading) and the title of its page (`page_title`), the image in `images` with i={} shows: {q}",
                         i.i
                     )),
                     None => noul(format!(
