@@ -45,6 +45,9 @@ pub(crate) struct Usage {
     pub(crate) browser_requests: AtomicU64,
     pub(crate) jev_requests: AtomicU64,
     pub(crate) jev_tokens: AtomicU64,
+    /// Whether JURL_JEV_MAX_TOKENS stopped a `--follow` search (see `follow::Search::over_budget`): the usage's `jev.capped`.
+    /// A CLI run is one read, so this is that read's.
+    pub(crate) jev_capped: AtomicBool,
     pub(crate) clef_requests: AtomicU64,
     pub(crate) clef_tokens: AtomicU64,
     pub(crate) clef_images: AtomicU64,
@@ -62,6 +65,7 @@ impl Usage {
             browser_requests: AtomicU64::new(0),
             jev_requests: AtomicU64::new(0),
             jev_tokens: AtomicU64::new(0),
+            jev_capped: AtomicBool::new(false),
             clef_requests: AtomicU64::new(0),
             clef_tokens: AtomicU64::new(0),
             clef_images: AtomicU64::new(0),
@@ -103,7 +107,7 @@ impl Usage {
             },
             "proxied_renders": run.renders(),
             "proxied_hosts": run.hosts(),
-            "jev": { "requests": n(&self.jev_requests), "input_tokens": n(&self.jev_tokens) },
+            "jev": { "requests": n(&self.jev_requests), "input_tokens": n(&self.jev_tokens), "capped": self.jev_capped.load(Relaxed) },
             "clef": { "requests": n(&self.clef_requests), "input_tokens": n(&self.clef_tokens), "images": n(&self.clef_images) },
         })
     }
@@ -334,10 +338,18 @@ mod tests {
                 },
                 "proxied_renders": 0,
                 "proxied_hosts": [],
-                "jev": { "requests": 4, "input_tokens": 2000 },
+                "jev": { "requests": 4, "input_tokens": 2000, "capped": false },
                 "clef": { "requests": 2, "input_tokens": 160, "images": 2 },
             })
         );
+    }
+
+    #[test]
+    fn usage_says_when_the_jev_cap_stopped_the_search() {
+        let u = Usage::new();
+        assert_eq!(u.json(&Fallback::default())["jev"]["capped"], false);
+        u.jev_capped.store(true, Relaxed);
+        assert_eq!(u.json(&Fallback::default())["jev"]["capped"], true);
     }
 
     #[test]
