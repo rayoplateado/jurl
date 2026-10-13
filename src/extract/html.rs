@@ -216,8 +216,9 @@ const CARD_MAX_CHARS: usize = 200;
 const CARD_DEPTH: usize = 4;
 
 /// Gives the image at `at` the words around `el` that name it (see `Image::card`), unless it already has some: the
-/// `title` of its `img` when the alt text took the alt's place, then the text of the link it sits in, else the heading of
-/// its card (the nearest of its first ancestors that holds one heading, as a listing's card holds its show's name).
+/// `title` of its `img` when the alt text took the alt's place, then the text of the link it sits in, else (no link, or a
+/// link around the picture alone) the heading of its card: the nearest of its first ancestors that holds one heading, as a
+/// listing's card holds its show's name.
 fn set_card(images: &mut [Image], at: Option<usize>, el: ElementRef, img: Option<ElementRef>) {
     let Some(image) = at.and_then(|at| images.get_mut(at)) else { return };
     if !image.card.is_empty() {
@@ -225,10 +226,10 @@ fn set_card(images: &mut [Image], at: Option<usize>, el: ElementRef, img: Option
     }
     let title = img.and_then(|i| i.value().attr("title")).map(collapse).filter(|t| !t.is_empty() && *t != image.alt);
     let ancestors = || el.ancestors().filter_map(ElementRef::wrap);
-    let headings = sel("h1, h2, h3, h4, h5, h6");
-    let around = match ancestors().find(|a| a.value().name() == "a") {
-        Some(link) => collapse(&inline_text(link)),
-        None => ancestors()
+    let link = ancestors().find(|a| a.value().name() == "a").map(|link| collapse(&inline_text(link)));
+    let around = link.filter(|text| !text.is_empty()).unwrap_or_else(|| {
+        let headings = sel("h1, h2, h3, h4, h5, h6");
+        ancestors()
             .take(CARD_DEPTH)
             .find_map(|a| {
                 let mut found = a.select(&headings);
@@ -237,9 +238,12 @@ fn set_card(images: &mut [Image], at: Option<usize>, el: ElementRef, img: Option
                     _ => None,
                 }
             })
-            .unwrap_or_default(),
-    };
-    let words: Vec<String> = title.into_iter().chain([around]).filter(|w| !w.is_empty()).collect();
+            .unwrap_or_default()
+    });
+    let mut words: Vec<String> = title.into_iter().collect();
+    if !around.is_empty() && !words.contains(&around) {
+        words.push(around);
+    }
     image.card = words.join("\n").chars().take(CARD_MAX_CHARS).collect();
 }
 
@@ -1094,14 +1098,17 @@ mod tests {
 
     #[test]
     fn an_image_outside_any_link_takes_its_title_and_its_cards_heading() {
-        // A theatre's listing: the card's link covers it from beside the picture, and its heading names the show.
+        // A theatre's listing: the card's link covers it from beside the picture, and its heading names the show. The
+        // second card's link wraps the picture alone.
         let page = r#"<body><main><div class="card"><a href="/shows/firebird"><span>Firebird</span></a>
-            <div class="content"><figure><img src="/lcb.png" title="London City Ballet - Firebird"
+            <div class="content"><figure><img src="/lcb.png" title="London City Ballet - Firebird © ASH"
             alt="A dancer in a red dress"></figure><div><h3>London City Ballet - Firebird</h3></div></div></div>
+            <div class="card"><a href="/shows/snowman"><img src="/snow.png" alt="A boy flying"></a><h3>The Snowman</h3></div>
             <p>Every show of the season, with its dates and tickets.</p></main></body>"#;
         let ex = html(page, &base());
         assert_eq!(ex.images[0].alt, "A dancer in a red dress");
-        assert_eq!(ex.images[0].card, "London City Ballet - Firebird\nLondon City Ballet - Firebird");
+        assert_eq!(ex.images[0].card, "London City Ballet - Firebird © ASH\nLondon City Ballet - Firebird");
+        assert_eq!(ex.images[1].card, "The Snowman");
     }
 
     #[test]
