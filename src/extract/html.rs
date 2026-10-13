@@ -176,7 +176,8 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
         let alt = collapse(a("alt").or(a("title")).unwrap_or(""));
         let caption = figcaption(img);
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
-        push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
+        let at = push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
+        set_card(&mut images, at, img);
     }
     // A responsive picture's banner is often only in its <source> srcsets, with the <img> as the fallback. Its sources are
     // renditions of one image for several breakpoints, so the picture is one candidate: the largest rendition of any of its
@@ -202,9 +203,25 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
             .next()
             .map(|img| collapse(img.value().attr("alt").unwrap_or("")))
             .unwrap_or_default();
-        push_image(&mut images, base, &src, preview.as_deref(), alt, String::new(), None, None);
+        let at = push_image(&mut images, base, &src, preview.as_deref(), alt, String::new(), None, None);
+        set_card(&mut images, at, picture);
     }
     images
+}
+
+/// The most of a card's text an image keeps: its title and a line or two, not a whole section that one link wraps.
+const CARD_MAX_CHARS: usize = 200;
+
+/// Gives the image at `at` the text of the link `el` sits in (see `Image::card`), unless it already has some.
+fn set_card(images: &mut [Image], at: Option<usize>, el: ElementRef) {
+    let Some(image) = at.and_then(|at| images.get_mut(at)) else { return };
+    if !image.card.is_empty() {
+        return;
+    }
+    let link = el.ancestors().filter_map(ElementRef::wrap).find(|a| a.value().name() == "a");
+    if let Some(link) = link {
+        image.card = collapse(&inline_text(link)).chars().take(CARD_MAX_CHARS).collect();
+    }
 }
 
 /// Whether a `<source>`'s type is one the image decoder reads, by the decoder's own list of MIME types, so a type it has no

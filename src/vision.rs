@@ -229,23 +229,33 @@ async fn kept_images<'e>(
 
 /// Jev's items for the text-only judgement of each image.
 fn judge_items(ex: &Extracted, ask: Option<&str>) -> Vec<Item> {
-    // Text-only judgement: alt, caption, file name and size are usually enough.
+    // Text-only judgement: alt, caption, file name and size are usually enough. A question also gets the text of the link
+    // the image sits in (a listing's card names its show when the poster's file is "expo.jpg") and the page's title (on a
+    // show's own page, "Un día perfecto | Teatro Lara", its images are of the show).
     ex.images
         .iter()
         .map(|i| Item {
-            state: json!({
-                "i": i.i,
-                "file": i.url.path_segments().and_then(|mut s| s.next_back()).unwrap_or(""),
-                "alt": i.alt,
-                "caption": i.caption,
-                "width": i.width,
-                "height": i.height,
-            }),
+            state: {
+                let mut state = json!({
+                    "i": i.i,
+                    "file": i.url.path_segments().and_then(|mut s| s.next_back()).unwrap_or(""),
+                    "alt": i.alt,
+                    "caption": i.caption,
+                    "width": i.width,
+                    "height": i.height,
+                });
+                if ask.is_some() {
+                    state["card"] = json!(i.card);
+                    state["page_title"] = json!(ex.title);
+                }
+                state
+            },
             questions: vec![(
                 image_id(i),
                 match ask {
                     Some(q) => noul(format!(
-                        "Judging by its file name, alt text and caption, the image in `images` with i={} shows: {q}",
+                        "Judging by its file name, alt text, caption, the text of the link it sits in (`card`) and the \
+                         title of its page (`page_title`), the image in `images` with i={} shows: {q}",
                         i.i
                     )),
                     None => noul(format!(
@@ -626,6 +636,7 @@ mod tests {
             preview: url,
             alt: String::new(),
             caption: String::new(),
+            card: String::new(),
             width: None,
             height: None,
         }
@@ -676,6 +687,23 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].questions[0].0, image_id(&ex.images[0]));
         assert_eq!(items[0].questions[0].0, "img0");
+    }
+
+    #[test]
+    fn a_question_judges_an_image_by_its_card_and_its_page_title_too() {
+        // A museum's listing: the poster's file and alt name the artist and an old work, its card names the show.
+        let url = url::Url::parse("https://example.test/exposiciones").unwrap();
+        let page = r#"<html><head><title>Exposiciones</title></head><body><main><ul><li><a href="/exposicion/la-menesunda">
+            <p>Exposición</p><h2>La Menesunda según Marta Minujín</h2><p>Del 18 nov 2026 al 08 mar 2027</p>
+            <img alt="Marta Minujín, La Destrucción, 1963" src="/marta-minujin-expo.jpg"></a></li></ul>
+            <p>Visita las exposiciones temporales del museo.</p></main></body></html>"#;
+        let ex = crate::extract::html(page, &url);
+        assert_eq!(ex.images[0].card, "Exposición\nLa Menesunda según Marta Minujín\nDel 18 nov 2026 al 08 mar 2027");
+        let asked = judge_items(&ex, Some("Poster of La Menesunda"));
+        assert_eq!(asked[0].state["card"], json!(ex.images[0].card));
+        assert_eq!(asked[0].state["page_title"], json!("Exposiciones"));
+        // Without a question, an image is judged as before: is it content?
+        assert!(judge_items(&ex, None)[0].state.get("card").is_none());
     }
 
     #[test]
@@ -775,6 +803,7 @@ mod tests {
             preview: url,
             alt: String::new(),
             caption: String::new(),
+            card: String::new(),
             width: None,
             height: None,
         }

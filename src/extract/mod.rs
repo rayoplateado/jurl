@@ -88,6 +88,9 @@ pub struct Image {
     pub preview: Url,
     pub alt: String,
     pub caption: String,
+    /// The text of the link the image sits in, when it sits in one: a card's title and lines, which often say what the
+    /// image is of when its own alt text and file name don't.
+    pub card: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
 }
@@ -141,6 +144,7 @@ pub struct Extracted {
 /// newline, as the page shows it, so "Dylan Field" and "Evan Wallace" don't read as one name.
 const BREAK: char = '\u{1F}';
 
+/// Adds an image, or fills in what an earlier copy of it lacks, and returns its place in `out`; none when it is left out.
 #[allow(clippy::too_many_arguments)]
 fn push_image(
     out: &mut Vec<Image>,
@@ -151,20 +155,20 @@ fn push_image(
     caption: String,
     width: Option<u32>,
     height: Option<u32>,
-) {
+) -> Option<usize> {
     let src = src.trim();
     if src.is_empty() || src.starts_with('#') {
-        return;
+        return None;
     }
-    let Ok(url) = base.join(src) else { return };
+    let url = base.join(src).ok()?;
     if !matches!(url.scheme(), "http" | "https") || noise(&url, width, height) {
-        return;
+        return None;
     }
     // A src that resolves to the page itself ("?q=80" in an og:image left without its path) is the page, not a
     // picture of anything.
     let bare = |u: &Url| u.as_str().split(['?', '#']).next().unwrap_or_default().to_string();
     if bare(&url) == bare(base) {
-        return;
+        return None;
     }
     if let Some(existing) = out.iter_mut().find(|i| i.url == url) {
         if existing.alt.is_empty() {
@@ -173,10 +177,12 @@ fn push_image(
         if existing.caption.is_empty() {
             existing.caption = caption;
         }
-        return;
+        return Some(existing.i);
     }
     let preview = preview.and_then(|p| base.join(p.trim()).ok()).unwrap_or_else(|| url.clone());
-    out.push(Image { i: out.len(), url, preview, alt, caption, width, height });
+    let i = out.len();
+    out.push(Image { i, url, preview, alt, caption, card: String::new(), width, height });
+    Some(i)
 }
 
 /// Cheap pre-filter: things that are never content, so no model needs to see them.

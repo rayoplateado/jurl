@@ -383,6 +383,11 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
         "kind": block.kind,
         "link": link,
     });
+    // The page the answer is the headline of ("Un día perfecto" in a theatre's agenda links to the play's own page): where
+    // more about it is, its photo included. Left out when the answer is no headline.
+    if let Some(href) = &block.href {
+        doc["href"] = json!(href);
+    }
     // As in the block arrays (`Block` skips a missing level or language): left out when the block has none, not null.
     if let Some(level) = block.level {
         doc["level"] = json!(level);
@@ -613,6 +618,10 @@ mod tests {
         assert_eq!(v["level"], 2);
         assert!(v.get("lang").is_none());
         assert_eq!(block_fields(&v), block_fields(&serde_json::to_value(&heading).unwrap()));
+        assert!(v.get("href").is_none());
+        // A headline says the page it links to.
+        let headline = Block { href: Some("https://example.com/pro".into()), ..heading };
+        assert_eq!(precise_json(&headline, 0..8, 0.93)["href"], "https://example.com/pro");
     }
 
     #[test]
