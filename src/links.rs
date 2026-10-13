@@ -288,6 +288,9 @@ pub(crate) async fn with_link(ctx: &Ctx<'_>, ex: &Extracted, mut answer: Rendere
     let web = page_links(ctx.url, ex, &[], |u| matches!(u.scheme(), "http" | "https"));
     let candidates = most_relevant(what, web, MAX_LINKS);
     if candidates.is_empty() {
+        if !ctx.args.json {
+            eprintln!("jurl: no link for the answer: its page has no web links");
+        }
         answer.json["link"] = Value::Null;
         return Ok(answer);
     }
@@ -316,7 +319,12 @@ pub(crate) async fn with_link(ctx: &Ctx<'_>, ex: &Extracted, mut answer: Rendere
                     answer.text = format!("{}\n\nLink: <{}>\n", answer.text.trim_end(), l.url);
                     json!({ "url": l.url.as_str(), "text": l.text, "context": l.context, "p": p })
                 }
-                None => Value::Null,
+                None => {
+                    if !ctx.args.json {
+                        eprintln!("jurl: no link for the answer: no link of its page is {what}");
+                    }
+                    Value::Null
+                }
             };
         }
         Err(e) => {
@@ -559,5 +567,31 @@ mod tests {
         let urls: Vec<String> =
             page_links(&page, &ex, &[], |_| true).iter().map(|l| l.url.path().to_string()).collect();
         assert_eq!(urls, ["/pricing"]);
+    }
+
+    /// A read's answer as a mode renders it, for the --with-link tests.
+    fn answered() -> Rendered {
+        Rendered { text: "8:00 to 18:00\n\n".into(), json: json!({ "answer": "8:00 to 18:00" }) }
+    }
+
+    #[tokio::test]
+    async fn without_with_link_the_answer_is_as_it_was() {
+        let args = Args::parse_from(["jurl", "-q", "x?", "x.com"]);
+        let (client, url, ex) = (Client::new(), Url::parse("https://x.com/").unwrap(), Extracted::default());
+        let ctx = Ctx::new(&args, &client, "", &url, &ex);
+        let got = with_link(&ctx, &ex, answered(), &mut Timer::new()).await.unwrap();
+        assert_eq!((got.text, got.json), (answered().text, answered().json));
+    }
+
+    #[tokio::test]
+    async fn a_page_with_no_web_link_keeps_its_answer_with_a_null_link() {
+        let args = Args::parse_from(["jurl", "-q", "x?", "--json", "--with-link=buy tickets", "x.com"]);
+        let url = Url::parse("https://x.com/").unwrap();
+        let ex = Extracted { links: vec![link("https://x.com/"), link("mailto:box@x.com")], ..Default::default() };
+        let client = Client::new();
+        let ctx = Ctx::new(&args, &client, "", &url, &ex);
+        let got = with_link(&ctx, &ex, answered(), &mut Timer::new()).await.unwrap();
+        assert_eq!(got.json, json!({ "answer": "8:00 to 18:00", "link": null }));
+        assert_eq!(got.text, answered().text, "no link line");
     }
 }
