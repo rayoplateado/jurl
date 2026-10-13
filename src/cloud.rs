@@ -182,6 +182,8 @@ fn default_max(mode: &str) -> Option<usize> {
 pub(crate) fn unsupported(args: &Args) -> Option<String> {
     if args.image || args.vision || args.find.is_some() {
         Some("jurl cloud doesn't read images yet (--image, --vision, --find)".into())
+    } else if args.with_image.is_some() {
+        Some("jurl cloud doesn't return the answer's image yet (--with-image)".into())
     } else if args.render {
         Some("jurl cloud doesn't render JavaScript yet (-r)".into())
     } else if args.threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
@@ -590,6 +592,9 @@ mod tests {
         assert!(unsupported(&args(&["jurl", "-q", "x?", "--pages", "3", "x.com"])).unwrap().contains("--pages"));
         assert!(unsupported(&args(&["jurl", "-q", "x?", "--pages", "1", "x.com"])).is_none());
         assert!(unsupported(&args(&["jurl", "--json", "--with-pages", "x.com"])).unwrap().contains("--with-pages"));
+        assert!(
+            unsupported(&args(&["jurl", "-p", "-q", "x?", "--with-image", "x.com"])).unwrap().contains("--with-image")
+        );
     }
 
     #[tokio::test]
