@@ -144,12 +144,12 @@ pub(crate) async fn with_image(
         Ok((kept, looks)) => {
             let (img, p) = kept[0];
             answer.json["image"] = image_json(img, p, &looks, wanted.vision);
-            answer.text = format!("{}\n\n![{}]({})\n", answer.text.trim_end(), markdown_alt(&img.alt), img.url);
+            answer.text = format!("{}\n\n![{}](<{}>)\n", answer.text.trim_end(), markdown_alt(&img.alt), img.url);
         }
         Err(e) if is_not_found(&e) => {
             answer.json["image"] = Value::Null;
             if !ctx.args.json {
-                eprintln!("jurl: {e:#}");
+                eprintln!("jurl: no image for the answer: {}", no_image_reason(&e, find.as_deref()));
             }
         }
         Err(e) => {
@@ -159,6 +159,14 @@ pub(crate) async fn with_image(
         }
     }
     Ok(answer)
+}
+
+/// Why --with-image found no image, said without --image's hint to lower `--threshold`, which the image doesn't take.
+fn no_image_reason(e: &anyhow::Error, find: Option<&str>) -> String {
+    match find {
+        Some(_) => format!("{e:#}"),
+        None => format!("{e:#}").replace(" (try a lower --threshold)", ""),
+    }
 }
 
 /// The bar the --with-image image needs: the answer's own `--threshold` is not for images.
@@ -276,7 +284,7 @@ async fn judge_and_look(
         let (a, looks) =
             tokio::join!(ctx.judge("images", items, Map::new()), look_all(req, first_in_page_order(&ex.images, cap)));
         let a = a?;
-        t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
+        t.lap(if req.is_some() { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
         Ok((a, looks))
     }
 }

@@ -38,8 +38,9 @@ pub(crate) struct Args {
     #[arg(short, long)]
     pub(crate) precise: bool,
     /// With -q: also the best content image of the page the answer comes from, in the same read (no page is loaded
-    /// again). `--with-image=WHAT` has Clef find the image that shows WHAT there instead, as --find does. Only that page's
-    /// images are judged, never those of the other pages a --follow reads. No answer, no image
+    /// again), judged as content, not by the question. `--with-image=WHAT` has Clef find the image that shows WHAT there
+    /// instead, as --find does. Only that page's images are judged, never those of the other pages a --follow reads.
+    /// No answer, no image
     #[arg(long, value_name = "WHAT", num_args = 0..=1, require_equals = true)]
     pub(crate) with_image: Option<Option<String>>,
     /// With -q: when the page doesn't answer, follow its links within the same site, most promising first,

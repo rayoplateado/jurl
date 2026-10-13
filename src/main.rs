@@ -222,6 +222,9 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.with_image.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
         bail!("--with-image adds the image of the answer's page: use it with -q, not --image, --find or --links");
     }
+    if matches!(&args.with_image, Some(Some(what)) if what.trim().is_empty()) {
+        bail!("--with-image=WHAT needs what to find; for the page's best image, drop the =");
+    }
     if args.with_image.is_some() && args.pages > 1 {
         bail!("--with-image looks at one page, the answer's: not with --pages");
     }
