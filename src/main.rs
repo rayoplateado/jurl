@@ -220,6 +220,15 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.follow.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
         bail!("--follow looks for an answer: use it with -q (and --precise or --code), not images or links");
     }
+    if args.with_image.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
+        bail!("--with-image adds the image of the answer's page: use it with -q, not --image, --find or --links");
+    }
+    if matches!(&args.with_image, Some(Some(what)) if what.trim().is_empty()) {
+        bail!("--with-image=WHAT needs what to find; for the page's best image, drop the =");
+    }
+    if args.with_image.is_some() && args.pages > 1 {
+        bail!("--with-image looks at one page, the answer's: not with --pages");
+    }
     if args.with_pages && !args.json {
         bail!("--with-pages puts the pages in the JSON: add --json");
     }
@@ -258,7 +267,12 @@ async fn own_page(args: &Args, cfg: &Config, client: &Client, key: &str, t: &mut
         .map(|u| format!("{}/", u.origin().ascii_serialization()))
         .into_iter()
         .collect();
-    if args.vision {
+    // `--with-image=WHAT` needs Clef's keys: missing ones fail the run before its pages are read, not after.
+    let clef_later = matches!(args.with_image, Some(Some(_)));
+    if clef_later {
+        vision::check_keys(cfg)?;
+    }
+    if args.vision || clef_later {
         hosts.push("https://api.cloudflare.com/".to_string());
     }
     let warm = tokio::spawn({
@@ -296,7 +310,8 @@ async fn read(
     } else if args.links {
         links::links(&ctx, &ex, t).await
     } else {
-        blocks::blocks(&ctx, &ex, t).await
+        let answer = blocks::blocks(&ctx, &ex, t).await?;
+        vision::with_image(&ctx, cfg, &ex, answer, t).await
     }
 }
 
@@ -580,6 +595,32 @@ mod tests {
             check(&["jurl", "-q", "x?", "--pages", "2", "--precise", "x.com"]).is_ok(),
             "a precise answer may be on any page"
         );
+    }
+
+    #[test]
+    fn with_image_goes_with_an_answer_on_one_page_or_a_follow() {
+        let check = |argv: &[&str]| prepare(&mut Args::parse_from(argv));
+        assert!(check(&["jurl", "-p", "-q", "x?", "--with-image", "x.com"]).is_ok());
+        assert!(check(&["jurl", "-p", "-q", "x?", "--follow", "5", "--with-image=a facade", "x.com"]).is_ok());
+        assert!(check(&["jurl", "-q", "x?", "--with-image", "x.com"]).is_ok(), "blocks answer too");
+        assert!(check(&["jurl", "--with-image", "x.com"]).is_err(), "no question, no answer to go with");
+        assert!(check(&["jurl", "-q", "x?", "--image", "--with-image", "x.com"]).is_err());
+        assert!(check(&["jurl", "--find", "a cat", "--with-image", "x.com"]).is_err());
+        assert!(check(&["jurl", "-q", "x?", "--links", "--with-image", "x.com"]).is_err());
+        assert!(
+            check(&["jurl", "-q", "x?", "--pages", "2", "--with-image", "x.com"]).is_err(),
+            "one page: the answer's"
+        );
+    }
+
+    #[test]
+    fn with_image_takes_what_to_find_only_after_an_equals_sign() {
+        // Without `=`, the next word is the URL, not what to find.
+        let bare = Args::parse_from(["jurl", "-q", "x?", "--with-image", "x.com"]);
+        assert_eq!((bare.with_image, bare.url.as_str()), (Some(None), "x.com"));
+        let find = Args::parse_from(["jurl", "-q", "x?", "--with-image=a facade", "x.com"]);
+        assert_eq!(find.with_image, Some(Some("a facade".to_string())));
+        assert_eq!(Args::parse_from(["jurl", "-q", "x?", "x.com"]).with_image, None);
     }
 
     #[test]

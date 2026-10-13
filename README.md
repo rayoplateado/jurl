@@ -276,6 +276,7 @@ The tools run the same code as the CLI, with the same keys or jurl cloud sign-in
 | `--vision` | Like `--image`, plus Clef looks at the pixels |
 | `--pages N` | A list's next pages too: up to N pages (50 at most), each the page's own next page (`rel="next"`, or the `?page=2` or `/page/2/` link one on), judged as one list, with each page's address where its blocks start. The default block count grows with the pages read; not with `--follow`, `--links` or `--image` |
 | `-f, --find "…"` | The image that best matches the description |
+| `--with-image[=WHAT]` | With `-q`: also the best content image of the page the answer comes from, in the same read: no page is loaded again. Judged as `--image` judges one without `-q` (is it content?), not by the question, or with `=WHAT` found as `--find` finds one (Clef, so it needs its keys). Only the answer's page is looked at, never the other pages a `--follow` reads, and a miss looks at none. The text prints it as a markdown image after the answer; `--json` gives it as `image` (`url`, `alt`, `caption`, `p`, and `pixels` with `=WHAT`), `null` when the page has none, with `image_error` when the image step failed. The answer stands either way. Not with `--pages` |
 | `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps and unfilled template placeholders) |
 | `--no-browser-retry` | Don't ask a page that answers 202, 403 or 503, or whose server resets its stream, again with a browser's TLS fingerprint (see below) |
 | `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
@@ -397,7 +398,7 @@ A run reads with jurl cloud or with your own keys, by the first of these that ap
 3. A sign-in saved by `jurl login`: jurl cloud.
 4. Otherwise: your own keys.
 
-jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `-r`, `--code` with `--precise`, and `--with-pages`. `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
+jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `--with-image`, `-r`, `--code` with `--precise`, and `--with-pages`. `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
 
 `JURL_CLOUD_URL` points jurl at another jurl cloud, such as a self-hosted one: `JURL_CLOUD_URL=http://127.0.0.1:3211 jurl login` saves it. A key only goes over https, or to this computer.
 

@@ -15,7 +15,7 @@ use crate::{
     extract::{Extracted, Image},
     fetch,
     judge::{Ctx, Item},
-    output::{Rendered, not_found},
+    output::{Rendered, is_not_found, not_found},
     timing::Timer,
 };
 
@@ -64,7 +64,7 @@ impl ClefKeys {
         Self::from_lookup(|name| cfg.get(name))
     }
 
-    /// Both keys are needed for --vision and --find. An empty one is unset, and the error names each unset variable.
+    /// Both keys are needed for --vision, --find and `--with-image=WHAT`. An empty one is unset, and the error names each unset variable.
     fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self> {
         let account = get("CLOUDFLARE_ACCOUNT_ID").filter(|v| !v.is_empty());
         let token = get("CLOUDFLARE_AI_TOKEN").filter(|v| !v.is_empty());
@@ -82,20 +82,115 @@ impl ClefKeys {
     }
 }
 
+/// Fails when Clef's keys are not set up, naming the missing ones: a run that will need Clef checks before it reads.
+pub(crate) fn check_keys(cfg: &Config) -> Result<()> {
+    ClefKeys::from_config(cfg).map(|_| ())
+}
+
 /// The error when Clef's keys are not set: `missing` names the variables that are.
 fn missing_keys_message(missing: &[&str]) -> String {
     let verb = if missing.len() == 1 { "is" } else { "are" };
-    format!("--vision and --find need {}, which {verb} missing: run `jurl init`", missing.join(" and "))
+    format!(
+        "--vision, --find and --with-image=WHAT need {}, which {verb} missing: run `jurl init`",
+        missing.join(" and ")
+    )
+}
+
+/// What a run asks of a page's images: `ask` is the question each image is judged by (none: is it content?), `vision`
+/// has Clef look at the pixels, and with both Clef looks for what `ask` names (--find). The best `limit` at or above
+/// `threshold` are kept.
+struct Wanted<'a> {
+    ask: Option<&'a str>,
+    vision: bool,
+    limit: usize,
+    threshold: f64,
+}
+
+impl<'a> Wanted<'a> {
+    /// The question Clef looks for: --find's.
+    fn query(&self) -> Option<&'a str> {
+        self.ask.filter(|_| self.vision)
+    }
 }
 
 /// --image / --vision: content images, best first.
 pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut Timer) -> Result<Rendered> {
+    let args = ctx.args;
+    let searching = args.vision && args.ask.is_some();
+    let wanted = Wanted {
+        ask: args.ask.as_deref(),
+        vision: args.vision,
+        limit: args.limit(if searching { 1 } else { usize::MAX }),
+        threshold: args.threshold(),
+    };
+    let (kept, looks) = kept_images(ctx, cfg, ex, &wanted, t).await?;
+    Ok(render(ctx, ex, &kept, &looks, wanted.vision))
+}
+
+/// --with-image: `answer` with the best image of the page it comes from (`ex`), as `image` in the JSON and a markdown image
+/// after the answer's text. The image is judged as --image judges one (or, with `--with-image=WHAT`, found as --find finds
+/// it) on this page alone: nothing is loaded again but the images Clef looks at. A page with no such image gives
+/// `"image": null`; an image step that fails gives that too, with `image_error`, and says so on stderr: the answer stands.
+pub(crate) async fn with_image(
+    ctx: &Ctx<'_>,
+    cfg: &Config,
+    ex: &Extracted,
+    mut answer: Rendered,
+    t: &mut Timer,
+) -> Result<Rendered> {
+    let Some(find) = &ctx.args.with_image else { return Ok(answer) };
+    let wanted = Wanted { ask: find.as_deref(), vision: find.is_some(), limit: 1, threshold: DEFAULT_IMAGE_THRESHOLD };
+    match kept_images(ctx, cfg, ex, &wanted, t).await {
+        Ok((kept, looks)) => {
+            let (img, p) = kept[0];
+            answer.json["image"] = image_json(img, p, &looks, wanted.vision);
+            answer.text = format!("{}\n\n![{}](<{}>)\n", answer.text.trim_end(), markdown_alt(&img.alt), img.url);
+        }
+        Err(e) if is_not_found(&e) => {
+            answer.json["image"] = Value::Null;
+            if !ctx.args.json {
+                eprintln!("jurl: no image for the answer: {}", no_image_reason(&e, find.as_deref()));
+            }
+        }
+        Err(e) => {
+            eprintln!("jurl: no image: {e:#}");
+            answer.json["image"] = Value::Null;
+            answer.json["image_error"] = json!(format!("{e:#}"));
+        }
+    }
+    Ok(answer)
+}
+
+/// Why --with-image found no image, said without --image's hint to lower `--threshold`, which the image doesn't take.
+fn no_image_reason(e: &anyhow::Error, find: Option<&str>) -> String {
+    match find {
+        Some(_) => format!("{e:#}"),
+        None => format!("{e:#}").replace(" (try a lower --threshold)", ""),
+    }
+}
+
+/// The bar the --with-image image needs: the answer's own `--threshold` is not for images.
+const DEFAULT_IMAGE_THRESHOLD: f64 = 0.5;
+
+/// An alt text as a markdown image's alt: on one line, without the brackets that would end it.
+fn markdown_alt(alt: &str) -> String {
+    alt.split_whitespace().collect::<Vec<_>>().join(" ").replace(['[', ']'], "")
+}
+
+/// The images `wanted` keeps, best first, and Clef's looks; a run that keeps none fails (see [`nothing_kept`]).
+async fn kept_images<'e>(
+    ctx: &Ctx<'_>,
+    cfg: &Config,
+    ex: &'e Extracted,
+    wanted: &Wanted<'_>,
+    t: &mut Timer,
+) -> Result<(Vec<(&'e Image, f64)>, Looks)> {
     if ex.images.is_empty() {
         return Err(not_found(format!("no images found in {}", ctx.url)));
     }
-    let clef_keys = if ctx.args.vision { Some(ClefKeys::from_config(cfg)?) } else { None };
-    let items = judge_items(ex, ctx.args.ask.as_deref());
-    let query = ctx.args.ask.as_deref().filter(|_| ctx.args.vision);
+    let clef_keys = if wanted.vision { Some(ClefKeys::from_config(cfg)?) } else { None };
+    let items = judge_items(ex, wanted.ask);
+    let query = wanted.query();
     // One HTTP/1 connection per Clef call: multiplexing them all over a single HTTP/2
     // connection measured ~2x slower at the tail.
     let clef_client = Client::builder().http1_only().timeout(Duration::from_secs(10)).build()?;
@@ -119,8 +214,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     let (a, looks) = judge_and_look(ctx, ex, items, req.as_ref(), query, t).await?;
     let scored = score(ex, &a, &looks, query.is_some(), ctx.args.timing);
     let best = scored.first().map(|(i, p)| (i.url.clone(), *p));
-    let limit = ctx.args.limit(if query.is_some() { 1 } else { usize::MAX });
-    let kept = keep(scored, ctx.args.threshold(), limit);
+    let kept = keep(scored, wanted.threshold, wanted.limit);
     if kept.is_empty() {
         return Err(nothing_kept(ctx.url, &looks, ex.images.len(), query, best));
     }
@@ -130,7 +224,7 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     if let Some(notice) = refused_notice(&kept, &looks) {
         eprintln!("{notice}");
     }
-    Ok(render(ctx, ex, &kept, &looks, req.is_some()))
+    Ok((kept, looks))
 }
 
 /// Jev's items for the text-only judgement of each image.
@@ -190,7 +284,7 @@ async fn judge_and_look(
         let (a, looks) =
             tokio::join!(ctx.judge("images", items, Map::new()), look_all(req, first_in_page_order(&ex.images, cap)));
         let a = a?;
-        t.lap(if ctx.args.vision { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
+        t.lap(if req.is_some() { format!("{} ‖ clef({} img)", a.label(), looks.len()) } else { a.label() });
         Ok((a, looks))
     }
 }
@@ -608,19 +702,19 @@ mod tests {
         let err = ClefKeys::from_lookup(token_only).err().expect("no account id");
         assert_eq!(
             format!("{err:#}"),
-            "--vision and --find need CLOUDFLARE_ACCOUNT_ID, which is missing: run `jurl init`"
+            "--vision, --find and --with-image=WHAT need CLOUDFLARE_ACCOUNT_ID, which is missing: run `jurl init`"
         );
         let account_only = env_of(&[("CLOUDFLARE_ACCOUNT_ID", "acct")]);
         let err = ClefKeys::from_lookup(account_only).err().expect("no token");
         assert_eq!(
             format!("{err:#}"),
-            "--vision and --find need CLOUDFLARE_AI_TOKEN, which is missing: run `jurl init`"
+            "--vision, --find and --with-image=WHAT need CLOUDFLARE_AI_TOKEN, which is missing: run `jurl init`"
         );
         let neither = env_of(&[]);
         let err = ClefKeys::from_lookup(neither).err().expect("no keys");
         assert_eq!(
             format!("{err:#}"),
-            "--vision and --find need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_TOKEN, which are missing: run `jurl init`"
+            "--vision, --find and --with-image=WHAT need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_TOKEN, which are missing: run `jurl init`"
         );
     }
 
@@ -840,5 +934,37 @@ mod tests {
         let (got, calls) = hedge((300, None), (500, None)).await;
         assert_eq!(got.unwrap_err().to_string(), "failed after 500 ms");
         assert_eq!(calls, 2);
+    }
+
+    /// A read's answer as a mode renders it, for the --with-image tests.
+    fn answered() -> Rendered {
+        Rendered { text: "8:00 to 18:00\n\n".into(), json: json!({ "answer": "8:00 to 18:00" }) }
+    }
+
+    #[tokio::test]
+    async fn without_with_image_the_answer_is_as_it_was() {
+        use clap::Parser;
+        let args = crate::cli::Args::parse_from(["jurl", "-q", "x?", "x.com"]);
+        let (client, url, ex) = (Client::new(), url::Url::parse("https://x.com/").unwrap(), Extracted::default());
+        let ctx = Ctx::new(&args, &client, "", &url, &ex);
+        let got = with_image(&ctx, &Config::default(), &ex, answered(), &mut Timer::new()).await.unwrap();
+        assert_eq!((got.text, got.json), (answered().text, answered().json));
+    }
+
+    #[tokio::test]
+    async fn a_page_with_no_image_keeps_its_answer_with_a_null_image() {
+        use clap::Parser;
+        let args = crate::cli::Args::parse_from(["jurl", "-q", "x?", "--json", "--with-image", "x.com"]);
+        let (client, url, ex) = (Client::new(), url::Url::parse("https://x.com/").unwrap(), Extracted::default());
+        let ctx = Ctx::new(&args, &client, "", &url, &ex);
+        let got = with_image(&ctx, &Config::default(), &ex, answered(), &mut Timer::new()).await.unwrap();
+        assert_eq!(got.json, json!({ "answer": "8:00 to 18:00", "image": null }));
+        assert_eq!(got.text, answered().text, "no image line");
+    }
+
+    #[test]
+    fn an_alt_is_one_line_without_brackets_in_the_markdown_image() {
+        assert_eq!(markdown_alt("The [new]\n  front"), "The new front");
+        assert_eq!(markdown_alt(""), "");
     }
 }

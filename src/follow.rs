@@ -1304,8 +1304,15 @@ impl Search {
     }
 
     /// The result of the search: the best page that answers or, when none does, the closest one (which a `--precise
-    /// --json` miss still prints), or else the miss.
-    fn conclude(mut self, args: &Args, client: &Client, api_key: &str) -> Result<Rendered> {
+    /// --json` miss still prints), or else the miss. `--with-image` adds the image of the answering page alone.
+    async fn conclude(
+        mut self,
+        args: &Args,
+        cfg: &Config,
+        client: &Client,
+        api_key: &str,
+        t: &mut Timer,
+    ) -> Result<Rendered> {
         let pages = self.pages;
         if args.timing {
             for Reading { url, warmth, score } in &self.log {
@@ -1367,7 +1374,7 @@ impl Search {
         if !args.json {
             eprintln!("jurl: found after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
         }
-        Ok(rendered)
+        crate::vision::with_image(&ctx, cfg, &v.ex, rendered, t).await
     }
 }
 
@@ -1500,7 +1507,7 @@ pub async fn run(
     {
         read_batches(args, cfg, client, api_key, &mut search, &site_ctx, t).await?;
     }
-    search.conclude(args, client, api_key)
+    search.conclude(args, cfg, client, api_key, t).await
 }
 
 /// The Jev input tokens this process has spent so far.
