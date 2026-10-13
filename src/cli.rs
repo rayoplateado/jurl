@@ -43,6 +43,11 @@ pub(crate) struct Args {
     /// No answer, no image
     #[arg(long, value_name = "WHAT", num_args = 0..=1, require_equals = true)]
     pub(crate) with_image: Option<Option<String>>,
+    /// With -q: also the link on the answer's page that WHAT names (`--with-link="buy tickets"`), in the same read (no
+    /// page is loaded again): one of the page's own links, scored as --links -q scores them, never one made up. Only
+    /// that page's links are scored, never those of the other pages a --follow reads. No answer, no link
+    #[arg(long, value_name = "WHAT", require_equals = true)]
+    pub(crate) with_link: Option<String>,
     /// With -q: when the page doesn't answer, follow its links within the same site, most promising first,
     /// reading up to this many pages in all [default: 5]. A search from a public address reads only public addresses
     #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]

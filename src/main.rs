@@ -229,6 +229,15 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.with_image.is_some() && args.pages > 1 {
         bail!("--with-image looks at one page, the answer's: not with --pages");
     }
+    if args.with_link.is_some() && (args.ask.is_none() || args.image || args.vision || args.links) {
+        bail!("--with-link adds a link of the answer's page: use it with -q, not --image, --find or --links");
+    }
+    if args.with_link.as_deref().is_some_and(|what| what.trim().is_empty()) {
+        bail!("--with-link=WHAT needs what the link is for, such as \"buy tickets\"");
+    }
+    if args.with_link.is_some() && args.pages > 1 {
+        bail!("--with-link looks at one page, the answer's: not with --pages");
+    }
     if args.with_pages && !args.json {
         bail!("--with-pages puts the pages in the JSON: add --json");
     }
@@ -311,7 +320,8 @@ async fn read(
         links::links(&ctx, &ex, t).await
     } else {
         let answer = blocks::blocks(&ctx, &ex, t).await?;
-        vision::with_image(&ctx, cfg, &ex, answer, t).await
+        let answer = vision::with_image(&ctx, cfg, &ex, answer, t).await?;
+        links::with_link(&ctx, &ex, answer, t).await
     }
 }
 
@@ -621,6 +631,17 @@ mod tests {
         let find = Args::parse_from(["jurl", "-q", "x?", "--with-image=a facade", "x.com"]);
         assert_eq!(find.with_image, Some(Some("a facade".to_string())));
         assert_eq!(Args::parse_from(["jurl", "-q", "x?", "x.com"]).with_image, None);
+    }
+
+    #[test]
+    fn with_link_goes_with_an_answer_on_one_page_or_a_follow() {
+        let check = |argv: &[&str]| prepare(&mut Args::parse_from(argv));
+        assert!(check(&["jurl", "-p", "-q", "x?", "--with-link=buy tickets", "x.com"]).is_ok());
+        assert!(check(&["jurl", "-q", "x?", "--follow", "5", "--with-image", "--with-link=buy", "x.com"]).is_ok());
+        assert!(check(&["jurl", "--with-link=buy", "x.com"]).is_err(), "no question, no answer to go with");
+        assert!(check(&["jurl", "-q", "x?", "--links", "--with-link=buy", "x.com"]).is_err());
+        assert!(check(&["jurl", "-q", "x?", "--with-link= ", "x.com"]).is_err(), "what the link is for");
+        assert!(check(&["jurl", "-q", "x?", "--pages", "2", "--with-link=buy", "x.com"]).is_err());
     }
 
     #[test]
