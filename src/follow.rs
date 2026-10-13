@@ -1379,7 +1379,8 @@ impl Search {
         if !args.json {
             eprintln!("jurl: found after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
         }
-        crate::vision::with_image(&ctx, cfg, &v.ex, rendered, t).await
+        let rendered = crate::vision::with_image(&ctx, cfg, &v.ex, rendered, t).await?;
+        crate::links::with_link(&ctx, &v.ex, rendered, t).await
     }
 }
 

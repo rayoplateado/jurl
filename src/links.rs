@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use serde_json::{Map, json};
+use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::{
@@ -275,6 +275,57 @@ pub(crate) async fn links(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer) -> Resul
         .collect();
     let text = kept.iter().map(|(i, _)| format!("{}\n", candidates[*i].url)).collect();
     Ok(Rendered { text, json: json!({ "url": ctx.url.as_str(), "title": ex.title, "links": v }) })
+}
+
+/// The bar the --with-link link needs: the answer's own `--threshold` is not for links.
+const WITH_LINK_THRESHOLD: f64 = 0.5;
+
+/// `--with-link=WHAT`: the answer, with the link of its page that WHAT names under `link` (its URL, its words, the text
+/// around it and its score), or null when no link of the page is it. Only web links count, and never the page itself.
+/// A failed scoring keeps the answer, with the reason under `link_error`, as --with-image keeps it.
+pub(crate) async fn with_link(ctx: &Ctx<'_>, ex: &Extracted, mut answer: Rendered, t: &mut Timer) -> Result<Rendered> {
+    let Some(what) = ctx.args.with_link.as_deref() else { return Ok(answer) };
+    let web = page_links(ctx.url, ex, &[], |u| matches!(u.scheme(), "http" | "https"));
+    let candidates = most_relevant(what, web, MAX_LINKS);
+    if candidates.is_empty() {
+        answer.json["link"] = Value::Null;
+        return Ok(answer);
+    }
+    let host = |l: &Link| l.url.host_str().filter(|h| Some(*h) != ctx.url.host_str()).map(str::to_string);
+    let items = candidates
+        .iter()
+        .map(|l| {
+            let mut state = json!({ "i": l.i, "text": l.text, "context": l.context, "path": l.url.path() });
+            if let Some(h) = host(l) {
+                state["host"] = json!(h);
+            }
+            let question = noul(format!(
+                "The link in `links` with i={} is the link this names, for this page's subject: {what}",
+                l.i
+            ));
+            Item { state, questions: vec![(format!("l{}", l.i), question)] }
+        })
+        .collect();
+    match ctx.judge("links", items, Map::new()).await {
+        Ok(a) => {
+            t.lap(format!("{} links for --with-link", candidates.len()));
+            let scores: Vec<Option<f64>> = candidates.iter().map(|l| a.noul(&format!("l{}", l.i))).collect();
+            answer.json["link"] = match top(&scores, WITH_LINK_THRESHOLD, 1).first() {
+                Some(&(i, p)) => {
+                    let l = &candidates[i];
+                    answer.text = format!("{}\n\nLink: <{}>\n", answer.text.trim_end(), l.url);
+                    json!({ "url": l.url.as_str(), "text": l.text, "context": l.context, "p": p })
+                }
+                None => Value::Null,
+            };
+        }
+        Err(e) => {
+            eprintln!("jurl: no link: {e:#}");
+            answer.json["link"] = Value::Null;
+            answer.json["link_error"] = json!(format!("{e:#}"));
+        }
+    }
+    Ok(answer)
 }
 
 #[cfg(test)]
