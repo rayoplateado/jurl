@@ -71,6 +71,35 @@ pub fn numbered_next<'a>(current: &Url, mut links: impl Iterator<Item = &'a Url>
     links.find(|link| slot_of(link).is_some_and(|s| s.page == next && same_list(&s, &here))).cloned()
 }
 
+/// The page after `current` when the page links none: its page number one on, where the address has one (`?page=3`,
+/// `?e5273e04_page=3`, `/page/3/`), and else `page=2` added to its query. A guess, so only a read that can tell a new page
+/// from the one before follows it (a `--recipe` read, by its rows). A URL with two page numbers has none.
+pub fn guessed_next(current: &Url) -> Option<Url> {
+    let here = slot_of(current)?;
+    let next = here.page.checked_add(1)?.to_string();
+    let mut url = current.clone();
+    let pairs: Vec<(String, String)> = current.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    if let Some(at) = pairs.iter().position(|(k, v)| is_page_param(k) && number_of(v).is_some()) {
+        let pairs =
+            pairs.iter().enumerate().map(|(i, (k, v))| (k.as_str(), if i == at { next.as_str() } else { v.as_str() }));
+        url.query_pairs_mut().clear().extend_pairs(pairs);
+        return Some(url);
+    }
+    let segments: Vec<&str> = current.path_segments().map(Iterator::collect).unwrap_or_default();
+    let filled: Vec<usize> = segments.iter().enumerate().filter(|(_, s)| !s.is_empty()).map(|(i, _)| i).collect();
+    if let [.., word, number] = filled.as_slice()
+        && segments[*word].eq_ignore_ascii_case("page")
+        && number_of(segments[*number]).is_some()
+    {
+        let at = *number;
+        let segments = segments.iter().enumerate().map(|(i, s)| if i == at { next.as_str() } else { s });
+        url.path_segments_mut().ok()?.clear().extend(segments);
+        return Some(url);
+    }
+    url.query_pairs_mut().append_pair("page", &next);
+    Some(url)
+}
+
 /// Whether two slots name the same list: the same scheme, host, path and other parameters, whatever their page numbers.
 fn same_list(a: &Slot, b: &Slot) -> bool {
     a.scheme == b.scheme && a.host == b.host && a.path == b.path && a.query == b.query
@@ -194,6 +223,27 @@ mod tests {
             Some("https://x.test/agenda?city=bcn&page=2")
         );
         assert_eq!(next("https://x.test/agenda?sort=desc", &["https://x.test/agenda?page=2&sort=asc"]), None);
+    }
+
+    #[test]
+    fn a_guessed_next_page_is_the_page_number_one_on() {
+        let guess = |s: &str| guessed_next(&u(s)).map(String::from);
+        assert_eq!(guess("https://x.test/agenda").as_deref(), Some("https://x.test/agenda?page=2"));
+        assert_eq!(guess("https://x.test/agenda?city=bcn").as_deref(), Some("https://x.test/agenda?city=bcn&page=2"));
+        assert_eq!(
+            guess("https://x.test/agenda?page=2&city=bcn").as_deref(),
+            Some("https://x.test/agenda?page=3&city=bcn")
+        );
+        assert_eq!(guess("https://x.test/c?e5273e04_page=4").as_deref(), Some("https://x.test/c?e5273e04_page=5"));
+        assert_eq!(guess("https://x.test/blog/page/2/").as_deref(), Some("https://x.test/blog/page/3/"));
+        assert_eq!(guess("https://x.test/blog/page/2").as_deref(), Some("https://x.test/blog/page/3"));
+        assert_eq!(guess("https://x.test/blog/page/1/").as_deref(), Some("https://x.test/blog/page/2/"));
+        assert_eq!(guess("https://x.test/a?page=1&e1_page=1"), None, "two page numbers");
+        // Every guess is a page its own slot reads one on from the current one.
+        for s in ["https://x.test/agenda", "https://x.test/agenda?page=7", "https://x.test/blog/page/9/"] {
+            let (here, next) = (slot_of(&u(s)).unwrap(), slot_of(&guessed_next(&u(s)).unwrap()).unwrap());
+            assert!(same_list(&here, &next) && next.page == here.page + 1, "{s}");
+        }
     }
 
     #[test]
