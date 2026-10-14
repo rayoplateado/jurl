@@ -125,6 +125,9 @@ const PAGE_TYPES: &[&str] = &[
     "SiteNavigationElement",
     "SearchAction",
     "ImageObject",
+    "Offer",
+    "AggregateOffer",
+    "PostalAddress",
 ];
 /// The keys under which a thing lists other things of its own: a venue's events, a list's elements, a page's main entity.
 const LIST_KEYS: &[&str] = &["@graph", "itemListElement", "item", "mainEntity", "event", "subEvent"];
@@ -157,8 +160,14 @@ fn collect_items(value: &Value, out: &mut Vec<String>) {
         Value::Array(values) => values.iter().for_each(|v| collect_items(v, out)),
         Value::Object(map) => {
             let kinds = types(map);
+            // A thing that lists others (a venue's events) is where they are, not one of them.
+            let lists_others =
+                ["event", "subEvent", "itemListElement"].iter().any(|k| map.get(*k).is_some_and(|v| !v.is_null()));
             let is_item = !kinds.is_empty()
-                && !kinds.iter().any(|k| PAGE_TYPES.contains(&k.as_str()) || k == "ItemList" || k == "ListItem");
+                && !lists_others
+                && !kinds
+                    .iter()
+                    .any(|k| PAGE_TYPES.contains(&k.as_str()) || k == "ItemList" || k == "ListItem" || k == "Thing");
             if is_item && let Some(s) = describe_item(&kinds[0], map).filter(|s| !out.contains(s)) {
                 out.push(s);
             }
@@ -176,9 +185,14 @@ fn collect_items(value: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// An item's text, or None when it has no name.
+/// An item's text, or None when it has no name. A type written as a full IRI ("https://schema.org/Event") is named by its
+/// last part, and a name given in several languages by its first.
 fn describe_item(kind: &str, map: &Map<String, Value>) -> Option<String> {
-    let name = text(map.get("name"))?;
+    let kind = kind.rsplit('/').next().unwrap_or(kind);
+    let name = match map.get("name") {
+        Some(Value::Array(names)) => names.iter().find_map(|n| text(Some(n))),
+        name => text(name),
+    }?;
     let mut parts: Vec<String> = Vec::new();
     if let Some(url) = map.get("url").and_then(Value::as_str) {
         parts.push(format!("url {}", url.trim()));
@@ -454,15 +468,18 @@ mod tests {
     }
 
     #[test]
-    fn a_graph_and_a_venues_events_are_items_but_the_page_and_its_breadcrumbs_are_not() {
+    fn a_venues_events_are_items_but_the_venue_the_page_its_breadcrumbs_and_a_lone_offer_are_not() {
         let html = r#"<script type="application/ld+json">{"@graph":[{"@type":"WebPage","name":"Agenda"},
             {"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"item":{"@type":"Thing","name":"Inicio"}}]},
             {"@type":"Place","name":"Teatro Real","event":[{"@type":"Event","name":"Tosca","startDate":"2027-03-02"}]}]}</script>
-            <script type="application/ld+json">[{"@type":"Product","name":"Mug"},{"@type":"Product"}]</script>"#;
-        assert_eq!(
-            item_texts(html),
-            ["Place Teatro Real (JSON-LD).", "Event Tosca (JSON-LD): startDate 2027-03-02.", "Product Mug (JSON-LD)."]
-        );
+            <script type="application/ld+json">[{"@type":"Product","name":"Mug"},{"@type":"Product"},{"@type":"Offer","name":"Gift","price":5}]</script>"#;
+        assert_eq!(item_texts(html), ["Event Tosca (JSON-LD): startDate 2027-03-02.", "Product Mug (JSON-LD)."]);
+    }
+
+    #[test]
+    fn a_full_iri_type_is_named_by_its_last_part_and_a_name_in_several_languages_by_its_first() {
+        let html = r#"<script type="application/ld+json">{"@type":"https://schema.org/Event","name":[{"@value":"x"},"Tosca","Tosca (en)"]}</script>"#;
+        assert_eq!(item_texts(html), ["Event Tosca (JSON-LD)."]);
     }
 
     #[test]
