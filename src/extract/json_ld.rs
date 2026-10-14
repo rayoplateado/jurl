@@ -112,31 +112,27 @@ fn types(map: &Map<String, Value>) -> Vec<String> {
 
 /// The most items one page gives from its JSON-LD: as many as a sheet keeps from one site's list.
 const MAX_ITEMS: usize = 300;
-/// The longest description an item keeps, in characters: enough to tell items apart, short enough for a long catalogue.
-const MAX_DESCRIPTION_CHARS: usize = 300;
-/// Types that describe the page or the site, not a thing a list is of.
-const PAGE_TYPES: &[&str] = &[
-    "WebSite",
-    "WebPage",
-    "CollectionPage",
-    "ItemPage",
-    "SearchResultsPage",
-    "BreadcrumbList",
-    "SiteNavigationElement",
-    "SearchAction",
-    "ImageObject",
-    "Offer",
-    "AggregateOffer",
-    "PostalAddress",
-];
-/// The keys under which a thing lists other things of its own: a venue's events, a list's elements, a page's main entity.
-const LIST_KEYS: &[&str] = &["@graph", "itemListElement", "item", "mainEntity", "event", "subEvent"];
+/// The longest text an item keeps of a value (a link is kept whole, or it could not be followed), and the longest item, in
+/// characters: a long catalogue stays readable.
+const MAX_VALUE_CHARS: usize = 200;
+const MAX_ITEM_CHARS: usize = 1200;
+/// How many typed objects make a list of things inside a thing (a venue's events, a list's elements). Fewer are the thing's
+/// own values: an event's offers or performers, a product's photos.
+const MIN_LIST: usize = 3;
+/// Types that are the site's machinery, not anything on the page: they give nothing.
+const MACHINERY_TYPES: &[&str] = &["BreadcrumbList", "SiteNavigationElement", "SearchAction"];
+/// Keys that name a node or its language in JSON-LD rather than say something of it. An object's `@type` says what kind of
+/// value it is (a Place, an Offer), which its path already says.
+const NODE_KEYS: &[&str] = &["@context", "@id", "@type", "@language"];
 
-/// The things a page's JSON-LD lists, each one block, numbered from `first`: the events of a listing, the products of a
-/// catalogue. Each gives its type, name, and the schema.org fields a row of a list takes, in words a check can find in it:
-/// "Event Lola Índigo (JSON-LD): url https://…; startDate 2027-03-14T20:00; location WiZink Center, Madrid; price 25 EUR."
-/// A thing inside another (an event's performer, an offer's seller) is a field of it, not an item. Read for `--with-pages`,
-/// so a list read can take its rows from the page's own data.
+/// The things a page's JSON-LD holds, each one block, numbered from `first`. Nothing here knows what a type means: a thing
+/// gives every value it holds under its path, each value once, and the reader decides which matter. "MusicEvent (JSON-LD):
+/// name: Lola Índigo; location.name: WiZink Center; offers.price: 25; offers.priceCurrency: EUR; startDate: 2027-03-14".
+///
+/// A typed object at the top, in `@graph` or in the page's own object (a WebPage's `mainEntity`) is a thing. A list of
+/// MIN_LIST or more typed objects inside a thing is a list of things, each one a thing of its own, and a list's wrapper (a
+/// ListItem around its `item`) gives way to what it wraps. Read for `--with-pages`, so a list read can take its rows from the
+/// page's own data.
 pub fn items(html: &str, first: usize) -> Vec<Block> {
     let doc = Html::parse_document(html);
     let script = Selector::parse(r#"script[type="application/ld+json"]"#).expect("static selector");
@@ -144,7 +140,7 @@ pub fn items(html: &str, first: usize) -> Vec<Block> {
     for el in doc.select(&script) {
         let body: String = el.text().collect();
         if let Ok(value) = serde_json::from_str::<Value>(&body) {
-            collect_items(&value, &mut texts);
+            collect_things(&value, &mut texts);
         }
         if texts.len() >= MAX_ITEMS {
             break;
@@ -154,142 +150,123 @@ pub fn items(html: &str, first: usize) -> Vec<Block> {
     texts.into_iter().enumerate().map(|(k, text)| Block::new(first + k, Kind::Structured, text)).collect()
 }
 
-/// Walks the things a JSON-LD value lists (see [`LIST_KEYS`]) and describes each named one.
-fn collect_items(value: &Value, out: &mut Vec<String>) {
+/// A type's own name: "https://schema.org/Event" is an Event.
+fn short(kind: &str) -> &str {
+    kind.rsplit('/').next().unwrap_or(kind)
+}
+
+/// The things a JSON-LD value holds at its top. An object with no type (a `@graph`'s holder), the page itself or the site
+/// is not a thing, but what it holds may be; the site's machinery gives nothing.
+fn collect_things(value: &Value, out: &mut Vec<String>) {
     match value {
-        Value::Array(values) => values.iter().for_each(|v| collect_items(v, out)),
+        Value::Array(values) => values.iter().for_each(|v| collect_things(v, out)),
         Value::Object(map) => {
             let kinds = types(map);
-            // A thing that lists others (a venue's events) is where they are, not one of them.
-            let lists_others =
-                ["event", "subEvent", "itemListElement"].iter().any(|k| map.get(*k).is_some_and(|v| !v.is_null()));
-            let is_item = !kinds.is_empty()
-                && !lists_others
-                && !kinds
-                    .iter()
-                    .any(|k| PAGE_TYPES.contains(&k.as_str()) || k == "ItemList" || k == "ListItem" || k == "Thing");
-            if is_item && let Some(s) = describe_item(&kinds[0], map).filter(|s| !out.contains(s)) {
-                out.push(s);
-            }
-            // A trail of links to the page's parents lists no things.
-            if kinds.iter().any(|k| k == "BreadcrumbList" || k == "SiteNavigationElement") {
+            if kinds.iter().any(|k| MACHINERY_TYPES.contains(&short(k))) {
                 return;
             }
-            for key in LIST_KEYS {
-                if let Some(child) = map.get(*key) {
-                    collect_items(child, out);
+            if kinds.is_empty() || kinds.iter().any(|k| short(k).ends_with("Page") || short(k) == "WebSite") {
+                for (key, child) in map.iter().filter(|(k, _)| !NODE_KEYS.contains(&k.as_str())) {
+                    if child.is_object() || child.is_array() || key == "@graph" {
+                        collect_things(child, out);
+                    }
                 }
+                return;
             }
+            thing(map, false, out);
         }
         _ => {}
     }
 }
 
-/// An item's text, or None when it has no name. A type written as a full IRI ("https://schema.org/Event") is named by its
-/// last part, and a name given in several languages by its first.
-fn describe_item(kind: &str, map: &Map<String, Value>) -> Option<String> {
-    let kind = kind.rsplit('/').next().unwrap_or(kind);
-    let name = match map.get("name") {
-        Some(Value::Array(names)) => names.iter().find_map(|n| text(Some(n))),
-        name => text(name),
-    }?;
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(url) = map.get("url").and_then(Value::as_str) {
-        parts.push(format!("url {}", url.trim()));
-    }
-    let mut images = Vec::new();
-    if let Some(image) = map.get("image") {
-        image_values(image, &mut images);
-    }
-    if let Some(image) = images.into_iter().find(|i| !i.is_empty()) {
-        parts.push(format!("image {image}"));
-    }
-    for key in ["startDate", "endDate"] {
-        if let Some(v) = text(map.get(key)) {
-            parts.push(format!("{key} {v}"));
-        }
-    }
-    for key in ["location", "address"] {
-        if let Some(v) = place(map.get(key)) {
-            parts.push(format!("{key} {v}"));
-        }
-    }
-    if let Some(offer) = first_offer(map.get("offers")) {
-        parts.extend(offer_parts(offer, map.get("url").and_then(Value::as_str)));
-    }
-    if let Some(d) = text(map.get("description")) {
-        let d: String = d.split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches('.').to_string();
-        let cut: String = d.chars().take(MAX_DESCRIPTION_CHARS).collect();
-        parts.push(format!("description {}", if cut.len() < d.len() { format!("{cut}…") } else { cut }));
-    }
-    Some(if parts.is_empty() {
-        format!("{kind} {name} (JSON-LD).")
-    } else {
-        format!("{kind} {name} (JSON-LD): {}.", parts.join("; "))
-    })
+/// The typed objects of a value that is a list of MIN_LIST or more of them.
+fn list_of(value: &Value) -> Option<Vec<&Map<String, Value>>> {
+    let things: Vec<&Map<String, Value>> =
+        value.as_array()?.iter().filter_map(Value::as_object).filter(|o| !types(o).is_empty()).collect();
+    (things.len() >= MIN_LIST).then_some(things)
 }
 
-/// A place as words: its name, and the street and town of its address, as far as it gives them ("WiZink Center, Madrid").
-fn place(value: Option<&Value>) -> Option<String> {
-    let value = match value? {
-        Value::Array(values) => values.first()?,
-        v => v,
-    };
-    let parts: Vec<String> = match value {
-        Value::String(s) => vec![s.trim().to_string()],
-        Value::Object(map) => {
-            let mut parts: Vec<String> = text(map.get("name")).into_iter().collect();
-            let address = match map.get("address") {
-                Some(Value::Object(a)) => a.clone(),
-                _ => map.clone(),
+/// What a list's element stands for: the one typed object it wraps, when it has no name of its own (a ListItem's `item`),
+/// else itself.
+fn unwrapped(map: &Map<String, Value>) -> &Map<String, Value> {
+    if map.contains_key("name") {
+        return map;
+    }
+    let mut wrapped = map.values().filter_map(Value::as_object).filter(|o| !types(o).is_empty());
+    match (wrapped.next(), wrapped.next()) {
+        (Some(inner), None) => inner,
+        _ => map,
+    }
+}
+
+/// A thing's block, then each thing it lists, when it is not itself in a list.
+fn thing(map: &Map<String, Value>, in_list: bool, out: &mut Vec<String>) {
+    let map = if in_list { unwrapped(map) } else { map };
+    let kind = types(map).first().map(|k| short(k).to_string()).unwrap_or_else(|| "Thing".into());
+    let mut keys: Vec<&String> = map.keys().filter(|k| !NODE_KEYS.contains(&k.as_str())).collect();
+    // The name first, then the other keys in the map's order.
+    keys.sort_by_key(|k| *k != "name");
+    let lists: Vec<&String> =
+        if in_list { Vec::new() } else { keys.iter().copied().filter(|k| list_of(&map[*k]).is_some()).collect() };
+    let mut values = Vec::new();
+    for key in keys.iter().filter(|k| !lists.contains(k)) {
+        flatten(key, &map[*key], &mut values);
+    }
+    // A value said again under a path of the same last name (an offer's url that is the event's) is said once.
+    let mut seen = std::collections::HashSet::new();
+    let mut text = format!("{kind} (JSON-LD): ");
+    let mut said = 0;
+    for (path, value) in &values {
+        if !seen.insert((path.rsplit('.').next().unwrap_or(path), value.as_str())) {
+            continue;
+        }
+        let part = format!("{}{path}: {value}", if said > 0 { "; " } else { "" });
+        if said > 0 && text.chars().count() + part.chars().count() > MAX_ITEM_CHARS {
+            continue;
+        }
+        text.push_str(&part);
+        said += 1;
+    }
+    if said > 0 && !out.contains(&text) {
+        out.push(text);
+    }
+    for key in lists {
+        for element in list_of(&map[key]).into_iter().flatten() {
+            thing(element, true, out);
+        }
+    }
+}
+
+/// Every value under `path`, with its path: a text with its spaces collapsed and cut to MAX_VALUE_CHARS (a link kept whole),
+/// a number or a yes/no as written, each value of a list, and an object's values under their own paths. A schema.org term
+/// ("https://schema.org/InStock") is the vocabulary's word, not the page's, and a language-tagged value (`@value`) is its
+/// object's.
+fn flatten(path: &str, value: &Value, out: &mut Vec<(String, String)>) {
+    match value {
+        Value::String(s) => {
+            let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+            let link = s.starts_with("https://") || s.starts_with("http://");
+            if s.is_empty() || ["https://schema.org/", "http://schema.org/"].iter().any(|p| s.starts_with(p)) {
+                return;
+            }
+            let s = if link || s.chars().count() <= MAX_VALUE_CHARS {
+                s
+            } else {
+                format!("{}…", s.chars().take(MAX_VALUE_CHARS).collect::<String>())
             };
-            for key in ["streetAddress", "addressLocality"] {
-                if let Some(v) = address.get(key).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()) {
-                    parts.push(v.to_string());
-                }
-            }
-            if let Some(Value::String(a)) = map.get("address") {
-                parts.push(a.trim().to_string());
-            }
-            parts
+            out.push((path.to_string(), s));
         }
-        _ => Vec::new(),
-    };
-    let parts: Vec<String> = parts.into_iter().filter(|p| !p.is_empty()).collect();
-    (!parts.is_empty()).then(|| parts.join(", "))
-}
-
-/// The first offer of an `offers` value: an Offer, an AggregateOffer, or a list of them.
-fn first_offer(value: Option<&Value>) -> Option<&Map<String, Value>> {
-    match value? {
-        Value::Object(map) => Some(map),
-        Value::Array(values) => values.iter().find_map(Value::as_object),
-        _ => None,
+        Value::Number(n) => out.push((path.to_string(), n.to_string())),
+        Value::Bool(b) => out.push((path.to_string(), b.to_string())),
+        Value::Object(map) => {
+            for (key, child) in map.iter().filter(|(k, _)| !NODE_KEYS.contains(&k.as_str())) {
+                let inner = if key == "@value" { path.to_string() } else { format!("{path}.{key}") };
+                flatten(&inner, child, out);
+            }
+        }
+        Value::Array(values) => values.iter().for_each(|v| flatten(path, v, out)),
+        Value::Null => {}
     }
-}
-
-/// An offer's prices with its currency ("price 25 EUR", "lowPrice 18, highPrice 60 EUR"), and its URL when it is not the
-/// item's own: where the ticket is bought.
-fn offer_parts(offer: &Map<String, Value>, item_url: Option<&str>) -> Vec<String> {
-    let currency = text(offer.get("priceCurrency"));
-    let prices: Vec<String> = ["price", "lowPrice", "highPrice"]
-        .iter()
-        .filter_map(|k| text(offer.get(*k)).map(|v| format!("{k} {v}")))
-        .collect();
-    let mut parts = Vec::new();
-    if !prices.is_empty() {
-        let joined = prices.join(", ");
-        parts.push(match currency {
-            Some(c) => format!("{joined} {c}"),
-            None => joined,
-        });
-    }
-    if let Some(url) =
-        offer.get("url").and_then(Value::as_str).map(str::trim).filter(|u| Some(*u) != item_url.map(str::trim))
-    {
-        parts.push(format!("offer url {url}"));
-    }
-    parts
 }
 
 /// The most product photos one page gives from its JSON-LD: a listing of many products stays short.
@@ -449,49 +426,58 @@ mod tests {
     }
 
     #[test]
-    fn a_listing_gives_each_event_with_the_fields_a_row_takes() {
-        let html = r#"<script type="application/ld+json">{"@type":"ItemList","itemListElement":[
-            {"@type":"ListItem","position":1,"item":{"@type":"MusicEvent","name":"Lola Índigo","url":"https://tickets.example.test/e/1",
-              "image":["https://cdn.example.test/1.jpg"],"startDate":"2027-03-14T20:00","location":{"@type":"Place","name":"WiZink Center",
-              "address":{"@type":"PostalAddress","streetAddress":"Av. Felipe II","addressLocality":"Madrid"}},
-              "offers":{"@type":"Offer","price":25,"priceCurrency":"EUR","url":"https://tickets.example.test/buy/1"},
-              "performer":{"@type":"Person","name":"Lola Índigo"},"description":"  Gira   2027. "}},
-            {"@type":"ListItem","position":2,"item":{"@type":"Event","name":"Hamlet","startDate":"2027-03-20",
-              "offers":[{"@type":"AggregateOffer","lowPrice":"18","highPrice":"60","priceCurrency":"EUR"}]}}]}</script>"#;
+    fn a_listing_gives_each_element_with_every_value_it_holds_under_its_path() {
+        // Each ListItem gives way to its item. The offer stays the event's, and the performer's name, the event's own, is said once.
+        let html = r#"<script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","numberOfItems":3,"itemListElement":[
+            {"@type":"ListItem","position":1,"item":{"@type":"MusicEvent","name":"Lola Índigo","startDate":"2027-03-14","endDate":"2027-03-14",
+              "location":{"@type":"Place","name":"WiZink Center","address":{"addressLocality":"Madrid"}},
+              "offers":[{"@type":"Offer","price":25,"priceCurrency":"EUR","availability":"https://schema.org/InStock"}],
+              "performer":[{"@type":"Person","name":"Lola Índigo"}],"description":"  Gira   2027. "}},
+            {"@type":"ListItem","position":2,"item":{"@type":"JobPosting","title":"Cook","baseSalary":{"value":{"minValue":1500}}}},
+            {"@type":"ListItem","position":3,"name":"Tosca","url":"https://venue.example.test/tosca"}]}</script>"#;
         assert_eq!(
             item_texts(html),
             [
-                "MusicEvent Lola Índigo (JSON-LD): url https://tickets.example.test/e/1; image https://cdn.example.test/1.jpg; startDate 2027-03-14T20:00; location WiZink Center, Av. Felipe II, Madrid; price 25 EUR; offer url https://tickets.example.test/buy/1; description Gira 2027.",
-                "Event Hamlet (JSON-LD): startDate 2027-03-20; lowPrice 18, highPrice 60 EUR."
+                "ItemList (JSON-LD): numberOfItems: 3",
+                "MusicEvent (JSON-LD): name: Lola Índigo; description: Gira 2027.; endDate: 2027-03-14; location.address.addressLocality: Madrid; location.name: WiZink Center; offers.price: 25; offers.priceCurrency: EUR; startDate: 2027-03-14",
+                "JobPosting (JSON-LD): baseSalary.value.minValue: 1500; title: Cook",
+                "ListItem (JSON-LD): name: Tosca; position: 3; url: https://venue.example.test/tosca"
             ]
         );
     }
 
     #[test]
-    fn a_venues_events_are_items_but_the_venue_the_page_its_breadcrumbs_and_a_lone_offer_are_not() {
-        let html = r#"<script type="application/ld+json">{"@graph":[{"@type":"WebPage","name":"Agenda"},
-            {"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"item":{"@type":"Thing","name":"Inicio"}}]},
-            {"@type":"Place","name":"Teatro Real","event":[{"@type":"Event","name":"Tosca","startDate":"2027-03-02"}]}]}</script>
-            <script type="application/ld+json">[{"@type":"Product","name":"Mug"},{"@type":"Product"},{"@type":"Offer","name":"Gift","price":5}]</script>"#;
-        assert_eq!(item_texts(html), ["Event Tosca (JSON-LD): startDate 2027-03-02.", "Product Mug (JSON-LD)."]);
-    }
-
-    #[test]
-    fn a_full_iri_type_is_named_by_its_last_part_and_a_name_in_several_languages_by_its_first() {
-        let html = r#"<script type="application/ld+json">{"@type":"https://schema.org/Event","name":[{"@value":"x"},"Tosca","Tosca (en)"]}</script>"#;
-        assert_eq!(item_texts(html), ["Event Tosca (JSON-LD)."]);
-    }
-
-    #[test]
-    fn items_are_structured_numbered_from_the_given_index_and_a_long_description_is_cut() {
-        let long = "word ".repeat(100);
-        let html = format!(
-            r#"<script type="application/ld+json">{{"@type":"Event","name":"X","description":"{long}"}}</script>"#
+    fn a_product_keeps_its_offers_and_photos_and_a_pages_main_entity_and_graph_are_read() {
+        let html = r#"<script type="application/ld+json">{"@type":"CollectionPage","name":"Agenda","mainEntity":
+            {"@type":"Product","name":[{"@value":"Taza","@language":"es"}],"image":[{"@type":"ImageObject","url":"https://cdn.example.test/1.jpg"}],
+             "offers":[{"@type":"Offer","price":5},{"@type":"Offer","price":7}]}}</script>
+            <script type="application/ld+json">{"@type":"WebPage","@graph":[{"@type":"BreadcrumbList","itemListElement":[
+              {"@type":"ListItem","name":"A"},{"@type":"ListItem","name":"B"},{"@type":"ListItem","name":"C"}]},
+              {"@type":"Place","name":"Teatro Real","event":[{"@type":"Event","name":"Tosca"},{"@type":"Event","name":"Aida"},{"@type":"Event","name":"Norma"}]}]}</script>"#;
+        assert_eq!(
+            item_texts(html),
+            [
+                "Product (JSON-LD): name: Taza; image.url: https://cdn.example.test/1.jpg; offers.price: 5; offers.price: 7",
+                "Place (JSON-LD): name: Teatro Real",
+                "Event (JSON-LD): name: Tosca",
+                "Event (JSON-LD): name: Aida",
+                "Event (JSON-LD): name: Norma"
+            ]
         );
-        let b = items(&html, 5);
+    }
+
+    #[test]
+    fn items_are_structured_numbered_from_the_given_index_a_long_text_is_cut_but_not_a_link_and_a_repeat_is_kept_once()
+    {
+        let long = "word ".repeat(100);
+        let link = format!("https://cdn.example.test/{}", "x".repeat(300));
+        let one = format!(
+            r#"<script type="application/ld+json">{{"@type":"Event","name":"X","description":"{long}","url":"{link}"}}</script>"#
+        );
+        let b = items(&format!("{one}{one}"), 5);
+        assert_eq!(b.len(), 1);
         assert_eq!((b[0].i, b[0].kind), (5, Kind::Structured));
-        assert!(b[0].text.ends_with("…."));
-        assert!(b[0].text.chars().count() < 340);
+        assert!(b[0].text.contains("…;") && b[0].text.ends_with(&link));
     }
 
     #[test]
