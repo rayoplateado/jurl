@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use super::{Block, Kind, SHORT_BLOCK_CHARS};
+use super::{Block, Kind, SHORT_BLOCK_CHARS, add_links};
 
 /// The most text a card holds. The judge reads a block's first 1,200 characters, so a card within that is read whole. A
 /// longer run of siblings is article text, not a card list, and is read as it was.
@@ -55,12 +55,14 @@ pub fn merge_cards(blocks: Vec<Block>, members: &[Member]) -> Vec<Block> {
     out
 }
 
-/// One record: its pieces' text, one piece to a line, and the first headline a piece holds as its link. Its number is set by
-/// `number_records`, once the whole page is read.
+/// One record: its pieces' text, one piece to a line, the first headline a piece holds as its link, and its pieces' links. Its
+/// number is set by `number_records`, once the whole page is read.
 fn card_of(pieces: Vec<Block>) -> Block {
     let href = pieces.iter().find_map(|b| b.href.clone());
     let text = pieces.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
-    Block { href, record: Some(0), ..Block::new(0, Kind::Para, text) }
+    let mut links = Vec::new();
+    add_links(&mut links, pieces.into_iter().flat_map(|b| b.links));
+    Block { href, record: Some(0), links, ..Block::new(0, Kind::Para, text) }
 }
 
 /// Numbers the records of a page from 1 in page order, so each record's boundary is a number the output and the JSON share.

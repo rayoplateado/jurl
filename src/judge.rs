@@ -187,21 +187,7 @@ mod tests {
 
     /// Blocks holding `texts`, one each, as a page cut into blocks has them.
     fn page_blocks(texts: &[String]) -> Vec<Block> {
-        texts
-            .iter()
-            .enumerate()
-            .map(|(i, t)| Block {
-                i,
-                kind: Kind::Para,
-                level: None,
-                lang: None,
-                text: t.clone(),
-                list: None,
-                href: None,
-                record: None,
-                page: None,
-            })
-            .collect()
+        texts.iter().enumerate().map(|(i, t)| Block::new(i, Kind::Para, t.clone())).collect()
     }
 
     #[test]

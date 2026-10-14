@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use super::{Block, Kind};
+use super::{Block, Kind, add_links};
 
 /// Below this many characters a block says too little to be judged on its own ("Basic", "$10", "per user/month").
 pub const SHORT_BLOCK_CHARS: usize = 25;
@@ -64,8 +64,9 @@ pub(super) fn join_short(blocks: Vec<Block>) -> Vec<Block> {
             let text = run.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
             // Items of one list joined are still part of that list ("1 egg" and "Salt" next to each other).
             let list = run[0].list.filter(|l| run.iter().all(|b| b.kind == Kind::Item && b.list == Some(*l)));
-            out.push(Block { list, ..Block::new(0, Kind::Para, text) });
-            run.clear();
+            let mut links = Vec::new();
+            add_links(&mut links, run.drain(..).flat_map(|b| b.links));
+            out.push(Block { list, links, ..Block::new(0, Kind::Para, text) });
         }
     };
     for b in blocks {

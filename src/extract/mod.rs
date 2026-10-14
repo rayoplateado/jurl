@@ -57,12 +57,28 @@ pub struct Block {
     /// Which page of a list the block is from, counted from 1, when `--pages` read more than one (see `paging`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<usize>,
+    /// The web addresses the block's links go to, in page order, at most `MAX_BLOCK_LINKS` (see `html::Walker::links_of`). A list's item
+    /// often names its own site only as a link ("Web", or its name linked), so a list read takes the site from here: the text
+    /// alone doesn't carry it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
 }
 
 impl Block {
     /// A block with no heading level, code language, list, link, record or page: callers set those with struct update syntax.
     pub fn new(i: usize, kind: Kind, text: String) -> Block {
-        Block { i, kind, level: None, lang: None, text, list: None, href: None, record: None, page: None }
+        Block {
+            i,
+            kind,
+            level: None,
+            lang: None,
+            text,
+            list: None,
+            href: None,
+            record: None,
+            page: None,
+            links: Vec::new(),
+        }
     }
 
     pub fn markdown(&self) -> String {
@@ -202,14 +218,7 @@ fn noise(url: &Url, width: Option<u32>, height: Option<u32>) -> bool {
 }
 
 fn push_link(out: &mut Vec<Link>, base: &Url, href: &str, text: String, context: String, marginal: bool) {
-    let href = href.trim();
-    if href.is_empty() || href.starts_with('#') {
-        return;
-    }
-    let Ok(mut url) = base.join(href) else { return };
-    if !matches!(url.scheme(), "http" | "https") {
-        return;
-    }
+    let Some(mut url) = link_url(base, href) else { return };
     url.set_fragment(None);
     let mut page = base.clone();
     page.set_fragment(None);
@@ -224,6 +233,37 @@ fn push_link(out: &mut Vec<Link>, base: &Url, href: &str, text: String, context:
         return;
     }
     out.push(Link { i: out.len(), url, text, context, marginal });
+}
+
+/// The most links one block keeps (see `Block::links`): a card or a row names a site or two, and a long table is cut short.
+pub(crate) const MAX_BLOCK_LINKS: usize = 20;
+
+/// The web address a link goes to: its `href` resolved against the page, `None` for an empty one, a `#fragment` or another
+/// scheme (`mailto:`, `tel:`, `javascript:`). An `href` that starts with `www.` is a site whose `https://` the page left out:
+/// resolved as written it would be a path of the page ("/madrid/www.albaonline.org"), which no reader means.
+pub(crate) fn link_url(base: &Url, href: &str) -> Option<Url> {
+    let href = href.trim();
+    if href.is_empty() || href.starts_with('#') {
+        return None;
+    }
+    let url = if href.get(..4).is_some_and(|w| w.eq_ignore_ascii_case("www.")) {
+        Url::parse(&format!("https://{href}")).ok()?
+    } else {
+        base.join(href).ok()?
+    };
+    matches!(url.scheme(), "http" | "https").then_some(url)
+}
+
+/// Adds `more` to a block's links, in order, each once, up to `MAX_BLOCK_LINKS`.
+pub(crate) fn add_links(links: &mut Vec<String>, more: impl IntoIterator<Item = String>) {
+    for link in more {
+        if links.len() >= MAX_BLOCK_LINKS {
+            return;
+        }
+        if !links.contains(&link) {
+            links.push(link);
+        }
+    }
 }
 
 /// Runs of whitespace become one space, or one newline where they hold a block boundary.
