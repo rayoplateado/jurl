@@ -97,6 +97,9 @@ pub(crate) struct Args {
     /// Not a flag.
     #[arg(skip)]
     pub(crate) pages_log: crate::output::PagesLog,
+    /// Where a `--pages` read's list goes on after the pages it read (see `paging::ListNext`). Not a flag.
+    #[arg(skip)]
+    pub(crate) list_next: crate::paging::ListNext,
     /// Max results [default: 12 blocks, 5 with --ask, 8 code blocks, 20 links, all images]
     #[arg(short = 'n', long)]
     pub(crate) max: Option<usize>,
