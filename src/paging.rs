@@ -72,28 +72,34 @@ pub fn numbered_next<'a>(current: &Url, mut links: impl Iterator<Item = &'a Url>
 }
 
 /// The page after `current` when the page links none: its page number one on, where the address has one (`?page=3`,
-/// `?e5273e04_page=3`, `/page/3/`), and else `page=2` added to its query. A guess, so only a read that can tell a new page
-/// from the one before follows it (a `--recipe` read, by its rows). A URL with two page numbers has none.
+/// `?e5273e04_page=3`, `/page/3/`), and else `page=2` added to its query. Only the number changes: the rest of the address
+/// keeps its own encoding. A guess, so only a read that can tell a new page from the one before follows it (a `--recipe`
+/// read, by its rows). A URL with two page numbers has none, nor does one counting its pages from 0 (`?page=0`), whose page
+/// after is not the number one on from what `slot_of` reads.
 pub fn guessed_next(current: &Url) -> Option<Url> {
     let here = slot_of(current)?;
     let next = here.page.checked_add(1)?.to_string();
     let mut url = current.clone();
-    let pairs: Vec<(String, String)> = current.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
-    if let Some(at) = pairs.iter().position(|(k, v)| is_page_param(k) && number_of(v).is_some()) {
-        let pairs =
-            pairs.iter().enumerate().map(|(i, (k, v))| (k.as_str(), if i == at { next.as_str() } else { v.as_str() }));
-        url.query_pairs_mut().clear().extend_pairs(pairs);
+    let mut pairs: Vec<String> = current.query().unwrap_or_default().split('&').map(String::from).collect();
+    for pair in pairs.iter_mut() {
+        let Some((k, v)) = url::form_urlencoded::parse(pair.as_bytes()).next() else { continue };
+        if !is_page_param(&k) || v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        number_of(&v)?;
+        let name = pair.split('=').next().unwrap_or_default();
+        *pair = format!("{name}={next}");
+        url.set_query(Some(&pairs.join("&")));
         return Some(url);
     }
-    let segments: Vec<&str> = current.path_segments().map(Iterator::collect).unwrap_or_default();
+    let mut segments: Vec<&str> = current.path().split('/').collect();
     let filled: Vec<usize> = segments.iter().enumerate().filter(|(_, s)| !s.is_empty()).map(|(i, _)| i).collect();
     if let [.., word, number] = filled.as_slice()
         && segments[*word].eq_ignore_ascii_case("page")
         && number_of(segments[*number]).is_some()
     {
-        let at = *number;
-        let segments = segments.iter().enumerate().map(|(i, s)| if i == at { next.as_str() } else { s });
-        url.path_segments_mut().ok()?.clear().extend(segments);
+        segments[*number] = &next;
+        url.set_path(&segments.join("/"));
         return Some(url);
     }
     url.query_pairs_mut().append_pair("page", &next);
@@ -239,6 +245,20 @@ mod tests {
         assert_eq!(guess("https://x.test/blog/page/2").as_deref(), Some("https://x.test/blog/page/3"));
         assert_eq!(guess("https://x.test/blog/page/1/").as_deref(), Some("https://x.test/blog/page/2/"));
         assert_eq!(guess("https://x.test/a?page=1&e1_page=1"), None, "two page numbers");
+        assert_eq!(guess("https://x.test/a?page=0"), None, "pages counted from 0");
+        // Only the number changes: an accented path, a valueless flag, `+` and an encoded slash stay as the site wrote them.
+        assert_eq!(
+            guess("https://x.test/eventos/m%C3%BAsica/page/2/").as_deref(),
+            Some("https://x.test/eventos/m%C3%BAsica/page/3/")
+        );
+        assert_eq!(
+            guess("https://x.test/a?q=caf%C3%A9%20x&flag&page=2&d=2024/01#f").as_deref(),
+            Some("https://x.test/a?q=caf%C3%A9%20x&flag&page=3&d=2024/01#f")
+        );
+        assert_eq!(
+            guess("https://x.test/m%C3%BAsica?q=a+b").as_deref(),
+            Some("https://x.test/m%C3%BAsica?q=a+b&page=2")
+        );
         // Every guess is a page its own slot reads one on from the current one.
         for s in ["https://x.test/agenda", "https://x.test/agenda?page=7", "https://x.test/blog/page/9/"] {
             let (here, next) = (slot_of(&u(s)).unwrap(), slot_of(&guessed_next(&u(s)).unwrap()).unwrap());

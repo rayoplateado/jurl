@@ -369,6 +369,12 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
             Ok((url, next_ex, _)) => {
                 let new = novelty(&url, &next_ex);
                 if new.iter().all(|n| seen.contains(n)) {
+                    if args.recipe.is_some() && args.timing {
+                        eprintln!(
+                            "jurl: {url} gives no row the pages before it didn't, so the list is {} pages",
+                            pages.len()
+                        );
+                    }
                     break;
                 }
                 seen.extend(new);
