@@ -440,10 +440,13 @@ async fn load_page(
         let mut data = output::PageData::default();
         if !page.is_markdown {
             data.items = extract::json_ld::items(&page.body, 0);
-            if args.with_sources {
-                data.sources = extract::sources::lists(&page.body);
+            if args.with_sources || args.recipe.is_some() {
+                let own = extract::sources::data_of(&page.body);
+                if args.with_sources {
+                    data.sources = extract::sources::lists(&own);
+                }
+                data.recipe = args.recipe.as_ref().map(|r| extract::sources::apply(&own, r));
             }
-            data.recipe = args.recipe.as_ref().map(|r| extract::sources::apply(&page.body, r));
         }
         args.pages_log.record(number, &page.url, served, &ex.blocks, data);
     }

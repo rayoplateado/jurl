@@ -121,7 +121,7 @@ impl PagesLog {
 
     /// The `pages` of the JSON: in load order, once per final URL (its first load, by `links::key`), each with its route,
     /// whether it was rendered, its blocks, `items` when its JSON-LD lists things, `sources` when its data holds lists, and
-    /// `rows` (or `recipe_error`) when a recipe was given.
+    /// `rows` (or `recipe_error`) when a recipe was given, with `rows_truncated` when the list had more than it gives.
     pub(crate) fn json(&self) -> Result<Value> {
         let loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         let mut in_order: Vec<&Loaded> = loaded.iter().collect();
@@ -142,7 +142,12 @@ impl PagesLog {
                 page["sources"] = serde_json::to_value(&p.data.sources)?;
             }
             match &p.data.recipe {
-                Some(Applied::Rows(rows)) => page["rows"] = serde_json::to_value(rows)?,
+                Some(Applied::Rows { rows, truncated }) => {
+                    page["rows"] = serde_json::to_value(rows)?;
+                    if *truncated {
+                        page["rows_truncated"] = Value::Bool(true);
+                    }
+                }
                 Some(Applied::RecipeError(why)) => page["recipe_error"] = Value::String(why.clone()),
                 None => {}
             }
@@ -452,7 +457,11 @@ mod tests {
         let list = Source { source: "ld:0".into(), path: vec!["itemListElement".into()], count: 3, sample: vec![] };
         let mut row = serde_json::Map::new();
         row.insert("title".into(), "Tosca".into());
-        let first = PageData { sources: vec![list], recipe: Some(Applied::Rows(vec![row])), ..PageData::default() };
+        let first = PageData {
+            sources: vec![list],
+            recipe: Some(Applied::Rows { rows: vec![row], truncated: false }),
+            ..PageData::default()
+        };
         args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("one"), first);
         let broken = PageData { recipe: Some(Applied::RecipeError("no list at ld:0 a".into())), ..PageData::default() };
         args.pages_log.record(1, &Url::parse("https://x.com/2").unwrap(), served(), &a_page_of("two"), broken);
