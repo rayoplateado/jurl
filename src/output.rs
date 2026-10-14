@@ -78,6 +78,7 @@ struct Loaded {
     route: &'static str,
     rendered: bool,
     blocks: Vec<Block>,
+    items: Vec<Block>,
 }
 
 impl PagesLog {
@@ -86,20 +87,22 @@ impl PagesLog {
         self.started.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Notes a page that loaded, under the number `start` gave its load, with the blocks the run read it as.
-    pub(crate) fn record(&self, number: usize, url: &url::Url, served: Served, blocks: &[Block]) {
+    /// Notes a page that loaded, under the number `start` gave its load, with the blocks the run read it as and the things
+    /// its JSON-LD lists.
+    pub(crate) fn record(&self, number: usize, url: &url::Url, served: Served, blocks: &[Block], items: Vec<Block>) {
         let page = Loaded {
             number,
             url: url.clone(),
             route: served.route.name(),
             rendered: served.rendered,
             blocks: blocks.to_vec(),
+            items,
         };
         self.loaded.lock().unwrap_or_else(PoisonError::into_inner).push(page);
     }
 
     /// The `pages` of the JSON: in load order, once per final URL (its first load, by `links::key`), each with its route,
-    /// whether it was rendered, and its blocks.
+    /// whether it was rendered, its blocks, and `items` when its JSON-LD lists things.
     pub(crate) fn json(&self) -> Result<Value> {
         let loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         let mut in_order: Vec<&Loaded> = loaded.iter().collect();
@@ -107,12 +110,16 @@ impl PagesLog {
         let mut seen = HashSet::new();
         let mut pages = Vec::new();
         for p in in_order.into_iter().filter(|p| seen.insert(links::key(&p.url))) {
-            pages.push(json!({
+            let mut page = json!({
                 "url": p.url.as_str(),
                 "route": p.route,
                 "rendered": p.rendered,
                 "blocks": serde_json::to_value(&p.blocks)?,
-            }));
+            });
+            if !p.items.is_empty() {
+                page["items"] = serde_json::to_value(&p.items)?;
+            }
+            pages.push(page);
         }
         Ok(Value::Array(pages))
     }
@@ -316,7 +323,7 @@ mod tests {
         let done = Ok(Rendered { text: String::new(), json: json!({ "answer": "$8" }) });
         let plain = stdout_for(&args, &done, &usage).unwrap().expect("JSON");
         // Pages loaded and kept, but not asked for: the output is the same, with no `pages` key.
-        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("$8"));
+        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("$8"), Vec::new());
         assert_eq!(stdout_for(&args, &done, &usage).unwrap().expect("JSON"), plain);
         let expected = json!({ "answer": "$8", "usage": usage.json(&args.fallback) });
         assert_eq!(plain, format!("{}\n", serde_json::to_string_pretty(&expected).unwrap()));
@@ -327,7 +334,13 @@ mod tests {
         let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "price?", "https://x.com/"]);
         prepare(&mut args).unwrap();
         let usage = decide::Usage::new();
-        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("Nothing on prices."));
+        args.pages_log.record(
+            0,
+            &Url::parse("https://x.com/").unwrap(),
+            served(),
+            &a_page_of("Nothing on prices."),
+            Vec::new(),
+        );
         let json_of = |done: Result<Rendered>| -> Value {
             let out = stdout_for(&args, &done, &usage).unwrap().expect("JSON");
             serde_json::from_str(&out).unwrap()
@@ -355,7 +368,7 @@ mod tests {
     fn with_pages_a_precise_miss_keeps_its_shape_and_lists_the_pages() {
         let mut args = Args::parse_from(["jurl", "--precise", "--json", "--with-pages", "-q", "books?", "jurl.dev"]);
         prepare(&mut args).unwrap();
-        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("Docs."));
+        args.pages_log.record(0, &Url::parse("https://jurl.dev/").unwrap(), served(), &a_page_of("Docs."), Vec::new());
         let miss: Result<Rendered> = Err(not_found("nothing in https://jurl.dev/ answers that".into()));
         let out = stdout_for(&args, &miss, &decide::Usage::new()).unwrap().expect("JSON on a miss");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -365,11 +378,27 @@ mod tests {
     }
 
     #[test]
+    fn with_pages_a_page_whose_json_ld_lists_things_gives_them_as_items() {
+        let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "x?", "https://x.com/"]);
+        prepare(&mut args).unwrap();
+        let item = Block::new(0, Kind::Structured, "Event Tosca (JSON-LD): startDate 2027-03-02.".into());
+        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("one"), vec![item]);
+        args.pages_log.record(1, &Url::parse("https://x.com/2").unwrap(), served(), &a_page_of("two"), Vec::new());
+        let read = Ok(Rendered { text: String::new(), json: json!({ "answer": null }) });
+        let v: Value =
+            serde_json::from_str(&stdout_for(&args, &read, &decide::Usage::new()).unwrap().unwrap()).unwrap();
+        assert_eq!(v["pages"][0]["items"][0]["kind"], "structured");
+        assert_eq!(v["pages"][0]["blocks"][0]["text"], "one");
+        // A page with none has no `items` key, so its entry is as it was.
+        assert!(v["pages"][1].get("items").is_none());
+    }
+
+    #[test]
     fn with_pages_the_entries_take_the_key_a_pages_read_gives_its_urls_under() {
         let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "x?", "https://x.com/"]);
         prepare(&mut args).unwrap();
-        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("one"));
-        args.pages_log.record(1, &Url::parse("https://x.com/2").unwrap(), served(), &a_page_of("two"));
+        args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("one"), Vec::new());
+        args.pages_log.record(1, &Url::parse("https://x.com/2").unwrap(), served(), &a_page_of("two"), Vec::new());
         let read = Ok(Rendered {
             text: String::new(),
             json: json!({ "answer": null, "pages": ["https://x.com/", "https://x.com/2"] }),
@@ -390,9 +419,9 @@ mod tests {
         let log = PagesLog::default();
         let (first, second, third) = (log.start(), log.start(), log.start());
         // The loads finish out of order, and the third is the second page again, with a trailing slash.
-        log.record(second, &Url::parse("https://x.com/b").unwrap(), served(), &a_page_of("b"));
-        log.record(first, &Url::parse("https://x.com/a").unwrap(), served(), &a_page_of("a"));
-        log.record(third, &Url::parse("https://x.com/b/").unwrap(), served(), &a_page_of("b again"));
+        log.record(second, &Url::parse("https://x.com/b").unwrap(), served(), &a_page_of("b"), Vec::new());
+        log.record(first, &Url::parse("https://x.com/a").unwrap(), served(), &a_page_of("a"), Vec::new());
+        log.record(third, &Url::parse("https://x.com/b/").unwrap(), served(), &a_page_of("b again"), Vec::new());
         let pages = log.json().unwrap();
         let listed: Vec<(&str, &str)> = pages
             .as_array()
