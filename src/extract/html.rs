@@ -8,7 +8,9 @@ use url::Url;
 
 use super::cards::{self, Member};
 use super::join::join_short;
-use super::{Alternate, BREAK, Block, Extracted, Image, Kind, Link, collapse, push_image, push_link};
+use super::{
+    Alternate, BREAK, Block, Extracted, Image, Kind, Link, add_links, collapse, link_url, push_image, push_link,
+};
 use crate::paging;
 
 const SKIP: &[&str] = &[
@@ -140,6 +142,7 @@ fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool, base: &Url) -> V
         blocks: Vec::new(),
         skip_header: in_body,
         buf: String::new(),
+        buf_links: Vec::new(),
         segments,
         list: None,
         lists: 0,
@@ -381,6 +384,8 @@ struct Walker<'a> {
     blocks: Vec<Block>,
     skip_header: bool,
     buf: String,
+    /// The links of the inline run in `buf`: the paragraph it becomes keeps them (see `Block::links`).
+    buf_links: Vec<String>,
     segments: HashMap<String, ElementRef<'a>>,
     /// The list being walked, and how many lists came before it.
     list: Option<usize>,
@@ -392,22 +397,51 @@ struct Walker<'a> {
 }
 
 impl<'a> Walker<'a> {
-    fn push(&mut self, kind: Kind, level: Option<u8>, lang: Option<String>, text: String) {
-        self.push_with(kind, level, lang, text, None);
+    fn push(&mut self, kind: Kind, level: Option<u8>, lang: Option<String>, text: String, links: Vec<String>) {
+        self.push_with(kind, level, lang, text, None, links);
     }
 
-    fn push_with(&mut self, kind: Kind, level: Option<u8>, lang: Option<String>, text: String, href: Option<String>) {
+    fn push_with(
+        &mut self,
+        kind: Kind,
+        level: Option<u8>,
+        lang: Option<String>,
+        text: String,
+        href: Option<String>,
+        links: Vec<String>,
+    ) {
         if text.trim().is_empty() {
             return;
         }
         let i = self.blocks.len();
         let list = (kind == Kind::Item).then_some(self.list).flatten();
-        self.blocks.push(Block { i, kind, level, lang, text, list, href, record: None, page: None });
+        self.blocks.push(Block { i, kind, level, lang, text, list, href, record: None, page: None, links });
     }
 
     fn flush(&mut self) {
         let text = collapse(&std::mem::take(&mut self.buf));
-        self.push(Kind::Para, None, None, text);
+        let links = std::mem::take(&mut self.buf_links);
+        self.push(Kind::Para, None, None, text, links);
+    }
+
+    /// The web addresses `el` links to, itself included when it is a link (see `Block::links`).
+    fn links_of(&self, el: ElementRef) -> Vec<String> {
+        let mut links = Vec::new();
+        let selector = sel("a[href]");
+        let anchors = std::iter::once(el).filter(|e| e.value().name() == "a").chain(el.select(&selector));
+        let page = self.base.as_str().split('#').next().unwrap_or_default();
+        add_links(
+            &mut links,
+            anchors
+                .filter(|a| !hidden(*a))
+                .filter_map(|a| link_url(&self.base, a.value().attr("href")?))
+                .map(|mut url| {
+                    url.set_fragment(None);
+                    url.to_string()
+                })
+                .filter(|url| url != page),
+        );
+        links
     }
 
     /// Generic container: inline runs become paragraphs, block children recurse. Its container children that read as blocks
@@ -418,6 +452,8 @@ impl<'a> Walker<'a> {
             self.buf.push(BREAK);
             self.buf.push_str(&flat_text(el, self.skip_header));
             self.buf.push(BREAK);
+            let links = self.links_of(el);
+            add_links(&mut self.buf_links, links);
             return;
         }
         self.depth += 1;
@@ -441,6 +477,8 @@ impl<'a> Walker<'a> {
                     }
                     if INLINE.contains(&child.value().name()) && !has_block_desc(child) {
                         self.buf.push_str(&inline_text(child));
+                        let links = self.links_of(child);
+                        add_links(&mut self.buf_links, links);
                     } else {
                         self.flush();
                         let start = self.blocks.len();
@@ -471,10 +509,12 @@ impl<'a> Walker<'a> {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let level = name[1..].parse().ok();
                 let href = headline_href(el, &self.base);
-                self.push_with(Kind::Heading, level, None, collapse(&inline_text(el)), href);
+                let links = self.links_of(el);
+                self.push_with(Kind::Heading, level, None, collapse(&inline_text(el)), href, links);
             }
             "p" | "figcaption" | "dt" | "dd" | "summary" => {
-                self.push(Kind::Para, None, None, collapse(&inline_text(el)))
+                let links = self.links_of(el);
+                self.push(Kind::Para, None, None, collapse(&inline_text(el)), links)
             }
             "pre" => {
                 let lang = el
@@ -486,11 +526,15 @@ impl<'a> Walker<'a> {
                         c.split_whitespace().find_map(|k| k.strip_prefix("language-").or(k.strip_prefix("lang-")))
                     })
                     .map(String::from);
-                self.push(Kind::Code, None, lang, el.text().collect());
+                self.push(Kind::Code, None, lang, el.text().collect(), Vec::new());
             }
-            "blockquote" => self.push(Kind::Quote, None, None, collapse(&inline_text(el))),
+            "blockquote" => {
+                let links = self.links_of(el);
+                self.push(Kind::Quote, None, None, collapse(&inline_text(el)), links)
+            }
             "li" => {
                 let mut own = String::new();
+                let mut links = Vec::new();
                 let mut nested = Vec::new();
                 for c in el.children() {
                     match c.value() {
@@ -503,12 +547,13 @@ impl<'a> Walker<'a> {
                             if !skipped(c, self.skip_header, true) {
                                 own.push(' ');
                                 own.push_str(&inline_text(c));
+                                add_links(&mut links, self.links_of(c));
                             }
                         }
                         _ => {}
                     }
                 }
-                self.push(Kind::Item, None, None, collapse(&own));
+                self.push(Kind::Item, None, None, collapse(&own), links);
                 for n in nested {
                     self.element(n);
                 }
@@ -527,11 +572,21 @@ impl<'a> Walker<'a> {
             }
             "table" => {
                 let rows: Vec<String> = table_grid(el).iter().map(|row| format!("| {} |", row.join(" | "))).collect();
-                self.push(Kind::Table, None, None, rows.join("\n"));
+                let links = self.links_of(el);
+                self.push(Kind::Table, None, None, rows.join("\n"), links);
             }
             _ => {
+                let start = self.blocks.len();
                 self.container(el);
                 self.flush();
+                // A link around block content (a whole card that is one `<a>`) holds no inline run to keep its address:
+                // its first block keeps it.
+                if el.value().name() == "a" && self.blocks.len() > start {
+                    let links = self.links_of(el);
+                    let first = &mut self.blocks[start].links;
+                    let rest = std::mem::take(first);
+                    add_links(first, links.into_iter().take(1).chain(rest));
+                }
             }
         }
     }
@@ -681,14 +736,7 @@ fn headline_href(heading: ElementRef, base: &Url) -> Option<String> {
 /// The address a link goes to, absolute, when it is a page of its own: http or https, and not this page (a fragment
 /// apart) or one of its sections (`#…`).
 fn link_target(link: ElementRef, base: &Url) -> Option<String> {
-    let href = link.value().attr("href")?.trim();
-    if href.starts_with('#') {
-        return None;
-    }
-    let url = base.join(href).ok()?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return None;
-    }
+    let url = link_url(base, link.value().attr("href")?)?;
     let (mut page, mut here) = (url.clone(), base.clone());
     page.set_fragment(None);
     here.set_fragment(None);
@@ -1596,5 +1644,85 @@ mod tests {
         // A hidden rel="next" is not on the page.
         let hidden = r#"<body><a rel="next" href="/es/agenda?page=2" style="display:none">Next</a></body>"#;
         assert_eq!(next(hidden), None);
+    }
+
+    #[test]
+    fn a_block_keeps_where_its_links_go_so_a_list_item_brings_its_own_site() {
+        // A directory names each shelter's site only as a link: the item keeps it, its other links too, and none of the
+        // links that go nowhere a reader can open (a fragment, an email, a phone, the page itself).
+        let page = r##"<body><main><ul>
+            <li><a href="http://www.bienestar-animal.org.es/">Bienestar Animal</a> (Madrid) <a href="mailto:a@b.es">email</a></li>
+            <li>Aranjuez Protección Animal: <a href="http://aranjuezproteccionanimal.org/">web</a> <a href="tel:+34600">llamar</a></li>
+            <li><a href="#top">Arriba</a> <a href="/post/">Esta página</a> Sin web</li>
+        </ul></main></body>"##;
+        let ex = html(page, &base());
+        let links: Vec<_> = ex.blocks.iter().map(|b| b.links.clone()).collect();
+        assert_eq!(
+            links,
+            vec![
+                vec!["http://www.bienestar-animal.org.es/".to_string()],
+                vec!["http://aranjuezproteccionanimal.org/".to_string()],
+                vec![],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_site_written_without_https_is_that_site_not_a_path_of_the_page() {
+        // "www.albaonline.org" as an href is relative by the book, so it would read as /post/www.albaonline.org: the page
+        // means the site, and both a block's links and the page's links take it so.
+        let page = r#"<body><main><p>ALBA. Web: <a href="www.albaonline.org">www.albaonline.org</a></p>
+            <p>El Refugio. Web: <a href="WWW.elrefugio.org ">www.elrefugio.org</a></p></main></body>"#;
+        let ex = html(page, &base());
+        let links: Vec<_> = ex.blocks.iter().flat_map(|b| b.links.clone()).collect();
+        assert_eq!(links, ["https://www.albaonline.org/", "https://www.elrefugio.org/"]);
+        let page_links: Vec<_> = ex.links.iter().map(|l| l.url.as_str()).collect();
+        assert_eq!(page_links, ["https://www.albaonline.org/", "https://www.elrefugio.org/"]);
+    }
+
+    #[test]
+    fn a_card_keeps_the_links_of_all_its_pieces() {
+        let card = |name: &str, site: &str| {
+            format!(r#"<div class="c"><h3>{name}</h3><p>Barcelona</p><p><a href="{site}">Web</a></p></div>"#)
+        };
+        let page = format!(
+            "<body><main>{}{}{}</main></body>",
+            card("Altrim", "https://www.coworkingaltrim.com/es/inicio/"),
+            card("La Vaca", "https://lavaca.es/"),
+            card("Aticco", "https://aticco.com/")
+        );
+        let ex = html(&page, &base());
+        let cards: Vec<_> = ex.blocks.iter().filter(|b| b.record.is_some()).map(|b| b.links.clone()).collect();
+        assert_eq!(
+            cards,
+            vec![
+                vec!["https://www.coworkingaltrim.com/es/inicio/".to_string()],
+                vec!["https://lavaca.es/".to_string()],
+                vec!["https://aticco.com/".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_card_that_is_one_link_keeps_where_it_goes() {
+        let card = |name: &str, site: &str| {
+            format!(r#"<a href="{site}"><div><h3>{name}</h3><p>Barcelona, desde 150 € al mes</p></div></a>"#)
+        };
+        let page = format!(
+            "<body><main><div>{}{}{}</div></main></body>",
+            card("Altrim", "https://altrim.test/"),
+            card("La Vaca", "https://lavaca.test/"),
+            card("Aticco", "https://aticco.test/")
+        );
+        let ex = html(&page, &base());
+        let links: Vec<_> = ex.blocks.iter().flat_map(|b| b.links.clone()).collect();
+        assert_eq!(links, ["https://altrim.test/", "https://lavaca.test/", "https://aticco.test/"]);
+    }
+
+    #[test]
+    fn a_headline_link_written_without_https_is_that_site_too() {
+        let ex = html(r#"<body><main><h2><a href="www.site.test">Site news</a></h2></main></body>"#, &base());
+        assert_eq!(ex.blocks[0].href.as_deref(), Some("https://www.site.test/"));
+        assert_eq!(ex.blocks[0].links, ["https://www.site.test/"]);
     }
 }
