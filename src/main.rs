@@ -327,8 +327,8 @@ async fn read(
 
 /// `--pages`: the start page, and the pages after it one after another, each the next page of the one before (see `paging`),
 /// as one list (`paging::merge`). A page that the site's robots.txt does not let jurl read ends the list, as does a page
-/// already read or one with no text that is new. A page that fails ends it too, with a note on stderr: the pages before it are
-/// judged as they are.
+/// already read or one with no text that is new (under a --recipe, no row that is new). A page that fails ends it too, with a
+/// note on stderr: the pages before it are judged as they are.
 async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t: &mut Timer) -> Extracted {
     let retry = fetch::Retry::for_run(
         args.no_browser_retry,
@@ -339,10 +339,21 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
         &args.fallback,
     );
     let mut robots: HashMap<String, follow::Robots> = HashMap::new();
-    let mut seen: HashSet<String> = ex.blocks.iter().map(|b| b.text.clone()).collect();
+    // Under a --recipe a page is new by its rows, and its next page may be guessed (see `paging::guessed_next`), since many
+    // lists' pages are only reached by their scripts: a guess that gives no row, or only rows already read, ends the list.
+    let novelty = |url: &url::Url, ex: &Extracted| -> Vec<String> {
+        if args.recipe.is_some() {
+            args.pages_log.rows_of(url)
+        } else {
+            ex.blocks.iter().map(|b| b.text.clone()).collect()
+        }
+    };
+    let mut seen: HashSet<String> = novelty(&start, &ex).into_iter().collect();
     let mut pages = vec![(start, ex)];
     while pages.len() < args.pages {
-        let Some(next) = pages.last().and_then(|(_, ex)| ex.next_page.clone()) else { break };
+        let Some((last, last_ex)) = pages.last() else { break };
+        let guessed = || args.recipe.as_ref().filter(|_| !seen.is_empty()).and_then(|_| paging::guessed_next(last));
+        let Some(next) = last_ex.next_page.clone().or_else(guessed) else { break };
         if pages.iter().any(|(u, _)| *u == next) {
             break;
         }
@@ -356,10 +367,17 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
         }
         match load(args, cfg, &next, t).await {
             Ok((url, next_ex, _)) => {
-                if next_ex.blocks.iter().all(|b| seen.contains(&b.text)) {
+                let new = novelty(&url, &next_ex);
+                if new.iter().all(|n| seen.contains(n)) {
+                    if args.recipe.is_some() && args.timing {
+                        eprintln!(
+                            "jurl: {url} gives no row the pages before it didn't, so the list is {} pages",
+                            pages.len()
+                        );
+                    }
                     break;
                 }
-                seen.extend(next_ex.blocks.iter().map(|b| b.text.clone()));
+                seen.extend(new);
                 pages.push((url, next_ex));
             }
             Err(e) => {

@@ -119,6 +119,17 @@ impl PagesLog {
         self.loaded.lock().unwrap_or_else(PoisonError::into_inner).push(page);
     }
 
+    /// The rows the --recipe took from the page last loaded at `url`, each as its JSON text: none when the recipe found no
+    /// list there, or when no such page was recorded. What tells a list's next page from the one before it.
+    pub(crate) fn rows_of(&self, url: &url::Url) -> Vec<String> {
+        let loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        let page = loaded.iter().filter(|p| p.url == *url).max_by_key(|p| p.number);
+        match page.and_then(|p| p.data.recipe.as_ref()) {
+            Some(Applied::Rows { rows, .. }) => rows.iter().map(|r| Value::Object(r.clone()).to_string()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The `pages` of the JSON: in load order, once per final URL (its first load, by `links::key`), each with its route,
     /// whether it was rendered, its blocks, `items` when its JSON-LD lists things, `sources` when its data holds lists, and
     /// `rows` (or `recipe_error`) when a recipe was given, with `rows_truncated` when the list had more than it gives.
@@ -465,6 +476,10 @@ mod tests {
         args.pages_log.record(0, &Url::parse("https://x.com/").unwrap(), served(), &a_page_of("one"), first);
         let broken = PageData { recipe: Some(Applied::RecipeError("no list at ld:0 a".into())), ..PageData::default() };
         args.pages_log.record(1, &Url::parse("https://x.com/2").unwrap(), served(), &a_page_of("two"), broken);
+        // What --pages tells a next page by: the rows as JSON, none for a page the recipe found no list on or never loaded.
+        assert_eq!(args.pages_log.rows_of(&Url::parse("https://x.com/").unwrap()), [r#"{"title":"Tosca"}"#]);
+        assert!(args.pages_log.rows_of(&Url::parse("https://x.com/2").unwrap()).is_empty());
+        assert!(args.pages_log.rows_of(&Url::parse("https://x.com/3").unwrap()).is_empty());
         let read = Ok(Rendered { text: String::new(), json: json!({ "answer": null }) });
         let v: Value =
             serde_json::from_str(&stdout_for(&args, &read, &decide::Usage::new()).unwrap().unwrap()).unwrap();
