@@ -433,9 +433,11 @@ async fn load_page(
     if args.precise && !page.is_markdown {
         extract::json_ld::add_to(&mut ex, &page.body);
     }
-    // `--with-pages` lists the page as the run reads it: the blocks a -q read is given, JSON-LD values included.
+    // `--with-pages` lists the page as the run reads it: the blocks a -q read is given, and apart from them the things its
+    // JSON-LD lists (see `extract::json_ld::items`), so a list read can take its rows from the page's own data.
     if args.with_pages {
-        args.pages_log.record(number, &page.url, served, &ex.blocks);
+        let items = if page.is_markdown { Vec::new() } else { extract::json_ld::items(&page.body, 0) };
+        args.pages_log.record(number, &page.url, served, &ex.blocks, items);
     }
     Ok((page.url, ex, served))
 }

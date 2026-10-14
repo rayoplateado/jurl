@@ -110,6 +110,165 @@ fn types(map: &Map<String, Value>) -> Vec<String> {
     }
 }
 
+/// The most items one page gives from its JSON-LD: as many as a sheet keeps from one site's list.
+const MAX_ITEMS: usize = 300;
+/// The longest text an item keeps of a value (a link is kept whole, or it could not be followed), and the longest item, in
+/// characters: a long catalogue stays readable.
+const MAX_VALUE_CHARS: usize = 200;
+const MAX_ITEM_CHARS: usize = 1200;
+/// How many typed objects make a list of things inside a thing (a venue's events, a list's elements). Fewer are the thing's
+/// own values: an event's offers or performers, a product's photos.
+const MIN_LIST: usize = 3;
+/// Types that are the site's machinery, not anything on the page: they give nothing.
+const MACHINERY_TYPES: &[&str] = &["BreadcrumbList", "SiteNavigationElement", "SearchAction"];
+/// Keys that name a node or its language in JSON-LD rather than say something of it. An object's `@type` says what kind of
+/// value it is (a Place, an Offer), which its path already says.
+const NODE_KEYS: &[&str] = &["@context", "@id", "@type", "@language"];
+
+/// The things a page's JSON-LD holds, each one block, numbered from `first`. Nothing here knows what a type means: a thing
+/// gives every value it holds under its path, each value once, and the reader decides which matter. "MusicEvent (JSON-LD):
+/// name: Lola Índigo; location.name: WiZink Center; offers.price: 25; offers.priceCurrency: EUR; startDate: 2027-03-14".
+///
+/// A typed object at the top, in `@graph` or in the page's own object (a WebPage's `mainEntity`) is a thing. A list of
+/// MIN_LIST or more typed objects inside a thing is a list of things, each one a thing of its own, and a list's wrapper (a
+/// ListItem around its `item`) gives way to what it wraps. Read for `--with-pages`, so a list read can take its rows from the
+/// page's own data.
+pub fn items(html: &str, first: usize) -> Vec<Block> {
+    let doc = Html::parse_document(html);
+    let script = Selector::parse(r#"script[type="application/ld+json"]"#).expect("static selector");
+    let mut texts: Vec<String> = Vec::new();
+    for el in doc.select(&script) {
+        let body: String = el.text().collect();
+        if let Ok(value) = serde_json::from_str::<Value>(&body) {
+            collect_things(&value, &mut texts);
+        }
+        if texts.len() >= MAX_ITEMS {
+            break;
+        }
+    }
+    texts.truncate(MAX_ITEMS);
+    texts.into_iter().enumerate().map(|(k, text)| Block::new(first + k, Kind::Structured, text)).collect()
+}
+
+/// A type's own name: "https://schema.org/Event" is an Event.
+fn short(kind: &str) -> &str {
+    kind.rsplit('/').next().unwrap_or(kind)
+}
+
+/// The things a JSON-LD value holds at its top. An object with no type (a `@graph`'s holder), the page itself or the site
+/// is not a thing, but what it holds may be; the site's machinery gives nothing.
+fn collect_things(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Array(values) => values.iter().for_each(|v| collect_things(v, out)),
+        Value::Object(map) => {
+            let kinds = types(map);
+            if kinds.iter().any(|k| MACHINERY_TYPES.contains(&short(k))) {
+                return;
+            }
+            if kinds.is_empty() || kinds.iter().any(|k| short(k).ends_with("Page") || short(k) == "WebSite") {
+                for (key, child) in map.iter().filter(|(k, _)| !NODE_KEYS.contains(&k.as_str())) {
+                    if child.is_object() || child.is_array() || key == "@graph" {
+                        collect_things(child, out);
+                    }
+                }
+                return;
+            }
+            thing(map, false, out);
+        }
+        _ => {}
+    }
+}
+
+/// The typed objects of a value that is a list of MIN_LIST or more of them.
+fn list_of(value: &Value) -> Option<Vec<&Map<String, Value>>> {
+    let things: Vec<&Map<String, Value>> =
+        value.as_array()?.iter().filter_map(Value::as_object).filter(|o| !types(o).is_empty()).collect();
+    (things.len() >= MIN_LIST).then_some(things)
+}
+
+/// What a list's element stands for: the one typed object it wraps, when it has no name of its own (a ListItem's `item`),
+/// else itself.
+fn unwrapped(map: &Map<String, Value>) -> &Map<String, Value> {
+    if map.contains_key("name") {
+        return map;
+    }
+    let mut wrapped = map.values().filter_map(Value::as_object).filter(|o| !types(o).is_empty());
+    match (wrapped.next(), wrapped.next()) {
+        (Some(inner), None) => inner,
+        _ => map,
+    }
+}
+
+/// A thing's block, then each thing it lists, when it is not itself in a list.
+fn thing(map: &Map<String, Value>, in_list: bool, out: &mut Vec<String>) {
+    let map = if in_list { unwrapped(map) } else { map };
+    let kind = types(map).first().map(|k| short(k).to_string()).unwrap_or_else(|| "Thing".into());
+    let mut keys: Vec<&String> = map.keys().filter(|k| !NODE_KEYS.contains(&k.as_str())).collect();
+    // The name first, then the other keys in the map's order.
+    keys.sort_by_key(|k| *k != "name");
+    let lists: Vec<&String> =
+        if in_list { Vec::new() } else { keys.iter().copied().filter(|k| list_of(&map[*k]).is_some()).collect() };
+    let mut values = Vec::new();
+    for key in keys.iter().filter(|k| !lists.contains(k)) {
+        flatten(key, &map[*key], &mut values);
+    }
+    // A value said again under a path of the same last name (an offer's url that is the event's) is said once.
+    let mut seen = std::collections::HashSet::new();
+    let mut text = format!("{kind} (JSON-LD): ");
+    let mut said = 0;
+    for (path, value) in &values {
+        if !seen.insert((path.rsplit('.').next().unwrap_or(path), value.as_str())) {
+            continue;
+        }
+        let part = format!("{}{path}: {value}", if said > 0 { "; " } else { "" });
+        if said > 0 && text.chars().count() + part.chars().count() > MAX_ITEM_CHARS {
+            continue;
+        }
+        text.push_str(&part);
+        said += 1;
+    }
+    if said > 0 && !out.contains(&text) {
+        out.push(text);
+    }
+    for key in lists {
+        for element in list_of(&map[key]).into_iter().flatten() {
+            thing(element, true, out);
+        }
+    }
+}
+
+/// Every value under `path`, with its path: a text with its spaces collapsed and cut to MAX_VALUE_CHARS (a link kept whole),
+/// a number or a yes/no as written, each value of a list, and an object's values under their own paths. A schema.org term
+/// ("https://schema.org/InStock") is the vocabulary's word, not the page's, and a language-tagged value (`@value`) is its
+/// object's.
+fn flatten(path: &str, value: &Value, out: &mut Vec<(String, String)>) {
+    match value {
+        Value::String(s) => {
+            let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+            let link = s.starts_with("https://") || s.starts_with("http://");
+            if s.is_empty() || ["https://schema.org/", "http://schema.org/"].iter().any(|p| s.starts_with(p)) {
+                return;
+            }
+            let s = if link || s.chars().count() <= MAX_VALUE_CHARS {
+                s
+            } else {
+                format!("{}…", s.chars().take(MAX_VALUE_CHARS).collect::<String>())
+            };
+            out.push((path.to_string(), s));
+        }
+        Value::Number(n) => out.push((path.to_string(), n.to_string())),
+        Value::Bool(b) => out.push((path.to_string(), b.to_string())),
+        Value::Object(map) => {
+            for (key, child) in map.iter().filter(|(k, _)| !NODE_KEYS.contains(&k.as_str())) {
+                let inner = if key == "@value" { path.to_string() } else { format!("{path}.{key}") };
+                flatten(&inner, child, out);
+            }
+        }
+        Value::Array(values) => values.iter().for_each(|v| flatten(path, v, out)),
+        Value::Null => {}
+    }
+}
+
 /// The most product photos one page gives from its JSON-LD: a listing of many products stays short.
 const MAX_IMAGES: usize = 8;
 
@@ -260,6 +419,65 @@ mod tests {
     fn the_image_of_anything_but_a_product_or_an_offer_is_not_a_product_photo() {
         let html = r#"<script type="application/ld+json">{"@type":"Article","image":"https://cdn.example.test/news.jpg"}</script>"#;
         assert!(photos(html).is_empty());
+    }
+
+    fn item_texts(html: &str) -> Vec<String> {
+        items(html, 0).into_iter().map(|b| b.text).collect()
+    }
+
+    #[test]
+    fn a_listing_gives_each_element_with_every_value_it_holds_under_its_path() {
+        // Each ListItem gives way to its item. The offer stays the event's, and the performer's name, the event's own, is said once.
+        let html = r#"<script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","numberOfItems":3,"itemListElement":[
+            {"@type":"ListItem","position":1,"item":{"@type":"MusicEvent","name":"Lola Índigo","startDate":"2027-03-14","endDate":"2027-03-14",
+              "location":{"@type":"Place","name":"WiZink Center","address":{"addressLocality":"Madrid"}},
+              "offers":[{"@type":"Offer","price":25,"priceCurrency":"EUR","availability":"https://schema.org/InStock"}],
+              "performer":[{"@type":"Person","name":"Lola Índigo"}],"description":"  Gira   2027. "}},
+            {"@type":"ListItem","position":2,"item":{"@type":"JobPosting","title":"Cook","baseSalary":{"value":{"minValue":1500}}}},
+            {"@type":"ListItem","position":3,"name":"Tosca","url":"https://venue.example.test/tosca"}]}</script>"#;
+        assert_eq!(
+            item_texts(html),
+            [
+                "ItemList (JSON-LD): numberOfItems: 3",
+                "MusicEvent (JSON-LD): name: Lola Índigo; description: Gira 2027.; endDate: 2027-03-14; location.address.addressLocality: Madrid; location.name: WiZink Center; offers.price: 25; offers.priceCurrency: EUR; startDate: 2027-03-14",
+                "JobPosting (JSON-LD): baseSalary.value.minValue: 1500; title: Cook",
+                "ListItem (JSON-LD): name: Tosca; position: 3; url: https://venue.example.test/tosca"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_product_keeps_its_offers_and_photos_and_a_pages_main_entity_and_graph_are_read() {
+        let html = r#"<script type="application/ld+json">{"@type":"CollectionPage","name":"Agenda","mainEntity":
+            {"@type":"Product","name":[{"@value":"Taza","@language":"es"}],"image":[{"@type":"ImageObject","url":"https://cdn.example.test/1.jpg"}],
+             "offers":[{"@type":"Offer","price":5},{"@type":"Offer","price":7}]}}</script>
+            <script type="application/ld+json">{"@type":"WebPage","@graph":[{"@type":"BreadcrumbList","itemListElement":[
+              {"@type":"ListItem","name":"A"},{"@type":"ListItem","name":"B"},{"@type":"ListItem","name":"C"}]},
+              {"@type":"Place","name":"Teatro Real","event":[{"@type":"Event","name":"Tosca"},{"@type":"Event","name":"Aida"},{"@type":"Event","name":"Norma"}]}]}</script>"#;
+        assert_eq!(
+            item_texts(html),
+            [
+                "Product (JSON-LD): name: Taza; image.url: https://cdn.example.test/1.jpg; offers.price: 5; offers.price: 7",
+                "Place (JSON-LD): name: Teatro Real",
+                "Event (JSON-LD): name: Tosca",
+                "Event (JSON-LD): name: Aida",
+                "Event (JSON-LD): name: Norma"
+            ]
+        );
+    }
+
+    #[test]
+    fn items_are_structured_numbered_from_the_given_index_a_long_text_is_cut_but_not_a_link_and_a_repeat_is_kept_once()
+    {
+        let long = "word ".repeat(100);
+        let link = format!("https://cdn.example.test/{}", "x".repeat(300));
+        let one = format!(
+            r#"<script type="application/ld+json">{{"@type":"Event","name":"X","description":"{long}","url":"{link}"}}</script>"#
+        );
+        let b = items(&format!("{one}{one}"), 5);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].i, b[0].kind), (5, Kind::Structured));
+        assert!(b[0].text.contains("…;") && b[0].text.ends_with(&link));
     }
 
     #[test]

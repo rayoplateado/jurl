@@ -109,7 +109,7 @@ pub(crate) struct Args {
     #[arg(long)]
     pub(crate) json: bool,
     /// With --json: the text of every page the run loaded, as `pages`, in load order (also the ones the answer doesn't come
-    /// from). A miss or an error prints the JSON too, with `error`
+    /// from), and the things each page's JSON-LD lists. A miss or an error prints the JSON too, with `error`
     #[arg(long)]
     pub(crate) with_pages: bool,
     /// Per-phase timings on stderr
