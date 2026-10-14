@@ -434,10 +434,21 @@ async fn load_page(
         extract::json_ld::add_to(&mut ex, &page.body);
     }
     // `--with-pages` lists the page as the run reads it: the blocks a -q read is given, and apart from them the things its
-    // JSON-LD lists (see `extract::json_ld::items`), so a list read can take its rows from the page's own data.
+    // JSON-LD lists (see `extract::json_ld::items`), so a list read can take its rows from the page's own data, and under
+    // --with-sources and --recipe the lists its data holds and the rows a recipe takes from them (see `extract::sources`).
     if args.with_pages {
-        let items = if page.is_markdown { Vec::new() } else { extract::json_ld::items(&page.body, 0) };
-        args.pages_log.record(number, &page.url, served, &ex.blocks, items);
+        let mut data = output::PageData::default();
+        if !page.is_markdown {
+            data.items = extract::json_ld::items(&page.body, 0);
+            if args.with_sources || args.recipe.is_some() {
+                let own = extract::sources::data_of(&page.body);
+                if args.with_sources {
+                    data.sources = extract::sources::lists(&own);
+                }
+                data.recipe = args.recipe.as_ref().map(|r| extract::sources::apply(&own, r));
+            }
+        }
+        args.pages_log.record(number, &page.url, served, &ex.blocks, data);
     }
     Ok((page.url, ex, served))
 }

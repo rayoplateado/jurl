@@ -112,6 +112,16 @@ pub(crate) struct Args {
     /// from), and the things each page's JSON-LD lists. A miss or an error prints the JSON too, with `error`
     #[arg(long)]
     pub(crate) with_pages: bool,
+    /// With --with-pages: also the lists of things each page's own data holds (its JSON-LD, its JSON scripts such as
+    /// `__NEXT_DATA__`, and the objects its scripts assign), as `sources`: where each list is, how many it holds, and its
+    /// first elements as `path: value` lines, to write a --recipe from
+    #[arg(long, requires = "with_pages")]
+    pub(crate) with_sources: bool,
+    /// With --with-pages: take each page's `rows` from its own data with this recipe, with no model. JSON:
+    /// `{"source": "json:__NEXT_DATA__", "path": ["props", "events"], "fields": {"title": ["name"], "date": ["dates", "start"]}}`.
+    /// A step ending in `*` is the one key that starts with it. Each value is the page's own, as written
+    #[arg(long, value_name = "JSON", requires = "with_pages", value_parser = crate::extract::sources::parse_recipe)]
+    pub(crate) recipe: Option<crate::extract::sources::Recipe>,
     /// Per-phase timings on stderr
     #[arg(short, long)]
     pub(crate) timing: bool,
