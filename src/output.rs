@@ -182,8 +182,11 @@ pub(crate) fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::U
             if args.with_pages {
                 o.insert("pages".to_string(), args.pages_log.json()?);
             }
-            // A `--pages` read that read all its pages says where its list goes on (see `paging::ListNext`).
-            if let Some(next) = args.list_next.get() {
+            // A `--pages` read that read all its pages says where its list goes on (see `paging::ListNext`), when it was judged: a run
+            // that failed after reading them is read again from the start.
+            if (done.is_ok() || done.as_ref().is_err_and(is_not_found))
+                && let Some(next) = args.list_next.get()
+            {
                 o.insert("next_page".to_string(), Value::String(next.into()));
             }
         }
