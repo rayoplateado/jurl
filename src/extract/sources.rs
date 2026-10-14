@@ -61,12 +61,10 @@ pub enum Applied {
 /// A page's data, read once for both `lists` and `apply`: each piece under the name a recipe gives it.
 pub struct Data(Vec<(String, Value)>);
 
-/// Reads `--recipe`: a JSON object with `source`, `path` and `fields`, each field a path.
+/// Reads `--recipe`: a JSON object with `source`, `path` (empty for data that is itself the list) and `fields`, each field a
+/// path.
 pub fn parse_recipe(text: &str) -> Result<Recipe, String> {
     let recipe: Recipe = serde_json::from_str(text).map_err(|e| format!("not a recipe: {e}"))?;
-    if recipe.path.is_empty() {
-        return Err("not a recipe: `path` names no list".to_string());
-    }
     if let Some(name) = recipe.fields.iter().find(|(_, path)| path.is_empty()).map(|(name, _)| name) {
         return Err(format!("not a recipe: the path of `{name}` is empty"));
     }
@@ -390,7 +388,8 @@ mod tests {
         assert!(parse_recipe(r#"{"source":"ld:0","path":["a"],"fields":{"name":["name"]}}"#).is_ok());
         assert!(parse_recipe(r#"{"source":"ld:0","path":["a"],"fields":{"name":"name"}}"#).is_err());
         assert!(parse_recipe(r#"{"source":"ld:0","path":["a"],"fields":{"name":[]}}"#).unwrap_err().contains("`name`"));
-        assert!(parse_recipe(r#"{"source":"ld:0","path":[],"fields":{}}"#).is_err());
+        // An empty path is the data itself: a JSON-LD script that is a list of things.
+        assert!(parse_recipe(r#"{"source":"ld:0","path":[],"fields":{"name":["name"]}}"#).is_ok());
         assert!(parse_recipe(r#"{"source":"ld:0","path":["a"],"fields":{},"extra":1}"#).is_err());
     }
 }
