@@ -386,6 +386,22 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
             }
         }
     }
+    // Every page given was read: the page after the last one, when the page itself links it, is where the list goes on, for a later read
+    // to start at. A guessed page is not: nothing shows the list goes on (the pages read after a guess are checked for new rows, and a later
+    // read starting there could not be). Only `--json` prints it.
+    if args.json
+        && pages.len() >= args.pages
+        && let Some(next) = pages.last().and_then(|(_, last_ex)| last_ex.next_page.clone())
+        && !pages.iter().any(|(u, _)| *u == next)
+    {
+        let host = next.host_str().unwrap_or_default().to_string();
+        if !robots.contains_key(&host) {
+            robots.insert(host.clone(), follow::Robots::load(&next, retry).await);
+        }
+        if robots[&host].allows(&next) {
+            args.list_next.set(next);
+        }
+    }
     paging::merge(pages)
 }
 

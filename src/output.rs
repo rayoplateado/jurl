@@ -182,6 +182,13 @@ pub(crate) fn stdout_for(args: &Args, done: &Result<Rendered>, usage: &decide::U
             if args.with_pages {
                 o.insert("pages".to_string(), args.pages_log.json()?);
             }
+            // A `--pages` read that read all its pages says where its list goes on (see `paging::ListNext`), when it was judged: a run
+            // that failed after reading them is read again from the start.
+            if (done.is_ok() || done.as_ref().is_err_and(is_not_found))
+                && let Some(next) = args.list_next.get()
+            {
+                o.insert("next_page".to_string(), Value::String(next.into()));
+            }
         }
         Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
     };
@@ -376,6 +383,34 @@ mod tests {
         assert_eq!(stdout_for(&args, &done, &usage).unwrap().expect("JSON"), plain);
         let expected = json!({ "answer": "$8", "usage": usage.json(&args.fallback) });
         assert_eq!(plain, format!("{}\n", serde_json::to_string_pretty(&expected).unwrap()));
+    }
+
+    #[test]
+    fn a_list_that_goes_on_after_its_pages_says_where() {
+        let mut args = Args::parse_from([
+            "jurl",
+            "--json",
+            "--with-pages",
+            "--pages",
+            "3",
+            "-q",
+            "the events",
+            "https://x.com/agenda",
+        ]);
+        prepare(&mut args).unwrap();
+        let usage = decide::Usage::new();
+        let done = Ok(Rendered { text: String::new(), json: json!({ "answer": "Tosca" }) });
+        let json_of = |args: &Args| -> Value {
+            serde_json::from_str(&stdout_for(args, &done, &usage).unwrap().expect("JSON")).unwrap()
+        };
+        assert!(json_of(&args).get("next_page").is_none(), "a list that ended says nothing");
+        args.list_next.set(Url::parse("https://x.com/agenda?page=4").unwrap());
+        assert_eq!(json_of(&args)["next_page"], "https://x.com/agenda?page=4");
+        // A miss says it too: the pages after it may still list the items.
+        let v: Value =
+            serde_json::from_str(&stdout_for(&args, &Err(not_found("none".into())), &usage).unwrap().expect("JSON"))
+                .unwrap();
+        assert_eq!(v["next_page"], "https://x.com/agenda?page=4");
     }
 
     #[test]

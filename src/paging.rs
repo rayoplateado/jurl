@@ -4,9 +4,27 @@
 //! `?e5273e04_page=2`), or the segments `page/3` at the end of the path (`/blog/page/3/`), and the link differs from the
 //! current page in nothing else. The text of a link is never read, so this holds on a page in any language.
 
+use std::sync::{Mutex, PoisonError};
+
 use url::Url;
 
 use crate::extract::{Block, Extracted};
+
+/// Where a `--pages` read's list goes on, when it read all the pages it was given and the last one names a next page that its
+/// robots.txt lets jurl read: `--json` gives it as `next_page`, so a later read can start there and read on from the page after
+/// the last one, without reading the earlier ones again. Its own to each run, as the pages log is.
+#[derive(Default)]
+pub(crate) struct ListNext(Mutex<Option<Url>>);
+
+impl ListNext {
+    pub(crate) fn set(&self, next: Url) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(next);
+    }
+
+    pub(crate) fn get(&self) -> Option<Url> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+}
 
 /// A URL with its page number taken out: the scheme and host, the path without the page's segments, the other query
 /// parameters sorted, and the number. A URL with no page number is page 1 of itself.
