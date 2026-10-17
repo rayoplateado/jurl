@@ -780,7 +780,7 @@ fn shape(el: ElementRef, depth: usize) -> String {
     let kids: Vec<String> = el
         .children()
         .filter_map(ElementRef::wrap)
-        .filter(|c| !SKIP.contains(&c.value().name()) && !(INLINE.contains(&c.value().name()) && !has_block_desc(*c)))
+        .filter(|c| !skipped_tag(*c) && !(INLINE.contains(&c.value().name()) && !has_block_desc(*c)))
         .take(SHAPE_CHILDREN)
         .map(|c| shape(c, depth - 1))
         .collect();
@@ -825,7 +825,27 @@ fn has_skipped_ancestor(el: ElementRef, skip_header: bool) -> bool {
 /// `image_skipped` makes by passing `skip_hidden = false`.
 fn skipped(el: ElementRef, skip_header: bool, skip_hidden: bool) -> bool {
     let name = el.value().name();
-    SKIP.contains(&name) || (skip_header && name == "header") || chrome(el) || (skip_hidden && hidden(el))
+    skipped_tag(el) || (skip_header && name == "header") || chrome(el) || (skip_hidden && hidden(el))
+}
+
+/// The words of a button that make it content rather than a control: a shop that builds its product cards as buttons
+/// (`<button class="product-cell__content-link">` around the photo, name, format and price) holds more than "Añadir al
+/// carro" or "Ver más".
+const BUTTON_CONTENT_WORDS: usize = 6;
+
+/// Whether the element's tag is one a reader never sees. A button is, unless it holds content: a heading, or at least
+/// `BUTTON_CONTENT_WORDS` words, as a card built as a button does. An icon's image alone keeps a control a control.
+fn skipped_tag(el: ElementRef) -> bool {
+    let name = el.value().name();
+    SKIP.contains(&name) && !(name == "button" && content_button(el))
+}
+
+fn content_button(el: ElementRef) -> bool {
+    let headed = el
+        .descendants()
+        .filter_map(ElementRef::wrap)
+        .any(|d| matches!(d.value().name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6"));
+    headed || el.text().flat_map(str::split_whitespace).nth(BUTTON_CONTENT_WORDS - 1).is_some()
 }
 
 /// An image is skipped like any element, except that a hidden carousel slide still counts: sliders hide every slide
@@ -1033,6 +1053,40 @@ mod tests {
             ]
         );
         assert!(html("<p>no alternates</p>", &base).alternates.is_empty());
+    }
+
+    #[test]
+    fn a_card_built_as_a_button_is_read_and_a_control_button_is_not() {
+        let card = |name: &str| {
+            format!(
+                r#"<div class="product-cell"><button class="product-cell__content-link"><img src="/{name}.jpg" alt="{name}">
+                <h4>{name}</h4><div><span>Garrafa</span> <span>5 L</span></div><p>17,25 €/ud.</p></button>
+                <button aria-label="Añadir al carro">Añadir al carro</button></div>"#
+            )
+        };
+        let page = format!(
+            "<body><main><h1>Aceite, vinagre y sal</h1>{}{}{}<button>Ver más</button></main></body>",
+            card("Aceite de oliva Hacendado"),
+            card("Aceite de girasol Hacendado"),
+            card("Vinagre de vino Hacendado")
+        );
+        let ex = html(&page, &base());
+        let text: Vec<&str> = ex.blocks.iter().map(|b| b.text.as_str()).collect();
+        let all = text.join("\n");
+        assert!(all.contains("Aceite de oliva Hacendado"), "{all}");
+        assert!(all.contains("17,25 €/ud."), "{all}");
+        assert!(!all.contains("Añadir al carro") && !all.contains("Ver más"), "{all}");
+        // A long button with no heading is content too; a short one with an icon is a control.
+        let long = html(
+            "<body><main><p>Intro text for the page.</p><button>Aceite de oliva virgen extra Garrafa 3 L 12,50 €</button></main></body>",
+            &base(),
+        );
+        assert!(long.blocks.iter().any(|b| b.text.contains("12,50 €")));
+        let icon = html(
+            r#"<body><main><p>Intro text for the page.</p><button><img src="/x.svg" alt="Cerrar">Cerrar</button></main></body>"#,
+            &base(),
+        );
+        assert!(icon.blocks.iter().all(|b| !b.text.contains("Cerrar")));
     }
 
     #[test]
