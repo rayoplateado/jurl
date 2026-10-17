@@ -1131,6 +1131,50 @@ mod tests {
     }
 
     #[test]
+    fn a_card_that_shows_its_price_before_its_name_takes_the_photo_its_alt_names() {
+        let card = |photo: &str, alt: &str, name: &str| {
+            format!(
+                r#"<div class="product-card"><div><img src="/{photo}.jpg" alt="{alt}"></div>
+                <p>18,95 €</p><p>3,79 €/l</p><h2>{name}</h2></div>"#
+            )
+        };
+        let page = format!(
+            "<body><main><h1>Aceites</h1>{}{}{}{}{}</main></body>",
+            card(
+                "virgen",
+                "Aceite de oliva virgen extra Aromas del Sur 5 l.",
+                "Aceite de oliva virgen extra Aromas del Sur 5 l."
+            ),
+            // Case and spacing aside, the alt is the name.
+            card("girasol", "aceite  de girasol   Koipesol 1 l.", "Aceite de girasol Koipesol 1 l."),
+            // An alt that describes the picture names no block.
+            card("generic", "Imagen del producto", "Imagen del producto"),
+            // Two cards with the one line: the alt can't tell which is its own.
+            card("twin-a", "Vinagre de vino tinto", "Vinagre de vino tinto"),
+            card("twin-b", "Vinagre de vino tinto", "Vinagre de vino tinto")
+        );
+        let ex = html(&page, &base());
+        let photos: Vec<(&str, Option<&str>)> = ex
+            .blocks
+            .iter()
+            .filter(|b| b.text.contains("18,95 €"))
+            .map(|b| (b.text.lines().last().unwrap_or_default(), b.image.as_deref()))
+            .collect();
+        assert_eq!(
+            photos,
+            [
+                ("Aceite de oliva virgen extra Aromas del Sur 5 l.", Some("https://example.com/virgen.jpg")),
+                ("Aceite de girasol Koipesol 1 l.", Some("https://example.com/girasol.jpg")),
+                ("Imagen del producto", None),
+                ("Vinagre de vino tinto", None),
+                ("Vinagre de vino tinto", None),
+            ],
+            "{:?}",
+            ex.blocks
+        );
+    }
+
+    #[test]
     fn a_card_s_format_or_price_names_no_block_only_its_title_does() {
         // Link-wrapped cards: the image's card is the link's whole text, title first, then a format and a price many cards share.
         let card = |photo: &str, name: &str| {
