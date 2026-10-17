@@ -1291,10 +1291,15 @@ async fn end_render_meter(fallback: &Fallback, meter: Option<Meter>) {
     fallback.count_render_wire(wire);
 }
 
+/// The script a render runs before the page's own: it keeps the JSON the page fetches from its own site in the DOM it
+/// returns, so a page built from its data still has that data to read (see the script).
+const RENDER_CAPTURE: &str = include_str!("render_capture.js");
+
 /// The DOM Lightpanda returns for `url`, run with the arguments `proxy` (none for a direct render).
 async fn dom_of(bin: &Path, url: &Url, proxy: &[String]) -> Result<String> {
     let run = Command::new(bin)
         .args(["fetch", "--json", "--dump", "html", "--wait-until", "networkalmostidle", "--wait-ms", "8000"])
+        .args(["--inject-script", RENDER_CAPTURE])
         .args(["--wait-script", "document.body && (document.body.innerText || '').trim().length > 1500"])
         .args(proxy)
         .arg(url.as_str())
@@ -3087,8 +3092,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jurl-render-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a test directory");
         let bin = dir.join("lightpanda");
-        // A stand-in Lightpanda that fails and says its arguments, as the browser's own error might.
-        std::fs::write(&bin, "#!/bin/sh\nprintf '{\"http_status\":0,\"content\":\"\",\"error\":\"%s\"}' \"$*\"\n")
+        // A stand-in Lightpanda that fails and says its arguments, as the browser's own error might, on one line and with no
+        // quotes or backslashes (the capture script has them), so its JSON stays JSON.
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nprintf '{\"http_status\":0,\"content\":\"\",\"error\":\"%s\"}' \"$(printf '%s' \"$*\" | tr '\\n\\t\"\\\\' '    ')\"\n",
+        )
             .expect("the stand-in");
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("executable");
         let fallback = Fallback::with(Some("http://jurlcred:s3cret-pw@proxy.test:8080"), true);
@@ -3099,6 +3108,22 @@ mod tests {
         assert!(text.contains("proxy"), "the proxy is named by its place-holder: {text}");
         assert_eq!(fallback.renders(), 1, "the render was counted as it started");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_render_runs_the_capture_script_before_the_page_and_its_json_is_the_page_s_data() {
+        // A stand-in Lightpanda that renders only when it is given the capture script, and returns the DOM it would leave.
+        let script = r#"case "$*" in *--inject-script*fetch:*) printf '%s' '{"http_status":200,"headers":[],"content":"<html><head><script type=\"application/json\" id=\"fetch:/api/items\">[{\"n\":1},{\"n\":2},{\"n\":3}]</script></head><body><p>Items</p></body></html>"}' ;; *) printf '%s' '{"http_status":200,"headers":[],"content":""}' ;; esac"#;
+        let bin = stand_in("capture", script);
+        let url = Url::parse("http://93.184.216.34/shop").expect("a URL");
+        let page = render(&bin, &url, &Fallback::with(None, false)).await.expect("rendered with the script");
+        let lists = crate::extract::sources::lists(&crate::extract::sources::data_of(&page.body));
+        assert_eq!(
+            lists.iter().map(|l| (l.source.as_str(), l.count)).collect::<Vec<_>>(),
+            [("json:fetch:/api/items", 3)]
+        );
+        let _ = std::fs::remove_dir_all(bin.parent().expect("a directory"));
     }
 
     #[test]
