@@ -7,6 +7,7 @@
 use serde::Serialize;
 use url::Url;
 
+mod block_images;
 mod cards;
 mod html;
 mod join;
@@ -62,6 +63,11 @@ pub struct Block {
     /// alone doesn't carry it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<String>,
+    /// The picture of what the block is about, when the page shows one beside it: an image whose card (see `Image::card`) is
+    /// the block's first line, as a shop's product card shows its photo above its name (see `block_images`). A list read takes
+    /// an item's photo from here: the text alone doesn't carry it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 impl Block {
@@ -78,6 +84,7 @@ impl Block {
             record: None,
             page: None,
             links: Vec::new(),
+            image: None,
         }
     }
 

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use scraper::{ElementRef, Html, Node, Selector};
 use url::Url;
 
+use super::block_images;
 use super::cards::{self, Member};
 use super::join::join_short;
 use super::{
@@ -44,13 +45,15 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
     let site_links = collect_site_links(doc, base);
     let mut blocks = join_short(walk(doc, root, in_body, base));
     cards::number_records(&mut blocks);
+    let images = collect_images(doc, root, in_body, base);
+    block_images::attach(&mut blocks, &images);
     Extracted {
         title: collapse(&page_title(doc)),
         lang: declared_lang(doc),
         alternates: alternates(doc, base),
         blocks,
         structured: Vec::new(),
-        images: collect_images(doc, root, in_body, base),
+        images,
         links: collect_links(root, in_body, base),
         next_page: next_page(doc, &site_links, base),
         site_links,
@@ -415,7 +418,19 @@ impl<'a> Walker<'a> {
         }
         let i = self.blocks.len();
         let list = (kind == Kind::Item).then_some(self.list).flatten();
-        self.blocks.push(Block { i, kind, level, lang, text, list, href, record: None, page: None, links });
+        self.blocks.push(Block {
+            i,
+            kind,
+            level,
+            lang,
+            text,
+            list,
+            href,
+            record: None,
+            page: None,
+            links,
+            image: None,
+        });
     }
 
     fn flush(&mut self) {
@@ -1081,6 +1096,60 @@ mod tests {
             ]
         );
         assert!(html("<p>no alternates</p>", &base).alternates.is_empty());
+    }
+
+    #[test]
+    fn a_card_s_photo_goes_with_its_name_and_two_cards_of_one_name_take_theirs_in_order() {
+        let card = |photo: &str, name: &str, format: &str| {
+            format!(
+                r#"<div class="product-cell"><button class="product-cell__content-link"><div><img src="/{photo}.jpg" alt=""></div>
+                <h4>{name}</h4><div><span>{format}</span></div><p>3,70 €/ud.</p></button></div>"#
+            )
+        };
+        let page = format!(
+            r#"<body><main><h1>Aceite de oliva</h1><a href="/"><img src="/logo.svg" alt="Logo"></a>{}{}{}</main></body>"#,
+            card("garrafa", "Aceite de oliva 0,4º Hacendado", "Garrafa 5 L"),
+            card("botella", "Aceite de oliva 0,4º Hacendado", "Botella 1 L"),
+            card("virgen", "Aceite de oliva virgen extra Hacendado", "Botella 1 L")
+        );
+        let ex = html(&page, &base());
+        let photos: Vec<(&str, Option<&str>)> = ex
+            .blocks
+            .iter()
+            .filter(|b| b.text.contains("€"))
+            .map(|b| (b.text.lines().nth(1).unwrap_or_default(), b.image.as_deref()))
+            .collect();
+        assert_eq!(
+            photos,
+            [
+                ("Garrafa 5 L", Some("https://example.com/garrafa.jpg")),
+                ("Botella 1 L", Some("https://example.com/botella.jpg")),
+                ("Botella 1 L", Some("https://example.com/virgen.jpg")),
+            ]
+        );
+        assert!(ex.blocks.iter().all(|b| b.image.as_deref() != Some("https://example.com/logo.svg")));
+    }
+
+    #[test]
+    fn a_card_s_format_or_price_names_no_block_only_its_title_does() {
+        // Link-wrapped cards: the image's card is the link's whole text, title first, then a format and a price many cards share.
+        let card = |photo: &str, name: &str| {
+            format!(
+                r#"<div class="tile"><a href="/p/{photo}"><img src="/{photo}.jpg" alt=""><span>{name}</span><br><span>Botella 1 L</span><br><span>3,70 €</span></a></div>"#
+            )
+        };
+        let page = format!(
+            "<body><main><p>Botella 1 L</p><p>Our oils, from the mill to the table.</p>{}{}{}</main></body>",
+            card("a", "Aceite de oliva Hacendado"),
+            card("b", "Aceite de girasol Hacendado"),
+            card("c", "Vinagre de vino Hacendado")
+        );
+        let ex = html(&page, &base());
+        assert!(
+            ex.blocks.iter().filter(|b| !b.text.contains("Hacendado")).all(|b| b.image.is_none()),
+            "{:?}",
+            ex.blocks
+        );
     }
 
     #[test]
