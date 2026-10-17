@@ -165,8 +165,9 @@ fn split_at(u: &Url, at: &Position) -> Option<(Slot, u64)> {
 /// id is one), nor are numbers that go up by 1 (ids, years: a page number named otherwise is not read as one), nor a name
 /// that says the number is a filter, a sort or a page size (`NOT_A_POSITION`), nor a number from `MAX_POSITION` up (a date).
 ///
-/// When the page numbers its records, the step must be how many it holds: a page of 24 steps by 24, so a radius, a discount
-/// or a date that steps evenly is not taken for the list's pages. Then a query parameter that a single link to the same list
+/// When the page numbers its records, the step must be at most how many it holds and at least half that: a page of 24 steps
+/// by 12 to 24, so a carousel or promo tiles beside the list (24 products and 8 tiles are 32 records) still let it step by
+/// 24, while page sizes (48, 96) step by more than the page holds and a radius or a discount by less. Then a query parameter that a single link to the same list
 /// sets to the current page's number plus the page's records (`?offset=24` from a first page of 24, through a pager that
 /// only says "next") is enough; a path's number never is, nor a link two pages on. A pager whose "last" link is not a whole
 /// number of steps on (`?offset=44` beside `?offset=24`) breaks the rule that every number is, so it is not read as one.
@@ -198,7 +199,7 @@ fn stepped_next(current: &Url, links: &[&Url], items: Option<u64>) -> Option<Url
             return link_to(c.checked_add(n)?);
         }
         let step = values.windows(2).map(|w| w[1] - w[0]).min()?;
-        if items.is_some_and(|n| n != step) {
+        if items.is_some_and(|n| step < n / 2 || step > n) {
             return None;
         }
         let regular = (2..=MAX_STEP).contains(&step) && values.iter().all(|v| v.abs_diff(c) % step == 0);
@@ -498,7 +499,7 @@ mod tests {
         let links = ["https://x.test/shoes", "https://x.test/shoes/48", "https://x.test/shoes/24"];
         assert_eq!(next("https://x.test/shoes/24", &links).as_deref(), Some("https://x.test/shoes/48"));
         assert_eq!(next_of("https://x.test/shoes/24", &links, 24).as_deref(), Some("https://x.test/shoes/48"));
-        assert_eq!(next_of("https://x.test/shoes/24", &links, 20), None, "a page of 20 steps by 20");
+        assert_eq!(next_of("https://x.test/shoes/24", &links, 20), None, "a page of 20 steps by 20 at most");
     }
 
     #[test]
@@ -512,6 +513,14 @@ mod tests {
         let pager = ["https://x.test/c?offset=24", "https://x.test/c?offset=48"];
         assert_eq!(next_of("https://x.test/c", &pager, 24).as_deref(), Some("https://x.test/c?offset=24"));
         assert_eq!(next_of("https://x.test/c", &pager, 12), None, "a step that is not the page's records");
+        // 24 products and 8 promo tiles are 32 records: a step of 24 is still the list's, but one link alone is not.
+        assert_eq!(next_of("https://x.test/c", &pager, 32).as_deref(), Some("https://x.test/c?offset=24"));
+        assert_eq!(next_of("https://x.test/c", &pager[..1], 32), None, "one link must be exactly one page on");
+        // A page size under a neutral name steps by more than the page holds, a radius by much less.
+        let sizes = ["https://x.test/c?s=48", "https://x.test/c?s=96"];
+        assert_eq!(next_of("https://x.test/c", &sizes, 24), None, "page sizes");
+        let radii = ["https://x.test/c?r=10", "https://x.test/c?r=20", "https://x.test/c?r=30"];
+        assert_eq!(next_of("https://x.test/c", &radii, 24), None, "a filter that steps by 10");
         // One link that is not one page on, a path's number, a page of one record, or the previous page alone are not enough.
         assert_eq!(next_of("https://x.test/c", &["https://x.test/c?offset=30"], 24), None);
         assert_eq!(next_of("https://x.test/c", &["https://x.test/c?offset=48"], 24), None, "two pages on");
