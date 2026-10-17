@@ -63,8 +63,9 @@ pub struct Block {
     /// alone doesn't carry it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<String>,
-    /// The picture of what the block is about, when the page shows one beside it: an image whose card (see `Image::card`) is
-    /// the block's first line, as a shop's product card shows its photo above its name (see `block_images`). A list read takes
+    /// The picture of what the block is about, when the page shows one beside it: an image whose card's title (see
+    /// `Image::card`) is the block's first line, as a shop's product card shows its photo above its name, or, for a card that
+    /// shows its price first, the one line of the block its title or alt names (see `block_images`). A list read takes
     /// an item's photo from here: the text alone doesn't carry it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
@@ -113,7 +114,7 @@ pub struct Image {
     pub alt: String,
     pub caption: String,
     /// The words around the image that name what it is of, when its own alt text and file name don't: its `title`, the
-    /// text of the link it sits in, or its card's heading (see `html::set_card`).
+    /// text of the link it sits in (led by the link's one heading), or its card's heading (see `html::set_card`).
     pub card: String,
     pub width: Option<u32>,
     pub height: Option<u32>,

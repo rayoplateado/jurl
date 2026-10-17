@@ -698,7 +698,7 @@ mod tests {
             <img alt="Marta Minujín, La Destrucción, 1963" src="/marta-minujin-expo.jpg"></a></li></ul>
             <p>Visita las exposiciones temporales del museo.</p></main></body></html>"#;
         let ex = crate::extract::html(page, &url);
-        assert_eq!(ex.images[0].card, "Exposición\nLa Menesunda según Marta Minujín\nDel 18 nov 2026 al 08 mar 2027");
+        assert_eq!(ex.images[0].card, "La Menesunda según Marta Minujín\nExposición\nDel 18 nov 2026 al 08 mar 2027");
         let asked = judge_items(&ex, Some("Poster of La Menesunda"));
         assert_eq!(asked[0].state["card"], json!(ex.images[0].card));
         assert_eq!(asked[0].state["page_title"], json!("Exposiciones"));

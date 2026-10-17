@@ -222,9 +222,10 @@ const CARD_MAX_CHARS: usize = 200;
 const CARD_DEPTH: usize = 4;
 
 /// Gives the image at `at` the words around `el` that name it (see `Image::card`), unless it already has some: the
-/// `title` of its `img` when the alt text took the alt's place, then the text of the link it sits in, else (no link, or a
-/// link around the picture alone) the heading of its card: the nearest of its first ancestors that holds one heading, as a
-/// listing's card holds its show's name.
+/// `title` of its `img` when the alt text took the alt's place, then the text of the link it sits in, its lines led by the
+/// link's one heading when it wraps a whole card (whose text may open with a badge or a price), else (no link, or a link around the picture
+/// alone) the heading of its card: the nearest of its first ancestors that holds one heading, as a listing's card holds
+/// its show's name.
 fn set_card(images: &mut [Image], at: Option<usize>, el: ElementRef, img: Option<ElementRef>) {
     let Some(image) = at.and_then(|at| images.get_mut(at)) else { return };
     if !image.card.is_empty() {
@@ -232,23 +233,30 @@ fn set_card(images: &mut [Image], at: Option<usize>, el: ElementRef, img: Option
     }
     let title = img.and_then(|i| i.value().attr("title")).map(collapse).filter(|t| !t.is_empty() && *t != image.alt);
     let ancestors = || el.ancestors().filter_map(ElementRef::wrap);
-    let link = ancestors().find(|a| a.value().name() == "a").map(|link| collapse(&inline_text(link)));
-    let around = link.filter(|text| !text.is_empty()).unwrap_or_else(|| {
-        let headings = sel("h1, h2, h3, h4, h5, h6");
-        ancestors()
-            .take(CARD_DEPTH)
-            .find_map(|a| {
-                let mut found = a.select(&headings);
-                match (found.next(), found.next()) {
-                    (Some(h), None) => Some(collapse(&inline_text(h))),
-                    _ => None,
-                }
-            })
-            .unwrap_or_default()
-    });
+    let headings = sel("h1, h2, h3, h4, h5, h6");
+    let one_heading = |a: ElementRef| {
+        let mut found = a.select(&headings);
+        match (found.next(), found.next()) {
+            (Some(h), None) => Some(collapse(&inline_text(h))),
+            _ => None,
+        }
+    };
+    let link = ancestors().find(|a| a.value().name() == "a");
+    let link_text = link.map(|link| collapse(&inline_text(link))).filter(|text| !text.is_empty());
+    let around: Vec<String> = match (link, link_text) {
+        (Some(link), Some(text)) => match one_heading(link) {
+            Some(heading) => std::iter::once(heading.clone())
+                .chain(text.lines().filter(|l| *l != heading).map(str::to_string))
+                .collect(),
+            None => vec![text],
+        },
+        _ => ancestors().take(CARD_DEPTH).find_map(one_heading).into_iter().collect(),
+    };
     let mut words: Vec<String> = title.into_iter().collect();
-    if !around.is_empty() && !words.contains(&around) {
-        words.push(around);
+    for text in around.into_iter().filter(|t| !t.is_empty()) {
+        if !words.contains(&text) {
+            words.push(text);
+        }
     }
     image.card = words.join("\n").chars().take(CARD_MAX_CHARS).collect();
 }
@@ -1130,44 +1138,150 @@ mod tests {
         assert!(ex.blocks.iter().all(|b| b.image.as_deref() != Some("https://example.com/logo.svg")));
     }
 
-    #[test]
-    fn a_card_that_shows_its_price_before_its_name_takes_the_photo_its_alt_names() {
-        let card = |photo: &str, alt: &str, name: &str| {
-            format!(
-                r#"<div class="product-card"><div><img src="/{photo}.jpg" alt="{alt}"></div>
-                <p>18,95 €</p><p>3,79 €/l</p><h2>{name}</h2></div>"#
-            )
-        };
-        let page = format!(
-            "<body><main><h1>Aceites</h1>{}{}{}{}{}</main></body>",
-            card(
-                "virgen",
-                "Aceite de oliva virgen extra Aromas del Sur 5 l.",
-                "Aceite de oliva virgen extra Aromas del Sur 5 l."
-            ),
-            // Case and spacing aside, the alt is the name.
-            card("girasol", "aceite  de girasol   Koipesol 1 l.", "Aceite de girasol Koipesol 1 l."),
-            // An alt that describes the picture names no block.
-            card("generic", "Imagen del producto", "Imagen del producto"),
-            // Two cards with the one line: the alt can't tell which is its own.
-            card("twin-a", "Vinagre de vino tinto", "Vinagre de vino tinto"),
-            card("twin-b", "Vinagre de vino tinto", "Vinagre de vino tinto")
-        );
-        let ex = html(&page, &base());
-        let photos: Vec<(&str, Option<&str>)> = ex
-            .blocks
+    /// A card that shows its photo, then its price, then its name in `tag`.
+    fn price_first_card(photo: &str, alt: &str, tag: &str, name: &str) -> String {
+        format!(
+            r#"<div class="product-card"><div><img src="/{photo}.jpg" alt="{alt}"></div>
+            <p>18,95 €</p><p>3,79 €/l</p><{tag}>{name}</{tag}></div>"#
+        )
+    }
+
+    /// Each block of a price-first card (by its price line), with its last line and its photo.
+    fn price_first_photos(ex: &Extracted) -> Vec<(&str, Option<&str>)> {
+        ex.blocks
             .iter()
             .filter(|b| b.text.contains("18,95 €"))
             .map(|b| (b.text.lines().last().unwrap_or_default(), b.image.as_deref()))
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn a_card_that_shows_its_price_before_its_name_takes_the_photo_its_heading_names() {
+        let page = format!(
+            "<body><main><h1>Aceites</h1>{}{}{}</main></body>",
+            // No alt: the card's heading names it.
+            price_first_card("virgen", "", "h2", "Aceite de oliva virgen extra Aromas del Sur 5 l."),
+            // An alt that names nothing by itself: the heading still does.
+            price_first_card("oliva", "Aceite", "h2", "Aceite de oliva suave 1 l."),
+            price_first_card("girasol", "Aceite de girasol Koipesol 1 l.", "h2", "Aceite de girasol Koipesol 1 l.")
+        );
+        let ex = html(&page, &base());
         assert_eq!(
-            photos,
+            price_first_photos(&ex),
+            [
+                ("Aceite de oliva virgen extra Aromas del Sur 5 l.", Some("https://example.com/virgen.jpg")),
+                ("Aceite de oliva suave 1 l.", Some("https://example.com/oliva.jpg")),
+                ("Aceite de girasol Koipesol 1 l.", Some("https://example.com/girasol.jpg")),
+            ],
+            "{:?}",
+            ex.blocks
+        );
+    }
+
+    #[test]
+    fn a_price_first_card_with_no_heading_takes_the_photo_its_alt_names() {
+        let page = format!(
+            "<body><main><p>Our oils, from the mill to the table.</p>{}{}{}</main></body>",
+            price_first_card(
+                "virgen",
+                "Aceite de oliva virgen extra Aromas del Sur 5 l.",
+                "p",
+                "Aceite de oliva virgen extra Aromas del Sur 5 l."
+            ),
+            // Case and spacing aside, the alt is the name.
+            price_first_card("girasol", "aceite  de girasol   Koipesol 1 l.", "p", "Aceite de girasol Koipesol 1 l."),
+            price_first_card("vinagre", "Vinagre de Jerez 50 cl.", "p", "Vinagre de Jerez 50 cl.")
+        );
+        let ex = html(&page, &base());
+        assert_eq!(
+            price_first_photos(&ex),
             [
                 ("Aceite de oliva virgen extra Aromas del Sur 5 l.", Some("https://example.com/virgen.jpg")),
                 ("Aceite de girasol Koipesol 1 l.", Some("https://example.com/girasol.jpg")),
-                ("Imagen del producto", None),
-                ("Vinagre de vino tinto", None),
-                ("Vinagre de vino tinto", None),
+                ("Vinagre de Jerez 50 cl.", Some("https://example.com/vinagre.jpg")),
+            ],
+            "{:?}",
+            ex.blocks
+        );
+    }
+
+    #[test]
+    fn an_alt_that_describes_the_picture_or_names_two_blocks_names_none() {
+        let page = format!(
+            "<body><main><p>Our oils, from the mill to the table.</p>{}{}{}</main></body>",
+            price_first_card("generic", "Product image.", "p", "Product image"),
+            price_first_card("twin-a", "Vinagre de vino tinto", "p", "Vinagre de vino tinto"),
+            price_first_card("twin-b", "Vinagre de vino tinto", "p", "Vinagre de vino tinto")
+        );
+        let ex = html(&page, &base());
+        assert_eq!(
+            price_first_photos(&ex),
+            [("Product image", None), ("Vinagre de vino tinto", None), ("Vinagre de vino tinto", None)],
+            "{:?}",
+            ex.blocks
+        );
+    }
+
+    #[test]
+    fn a_link_wrapped_price_first_card_takes_its_photo_by_its_heading_not_its_price() {
+        // Every card opens with the one badge (a filter above says it too) and price: its heading, not the link's first
+        // line, is its title.
+        let card = |photo: &str, name: &str| {
+            format!(
+                r#"<div class="tile"><a href="/p/{photo}"><img src="/{photo}.jpg" alt=""><p>Oferta especial</p><p>18,95 €</p><p>0,90 €/l</p><h3>{name}</h3></a></div>"#
+            )
+        };
+        let page = format!(
+            "<body><main><h1>Aceites</h1><p>Oferta especial</p>{}{}{}</main></body>",
+            card("a", "Aceite de oliva Hacendado 5 l."),
+            card("b", "Aceite de girasol Hacendado 1 l."),
+            card("c", "Vinagre de vino Hacendado 1 l.")
+        );
+        let ex = html(&page, &base());
+        assert_eq!(
+            price_first_photos(&ex),
+            [
+                ("Aceite de oliva Hacendado 5 l.", Some("https://example.com/a.jpg")),
+                ("Aceite de girasol Hacendado 1 l.", Some("https://example.com/b.jpg")),
+                ("Vinagre de vino Hacendado 1 l.", Some("https://example.com/c.jpg")),
+            ],
+            "{:?}",
+            ex.blocks
+        );
+    }
+
+    #[test]
+    fn a_left_over_photo_takes_no_heading_no_block_with_a_photo_and_no_name_a_brand_strip_shares() {
+        // A brand strip's photo and the product's both name a card; the product's names its longest line.
+        let card = |photo: &str, brand: &str, name: &str| {
+            format!(
+                r#"<div class="product-card"><div><img src="/{photo}-brand.jpg" alt="{brand}"><img src="/{photo}.jpg" alt="{name}"></div>
+                <p>18,95 €</p><p>{brand}</p><p>{name}</p></div>"#
+            )
+        };
+        let page = format!(
+            r#"<body><main><img src="/banner.jpg" alt="Aceites de oliva virgen"><h1>Aceites de oliva virgen</h1>
+            <p>Our oils, from the mill to the table.</p>
+            <p><a href="/p/hacendado"><img src="/hacendado.jpg" alt="Our oils, from the mill to the table.">Aceite de oliva Hacendado</a><br>Botella de un litro, oliva suave</p>
+            {}{}{}
+            <div class="promo"><img src="/promo.jpg" alt="Botella de un litro, oliva suave"></div>
+            <h2>Ofertas</h2><p>Every week, a new oil at a lower price.</p></main></body>"#,
+            card("sur", "Aromas del Sur", "Aceite de oliva virgen extra Aromas del Sur 5 l."),
+            card("olivar", "Casa Olivar", "Aceite de girasol Casa Olivar 1 l."),
+            card("verde", "Monte Verde", "Vinagre de Jerez Monte Verde 50 cl.")
+        );
+        let ex = html(&page, &base());
+        let with_photos: Vec<(&str, &str)> =
+            ex.blocks.iter().filter_map(|b| Some((b.text.lines().last()?, b.image.as_deref()?))).collect();
+        // The banner's alt is the page's heading (the page has two, so it is no card's title), and a heading is no card; the linked name's photo went by its title in the first
+        // pass, so its alt doesn't give it to the intro too; the promo's alt names a block that already has its photo.
+        assert_eq!(
+            with_photos,
+            [
+                ("Botella de un litro, oliva suave", "https://example.com/hacendado.jpg"),
+                ("Aceite de oliva virgen extra Aromas del Sur 5 l.", "https://example.com/sur.jpg"),
+                ("Aceite de girasol Casa Olivar 1 l.", "https://example.com/olivar.jpg"),
+                ("Vinagre de Jerez Monte Verde 50 cl.", "https://example.com/verde.jpg"),
             ],
             "{:?}",
             ex.blocks
