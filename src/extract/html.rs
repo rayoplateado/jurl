@@ -833,19 +833,40 @@ fn skipped(el: ElementRef, skip_header: bool, skip_hidden: bool) -> bool {
 /// carro" or "Ver más".
 const BUTTON_CONTENT_WORDS: usize = 6;
 
-/// Whether the element's tag is one a reader never sees. A button is, unless it holds content: a heading, or at least
-/// `BUTTON_CONTENT_WORDS` words, as a card built as a button does. An icon's image alone keeps a control a control.
+/// Whether the element's tag is one a reader never sees. A button is, unless it holds content: a heading, at least
+/// `BUTTON_CONTENT_WORDS` words a reader sees, or it is a heading's own text (an accordion's question, `<h3><button>`). An
+/// icon's image alone keeps a control a control, and so does a label only a screen reader reads ("Añadir <span
+/// class="sr-only">Leche entera Hacendado 1 L</span> al carro").
 fn skipped_tag(el: ElementRef) -> bool {
     let name = el.value().name();
     SKIP.contains(&name) && !(name == "button" && content_button(el))
 }
 
 fn content_button(el: ElementRef) -> bool {
-    let headed = el
-        .descendants()
-        .filter_map(ElementRef::wrap)
-        .any(|d| matches!(d.value().name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6"));
-    headed || el.text().flat_map(str::split_whitespace).nth(BUTTON_CONTENT_WORDS - 1).is_some()
+    let heading = |e: ElementRef| matches!(e.value().name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
+    if el.parent().and_then(ElementRef::wrap).is_some_and(heading)
+        || el.descendants().filter_map(ElementRef::wrap).any(heading)
+    {
+        return true;
+    }
+    // The words of its text nodes that no element between them and the button hides or skips.
+    el.descendants()
+        .filter(|node| {
+            node.ancestors()
+                .take_while(|a| a.id() != el.id())
+                .filter_map(ElementRef::wrap)
+                .all(|a| !skipped(a, false, true) && !screen_reader_only(a))
+        })
+        .filter_map(|node| node.value().as_text().map(|t| &**t))
+        .flat_map(str::split_whitespace)
+        .nth(BUTTON_CONTENT_WORDS - 1)
+        .is_some()
+}
+
+/// Whether an element's class is one that shows it to screen readers only (Bootstrap's `sr-only` and
+/// `visually-hidden`, WordPress's `screen-reader-text`).
+fn screen_reader_only(el: ElementRef) -> bool {
+    el.value().classes().any(|c| matches!(c, "sr-only" | "visually-hidden" | "screen-reader-text"))
 }
 
 /// An image is skipped like any element, except that a hidden carousel slide still counts: sliders hide every slide
@@ -1087,6 +1108,32 @@ mod tests {
             &base(),
         );
         assert!(icon.blocks.iter().all(|b| !b.text.contains("Cerrar")));
+        // Each card is one record, with its photo named by its heading.
+        let records: Vec<_> = ex.blocks.iter().filter(|b| b.text.contains("Hacendado")).map(|b| b.record).collect();
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(Option::is_some) && records[0] != records[1], "{records:?}");
+        assert!(
+            ex.images
+                .iter()
+                .any(|i| i.url.path() == "/Aceite de oliva Hacendado.jpg".replace(' ', "%20") && !i.card.is_empty())
+        );
+    }
+
+    #[test]
+    fn a_control_with_a_label_only_a_screen_reader_reads_stays_a_control_and_an_accordion_question_is_read() {
+        let page = r#"<body><main><p>Leche entera de vaca, un litro.</p>
+            <button>Añadir <span class="sr-only">Leche entera Hacendado 1 L al pedido</span> al carro</button>
+            <button class="slick-prev"><img src="/arrow-left.png" alt=""><span class="visually-hidden">Go to the previous slide of this carousel</span></button>
+            <button>Buy<script>var basket = window.basket || []; basket.push(1);</script></button>
+            <h3><button aria-expanded="false">Envíos</button></h3><p>Enviamos a toda la península.</p></main></body>"#;
+        let ex = html(page, &base());
+        let all: Vec<&str> = ex.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert!(
+            all.iter().all(|t| !t.contains("Añadir") && !t.contains("previous slide") && !t.contains("Buy")),
+            "{all:?}"
+        );
+        assert!(ex.images.iter().all(|i| !i.url.path().contains("arrow")));
+        assert!(all.contains(&"Envíos"), "{all:?}");
     }
 
     #[test]
