@@ -1131,6 +1131,28 @@ mod tests {
     }
 
     #[test]
+    fn a_card_s_format_or_price_names_no_block_only_its_title_does() {
+        // Link-wrapped cards: the image's card is the link's whole text, title first, then a format and a price many cards share.
+        let card = |photo: &str, name: &str| {
+            format!(
+                r#"<div class="tile"><a href="/p/{photo}"><img src="/{photo}.jpg" alt=""><span>{name}</span><br><span>Botella 1 L</span><br><span>3,70 €</span></a></div>"#
+            )
+        };
+        let page = format!(
+            "<body><main><p>Botella 1 L</p><p>Our oils, from the mill to the table.</p>{}{}{}</main></body>",
+            card("a", "Aceite de oliva Hacendado"),
+            card("b", "Aceite de girasol Hacendado"),
+            card("c", "Vinagre de vino Hacendado")
+        );
+        let ex = html(&page, &base());
+        assert!(
+            ex.blocks.iter().filter(|b| !b.text.contains("Hacendado")).all(|b| b.image.is_none()),
+            "{:?}",
+            ex.blocks
+        );
+    }
+
+    #[test]
     fn a_card_built_as_a_button_is_read_and_a_control_button_is_not() {
         let card = |name: &str| {
             format!(
