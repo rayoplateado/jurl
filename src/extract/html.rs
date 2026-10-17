@@ -63,7 +63,8 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
 }
 
 /// The page after this one in its list (see `paging`): the target of a `rel="next"` link (in the head, or an anchor that is
-/// not hidden) when it is on the same site, else the link whose page number is this one's plus one.
+/// not hidden) when it is on the same site, else the link whose page number is this one's plus one, or whose item offset is
+/// one step on (`?offset=24`, see `paging`).
 fn next_page(doc: &Html, site_links: &[Link], base: &Url) -> Option<Url> {
     let standard = doc
         .select(&sel("link[rel~=next], a[rel~=next]"))

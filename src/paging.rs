@@ -2,7 +2,10 @@
 //! or on an anchor) is the page the site says comes next. Without one, the address says it: a link to the same list whose
 //! page number is the current page's plus one. A page number is a `page` or `paged` query parameter (`?page=3`,
 //! `?e5273e04_page=2`), or the segments `page/3` at the end of the path (`/blog/page/3/`), and the link differs from the
-//! current page in nothing else. The text of a link is never read, so this holds on a page in any language.
+//! current page in nothing else. A list without a page number may count its items instead (`?offset=24`, `?start=20`,
+//! `/shoes/48`): a number that steps by the same amount between the links to one list, from the current page, is that list's
+//! position, and the link one step on is the next page. The text of a link is never read, so this holds on a page in any
+//! language.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -83,10 +86,106 @@ fn slot_of(u: &Url) -> Option<Slot> {
 
 /// The first of `links` that is the page after `current` in its list: the same list, one page number on. `links` are in the
 /// page's own order, so the first such link is the one the page shows first.
-pub fn numbered_next<'a>(current: &Url, mut links: impl Iterator<Item = &'a Url>) -> Option<Url> {
-    let here = slot_of(current)?;
-    let next = here.page.checked_add(1)?;
-    links.find(|link| slot_of(link).is_some_and(|s| s.page == next && same_list(&s, &here))).cloned()
+pub fn numbered_next<'a>(current: &Url, links: impl Iterator<Item = &'a Url>) -> Option<Url> {
+    let links: Vec<&Url> = links.collect();
+    let by_page = slot_of(current).and_then(|here| {
+        let next = here.page.checked_add(1)?;
+        links
+            .iter()
+            .find(|link| slot_of(link).is_some_and(|s| s.page == next && same_list(&s, &here)))
+            .map(|l| (*l).clone())
+    });
+    by_page.or_else(|| stepped_next(current, &links))
+}
+
+/// Where a list's position can be in its address, besides a page number: a query parameter, or the last segment of the path.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum Position {
+    Param(String),
+    Tail,
+}
+
+/// The most a step may be: a list's pages hold some dozens of items, not thousands.
+const MAX_STEP: u64 = 1000;
+
+/// Words in a parameter's name that say its number is a value to filter or sort by, or the size of a page, never a position:
+/// an id, a price, a year, a sort order, how many items a page shows. Prices and page sizes often step evenly (`max=50`,
+/// `100`, `150`; `limit=24`, `48`, `72`), so their names rule them out.
+const NOT_A_POSITION: [&str; 27] = [
+    "id", "price", "prec", "prix", "preis", "cost", "min", "max", "year", "ano", "año", "date", "time", "sort",
+    "order", "limit", "size", "per", "count", "num", "show", "rows", "zoom", "lat", "lng", "lon", "version",
+];
+
+fn may_be_position(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    !is_page_param(&name) && !NOT_A_POSITION.iter().any(|w| name.contains(w))
+}
+
+/// A URL split at `at`: the rest of its address, and the number there (0 when the address has none, as a list's first page
+/// often leaves its offset out). `None` when the position holds something other than a whole number, or appears twice.
+fn split_at(u: &Url, at: &Position) -> Option<(Slot, u64)> {
+    let mut query: Vec<(String, String)> = u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    let mut path: Vec<String> =
+        u.path_segments().map(|s| s.filter(|s| !s.is_empty()).map(String::from).collect()).unwrap_or_default();
+    let digits =
+        |v: &str| Some(v).filter(|v| v.bytes().all(|b| b.is_ascii_digit())).and_then(|v| v.parse::<u64>().ok());
+    let value = match at {
+        Position::Param(name) => {
+            let found: Vec<usize> = query.iter().enumerate().filter(|(_, (k, _))| k == name).map(|(i, _)| i).collect();
+            match found.as_slice() {
+                [] => 0,
+                [i] => digits(&query.remove(*i).1)?,
+                _ => return None,
+            }
+        }
+        Position::Tail => match path.last().map(|s| digits(s)) {
+            Some(Some(n)) => {
+                path.pop();
+                n
+            }
+            _ => 0,
+        },
+    };
+    query.sort();
+    Some((Slot { scheme: u.scheme().to_string(), host: u.host_str()?.to_string(), path, query, page: 1 }, value))
+}
+
+/// The link one step on from `current` in a list whose address counts its items (`?offset=24`, `?start=20`, `/shoes/48`). A
+/// position steps when the links to the same list (the same address but for that number) and the current page together hold
+/// three numbers a step apart with the current page's among them, the step being at least 2 and at most `MAX_STEP`, and every
+/// number they hold is the current page's give or take whole steps. One link with a number is not a list's pages (a product's
+/// id is one), nor are numbers that go up by 1 (ids, years: a page number named otherwise is not read as one), nor a name
+/// that says the number is a filter, a sort or a page size (`NOT_A_POSITION`).
+fn stepped_next(current: &Url, links: &[&Url]) -> Option<Url> {
+    let mut positions: Vec<Position> = vec![Position::Tail];
+    for link in links {
+        for (k, _) in link.query_pairs().filter(|(k, _)| may_be_position(k)) {
+            let at = Position::Param(k.into_owned());
+            if !positions.contains(&at) {
+                positions.push(at);
+            }
+        }
+    }
+    positions.iter().find_map(|at| {
+        let (here, c) = split_at(current, at)?;
+        let mut on_list: Vec<(u64, &Url)> = links
+            .iter()
+            .filter_map(|l| split_at(l, at).filter(|(s, _)| same_list(s, &here)).map(|(_, v)| (v, *l)))
+            .collect();
+        on_list.retain(|(v, _)| *v != c);
+        let mut values: Vec<u64> = on_list.iter().map(|(v, _)| *v).chain([c]).collect();
+        values.sort_unstable();
+        values.dedup();
+        let step = values.windows(2).map(|w| w[1] - w[0]).min()?;
+        let regular = (2..=MAX_STEP).contains(&step) && values.iter().all(|v| v.abs_diff(c) % step == 0);
+        let next = c.checked_add(step)?;
+        let has = |v: Option<u64>| v.is_some_and(|v| values.contains(&v));
+        let three = values.contains(&next) && (has(c.checked_sub(step)) || has(next.checked_add(step)));
+        if !regular || !three {
+            return None;
+        }
+        on_list.iter().find(|(v, _)| *v == next).map(|(_, l)| (*l).clone())
+    })
 }
 
 /// The page after `current` when the page links none: its page number one on, where the address has one (`?page=3`,
@@ -282,6 +381,86 @@ mod tests {
             let (here, next) = (slot_of(&u(s)).unwrap(), slot_of(&guessed_next(&u(s)).unwrap()).unwrap());
             assert!(same_list(&here, &next) && next.page == here.page + 1, "{s}");
         }
+    }
+
+    #[test]
+    fn an_offset_that_steps_by_the_items_a_page_holds_is_the_list_s_position() {
+        // 68 items, 24 a page: the first page leaves its offset out and links the other two, in any order.
+        let pager = ["https://x.test/c/shoes?offset=48", "https://x.test/c/shoes?offset=24", "https://x.test/p/9"];
+        assert_eq!(next("https://x.test/c/shoes", &pager).as_deref(), Some("https://x.test/c/shoes?offset=24"));
+        let middle = ["https://x.test/c/shoes", "https://x.test/c/shoes?offset=48"];
+        assert_eq!(
+            next("https://x.test/c/shoes?offset=24", &middle).as_deref(),
+            Some("https://x.test/c/shoes?offset=48")
+        );
+        let last = ["https://x.test/c/shoes", "https://x.test/c/shoes?offset=24"];
+        assert_eq!(next("https://x.test/c/shoes?offset=48", &last), None, "the last page");
+        // The other parameters must match, in any order, and the first page may write its offset as 0.
+        let sorted = [
+            "https://x.test/c?offset=24&sort=asc",
+            "https://x.test/c?sort=asc&offset=48",
+            "https://x.test/c?offset=24",
+        ];
+        assert_eq!(
+            next("https://x.test/c?sort=asc&offset=0", &sorted).as_deref(),
+            Some("https://x.test/c?offset=24&sort=asc")
+        );
+    }
+
+    #[test]
+    fn start_skip_and_from_step_too_and_so_does_the_end_of_a_path() {
+        let start = ["https://x.test/search?q=a&start=10", "https://x.test/search?q=a&start=20"];
+        assert_eq!(next("https://x.test/search?q=a", &start).as_deref(), Some("https://x.test/search?q=a&start=10"));
+        let skip = ["https://x.test/l?skip=0", "https://x.test/l?skip=40", "https://x.test/l?skip=60"];
+        assert_eq!(next("https://x.test/l?skip=20", &skip).as_deref(), Some("https://x.test/l?skip=40"));
+        let from = ["https://x.test/l?from=31", "https://x.test/l?from=61", "https://x.test/l?from=91"];
+        assert_eq!(next("https://x.test/l?from=1", &from).as_deref(), Some("https://x.test/l?from=31"));
+        let path = ["https://x.test/shoes/24", "https://x.test/shoes/48/", "https://x.test/shoes/72"];
+        assert_eq!(next("https://x.test/shoes/", &path).as_deref(), Some("https://x.test/shoes/24"));
+    }
+
+    #[test]
+    fn ids_years_prices_sorts_and_a_single_number_do_not_step() {
+        let none = |current: &str, links: &[&str]| assert_eq!(next(current, links), None, "{current} {links:?}");
+        // One link with a number: a product as likely as a next page.
+        none("https://x.test/c", &["https://x.test/c?offset=24"]);
+        none("https://x.test/c", &["https://x.test/c/24"]);
+        // Ids and years go up by 1, or don't step at all.
+        none("https://x.test/c?id=1", &["https://x.test/c?id=2", "https://x.test/c?id=3"]);
+        none(
+            "https://x.test/c",
+            &["https://x.test/c?item=1041", "https://x.test/c?item=1187", "https://x.test/c?item=1302"],
+        );
+        none(
+            "https://x.test/products",
+            &["https://x.test/products/3", "https://x.test/products/5", "https://x.test/products/8"],
+        );
+        none("https://x.test/news", &["https://x.test/news?year=2024", "https://x.test/news?year=2025"]);
+        none(
+            "https://x.test/news",
+            &["https://x.test/news?y=2022", "https://x.test/news?y=2024", "https://x.test/news?y=2026"],
+        );
+        // Prices, page sizes and sorts may step evenly, and their names say what they are.
+        none(
+            "https://x.test/c",
+            &["https://x.test/c?price_max=50", "https://x.test/c?price_max=100", "https://x.test/c?price_max=150"],
+        );
+        none("https://x.test/c", &["https://x.test/c?pmin=10", "https://x.test/c?pmin=20", "https://x.test/c?pmin=30"]);
+        none(
+            "https://x.test/c",
+            &["https://x.test/c?limit=24", "https://x.test/c?limit=48", "https://x.test/c?limit=72"],
+        );
+        none("https://x.test/c", &["https://x.test/c?sort=2", "https://x.test/c?sort=4", "https://x.test/c?sort=6"]);
+        // The same numbers on another list, or another site, are not this list's pages.
+        none("https://x.test/c", &["https://x.test/d?offset=24", "https://x.test/d?offset=48"]);
+        none("https://x.test/c?cat=1", &["https://x.test/c?cat=2&offset=24", "https://x.test/c?cat=2&offset=48"]);
+        none("https://x.test/c", &["https://y.test/c?offset=24", "https://y.test/c?offset=48"]);
+        // A number that skips the next step is not a step.
+        none("https://x.test/c", &["https://x.test/c?offset=24", "https://x.test/c?offset=72"]);
+        none(
+            "https://x.test/c",
+            &["https://x.test/c?offset=24", "https://x.test/c?offset=48", "https://x.test/c?offset=50"],
+        );
     }
 
     #[test]
