@@ -780,7 +780,7 @@ fn shape(el: ElementRef, depth: usize) -> String {
     let kids: Vec<String> = el
         .children()
         .filter_map(ElementRef::wrap)
-        .filter(|c| !SKIP.contains(&c.value().name()) && !(INLINE.contains(&c.value().name()) && !has_block_desc(*c)))
+        .filter(|c| !skipped_tag(*c) && !(INLINE.contains(&c.value().name()) && !has_block_desc(*c)))
         .take(SHAPE_CHILDREN)
         .map(|c| shape(c, depth - 1))
         .collect();
@@ -825,7 +825,55 @@ fn has_skipped_ancestor(el: ElementRef, skip_header: bool) -> bool {
 /// `image_skipped` makes by passing `skip_hidden = false`.
 fn skipped(el: ElementRef, skip_header: bool, skip_hidden: bool) -> bool {
     let name = el.value().name();
-    SKIP.contains(&name) || (skip_header && name == "header") || chrome(el) || (skip_hidden && hidden(el))
+    skipped_tag(el) || (skip_header && name == "header") || chrome(el) || (skip_hidden && hidden(el))
+}
+
+/// The words of a button that make it content rather than a control: a shop that builds its product cards as buttons
+/// (`<button class="product-cell__content-link">` around the photo, name, format and price) holds more than "Añadir al
+/// carro" or "Ver más".
+const BUTTON_CONTENT_WORDS: usize = 6;
+
+/// Whether the element's tag is one a reader never sees. A button is, unless it holds content: a heading or at least
+/// `BUTTON_CONTENT_WORDS` words a reader sees, or it is an accordion's question (`<h3><button aria-expanded>`, the ARIA
+/// pattern). An icon's image alone keeps a control a control, and so does a label only a screen reader reads ("Añadir
+/// <span class="sr-only">Leche entera Hacendado 1 L</span> al carro"), or a button only a screen reader reads.
+fn skipped_tag(el: ElementRef) -> bool {
+    let name = el.value().name();
+    SKIP.contains(&name) && !(name == "button" && content_button(el))
+}
+
+fn content_button(el: ElementRef) -> bool {
+    if screen_reader_only(el) {
+        return false;
+    }
+    let heading = |e: ElementRef| matches!(e.value().name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
+    if el.value().attr("aria-expanded").is_some() && el.parent().and_then(ElementRef::wrap).is_some_and(heading) {
+        return true;
+    }
+    // The nodes under it that no element between them and the button hides or skips.
+    let mut seen = el.descendants().filter(|node| {
+        node.ancestors()
+            .take_while(|a| a.id() != el.id())
+            .filter_map(ElementRef::wrap)
+            .all(|a| !skipped(a, false, true) && !screen_reader_only(a))
+    });
+    let mut words = 0;
+    seen.any(|node| match node.value() {
+        Node::Text(text) => {
+            words += text.split_whitespace().count();
+            words >= BUTTON_CONTENT_WORDS
+        }
+        Node::Element(_) => {
+            ElementRef::wrap(node).is_some_and(|e| heading(e) && !skipped(e, false, true) && !screen_reader_only(e))
+        }
+        _ => false,
+    })
+}
+
+/// Whether an element's class is one that shows it to screen readers only (Bootstrap's `sr-only` and
+/// `visually-hidden`, WordPress's `screen-reader-text`).
+fn screen_reader_only(el: ElementRef) -> bool {
+    el.value().classes().any(|c| matches!(c, "sr-only" | "visually-hidden" | "screen-reader-text"))
 }
 
 /// An image is skipped like any element, except that a hidden carousel slide still counts: sliders hide every slide
@@ -1033,6 +1081,75 @@ mod tests {
             ]
         );
         assert!(html("<p>no alternates</p>", &base).alternates.is_empty());
+    }
+
+    #[test]
+    fn a_card_built_as_a_button_is_read_and_a_control_button_is_not() {
+        let card = |name: &str| {
+            format!(
+                r#"<div class="product-cell"><button class="product-cell__content-link"><img src="/{name}.jpg" alt="{name}">
+                <h4>{name}</h4><div><span>Garrafa</span> <span>5 L</span></div><p>17,25 €/ud.</p></button>
+                <button aria-label="Añadir al carro">Añadir al carro</button></div>"#
+            )
+        };
+        let page = format!(
+            "<body><main><h1>Aceite, vinagre y sal</h1>{}{}{}<button>Ver más</button></main></body>",
+            card("Aceite de oliva Hacendado"),
+            card("Aceite de girasol Hacendado"),
+            card("Vinagre de vino Hacendado")
+        );
+        let ex = html(&page, &base());
+        let text: Vec<&str> = ex.blocks.iter().map(|b| b.text.as_str()).collect();
+        let all = text.join("\n");
+        assert!(all.contains("Aceite de oliva Hacendado"), "{all}");
+        assert!(all.contains("17,25 €/ud."), "{all}");
+        assert!(!all.contains("Añadir al carro") && !all.contains("Ver más"), "{all}");
+        // A long button with no heading is content too; a short one with an icon is a control.
+        let long = html(
+            "<body><main><p>Intro text for the page.</p><button>Aceite de oliva virgen extra Garrafa 3 L 12,50 €</button></main></body>",
+            &base(),
+        );
+        assert!(long.blocks.iter().any(|b| b.text.contains("12,50 €")));
+        let icon = html(
+            r#"<body><main><p>Intro text for the page.</p><button><img src="/x.svg" alt="Cerrar">Cerrar</button></main></body>"#,
+            &base(),
+        );
+        assert!(icon.blocks.iter().all(|b| !b.text.contains("Cerrar")));
+        // Each card is one record, with its photo named by its heading.
+        let records: Vec<_> = ex.blocks.iter().filter(|b| b.text.contains("Hacendado")).map(|b| b.record).collect();
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(Option::is_some) && records[0] != records[1], "{records:?}");
+        assert!(
+            ex.images
+                .iter()
+                .any(|i| i.url.path() == "/Aceite de oliva Hacendado.jpg".replace(' ', "%20") && !i.card.is_empty())
+        );
+    }
+
+    #[test]
+    fn a_control_with_a_label_only_a_screen_reader_reads_stays_a_control_and_an_accordion_question_is_read() {
+        let page = r#"<body><main><p>Leche entera de vaca, un litro.</p>
+            <button>Añadir <span class="sr-only">Leche entera Hacendado 1 L al pedido</span> al carro</button>
+            <button class="slick-prev"><img src="/arrow-left.png" alt=""><span class="visually-hidden">Go to the previous slide of this carousel</span></button>
+            <button>Buy<script>var basket = window.basket || []; basket.push(1);</script></button>
+            <button class="sr-only">Skip to main content and open the navigation menu</button>
+            <button class="hamburger"><h2 class="visually-hidden">Open main navigation menu</h2></button>
+            <h2>Install <button class="copy-anchor">#</button></h2>
+            <h3><button aria-expanded="false">Envíos</button></h3><p>Enviamos a toda la península.</p></main></body>"#;
+        let ex = html(page, &base());
+        let all: Vec<&str> = ex.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert!(
+            all.iter().all(|t| !t.contains("Añadir")
+                && !t.contains("previous slide")
+                && !t.contains("Buy")
+                && !t.contains("Skip")
+                && !t.contains("navigation")
+                && !t.contains('#')),
+            "{all:?}"
+        );
+        assert!(all.contains(&"Install"), "{all:?}");
+        assert!(ex.images.iter().all(|i| !i.url.path().contains("arrow")));
+        assert!(all.contains(&"Envíos"), "{all:?}");
     }
 
     #[test]
