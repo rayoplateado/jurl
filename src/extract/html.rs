@@ -45,6 +45,7 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
     let site_links = collect_site_links(doc, base);
     let mut blocks = join_short(walk(doc, root, in_body, base));
     cards::number_records(&mut blocks);
+    let records = blocks.iter().filter_map(|b| b.record).max().map(|n| n as u64);
     let images = collect_images(doc, root, in_body, base);
     block_images::attach(&mut blocks, &images);
     Extracted {
@@ -55,7 +56,7 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
         structured: Vec::new(),
         images,
         links: collect_links(root, in_body, base),
-        next_page: next_page(doc, &site_links, base),
+        next_page: next_page(doc, &site_links, base, records),
         site_links,
         pages: Vec::new(),
         app_shell: is_app_shell(doc, body),
@@ -65,7 +66,7 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
 /// The page after this one in its list (see `paging`): the target of a `rel="next"` link (in the head, or an anchor that is
 /// not hidden) when it is on the same site, else the link whose page number is this one's plus one, or whose item offset is
 /// one step on (`?offset=24`, see `paging`).
-fn next_page(doc: &Html, site_links: &[Link], base: &Url) -> Option<Url> {
+fn next_page(doc: &Html, site_links: &[Link], base: &Url, records: Option<u64>) -> Option<Url> {
     let standard = doc
         .select(&sel("link[rel~=next], a[rel~=next]"))
         .filter(|e| !hidden(*e))
@@ -75,7 +76,7 @@ fn next_page(doc: &Html, site_links: &[Link], base: &Url) -> Option<Url> {
             u
         })
         .find(|u| u != base && matches!(u.scheme(), "http" | "https") && paging::same_site(base, u));
-    standard.or_else(|| paging::numbered_next(base, site_links.iter().map(|l| &l.url)))
+    standard.or_else(|| paging::numbered_next(base, site_links.iter().map(|l| &l.url), records))
 }
 
 /// The other versions of the page the page declares: each `<link rel="alternate" hreflang="…" href="…">`, its `href` on the page's
@@ -1989,6 +1990,27 @@ mod tests {
         // A hidden rel="next" is not on the page.
         let hidden = r#"<body><a rel="next" href="/es/agenda?page=2" style="display:none">Next</a></body>"#;
         assert_eq!(next(hidden), None);
+    }
+
+    #[test]
+    fn an_offset_pager_is_the_next_page_only_when_nothing_standard_names_one() {
+        let here = "https://x.test/c/shoes";
+        let next = |page: &str| html(page, &Url::parse(here).unwrap()).next_page.map(String::from);
+        let cards = r#"<main><div class="grid">
+            <div class="card"><h3>Red shoe</h3><div>24 €</div></div>
+            <div class="card"><h3>Blue shoe</h3><div>26 €</div></div>
+            <div class="card"><h3>Green shoe</h3><div>28 €</div></div></div></main>"#;
+        // Three records and a "next" link three on: the list's next page.
+        let only_next = format!(r#"<body>{cards}<nav><a href="/c/shoes?offset=3">Next</a></nav></body>"#);
+        assert_eq!(next(&only_next).as_deref(), Some("https://x.test/c/shoes?offset=3"));
+        let off_by_one = format!(r#"<body>{cards}<nav><a href="/c/shoes?offset=4">Next</a></nav></body>"#);
+        assert_eq!(next(&off_by_one), None);
+        // A rel="next", or a page number one on, wins over the offsets beside it.
+        let pager = r#"<nav><a href="/c/shoes?offset=3">2</a><a href="/c/shoes?offset=6">3</a></nav>"#;
+        let rel = format!(r#"<head><link rel="next" href="/c/shoes?cursor=b2"></head><body>{cards}{pager}</body>"#);
+        assert_eq!(next(&rel).as_deref(), Some("https://x.test/c/shoes?cursor=b2"));
+        let page = format!(r#"<body>{cards}{pager}<a href="/c/shoes?page=2">More</a></body>"#);
+        assert_eq!(next(&page).as_deref(), Some("https://x.test/c/shoes?page=2"));
     }
 
     #[test]

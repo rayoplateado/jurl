@@ -84,9 +84,10 @@ fn slot_of(u: &Url) -> Option<Slot> {
     Some(Slot { scheme: u.scheme().to_string(), host: u.host_str()?.to_string(), path, query, page })
 }
 
-/// The first of `links` that is the page after `current` in its list: the same list, one page number on. `links` are in the
-/// page's own order, so the first such link is the one the page shows first.
-pub fn numbered_next<'a>(current: &Url, links: impl Iterator<Item = &'a Url>) -> Option<Url> {
+/// The first of `links` that is the page after `current` in its list: the same list, one page number on, or one step of its
+/// item offset on (see `stepped_next`). `links` are in the page's own order, so the first such link is the one the page shows
+/// first. `items` is how many records the current page holds, when it numbers any (see `cards::number_records`).
+pub fn numbered_next<'a>(current: &Url, links: impl Iterator<Item = &'a Url>, items: Option<u64>) -> Option<Url> {
     let links: Vec<&Url> = links.collect();
     let by_page = slot_of(current).and_then(|here| {
         let next = here.page.checked_add(1)?;
@@ -95,7 +96,7 @@ pub fn numbered_next<'a>(current: &Url, links: impl Iterator<Item = &'a Url>) ->
             .find(|link| slot_of(link).is_some_and(|s| s.page == next && same_list(&s, &here)))
             .map(|l| (*l).clone())
     });
-    by_page.or_else(|| stepped_next(current, &links))
+    by_page.or_else(|| stepped_next(current, &links, items))
 }
 
 /// Where a list's position can be in its address, besides a page number: a query parameter, or the last segment of the path.
@@ -107,13 +108,16 @@ enum Position {
 
 /// The most a step may be: a list's pages hold some dozens of items, not thousands.
 const MAX_STEP: u64 = 1000;
+/// The first number too large to be a position: a date written as one (`20261012`) steps by 7 from week to week.
+const MAX_POSITION: u64 = 10_000_000;
 
 /// Words in a parameter's name that say its number is a value to filter or sort by, or the size of a page, never a position:
 /// an id, a price, a year, a sort order, how many items a page shows. Prices and page sizes often step evenly (`max=50`,
 /// `100`, `150`; `limit=24`, `48`, `72`), so their names rule them out.
-const NOT_A_POSITION: [&str; 27] = [
+const NOT_A_POSITION: [&str; 40] = [
     "id", "price", "prec", "prix", "preis", "cost", "min", "max", "year", "ano", "año", "date", "time", "sort",
-    "order", "limit", "size", "per", "count", "num", "show", "rows", "zoom", "lat", "lng", "lon", "version",
+    "order", "limit", "size", "per", "count", "num", "show", "rows", "zoom", "lat", "lng", "lon", "version", "item",
+    "ipp", "top", "take", "view", "display", "hits", "result", "nb", "qty", "radius", "dist", "km",
 ];
 
 fn may_be_position(name: &str) -> bool {
@@ -127,8 +131,12 @@ fn split_at(u: &Url, at: &Position) -> Option<(Slot, u64)> {
     let mut query: Vec<(String, String)> = u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
     let mut path: Vec<String> =
         u.path_segments().map(|s| s.filter(|s| !s.is_empty()).map(String::from).collect()).unwrap_or_default();
-    let digits =
-        |v: &str| Some(v).filter(|v| v.bytes().all(|b| b.is_ascii_digit())).and_then(|v| v.parse::<u64>().ok());
+    let digits = |v: &str| {
+        Some(v)
+            .filter(|v| v.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|n| *n < MAX_POSITION)
+    };
     let value = match at {
         Position::Param(name) => {
             let found: Vec<usize> = query.iter().enumerate().filter(|(_, (k, _))| k == name).map(|(i, _)| i).collect();
@@ -155,8 +163,15 @@ fn split_at(u: &Url, at: &Position) -> Option<(Slot, u64)> {
 /// three numbers a step apart with the current page's among them, the step being at least 2 and at most `MAX_STEP`, and every
 /// number they hold is the current page's give or take whole steps. One link with a number is not a list's pages (a product's
 /// id is one), nor are numbers that go up by 1 (ids, years: a page number named otherwise is not read as one), nor a name
-/// that says the number is a filter, a sort or a page size (`NOT_A_POSITION`).
-fn stepped_next(current: &Url, links: &[&Url]) -> Option<Url> {
+/// that says the number is a filter, a sort or a page size (`NOT_A_POSITION`), nor a number from `MAX_POSITION` up (a date).
+///
+/// When the page numbers its records, the step must be how many it holds: a page of 24 steps by 24, so a radius, a discount
+/// or a date that steps evenly is not taken for the list's pages. Then a query parameter that a single link to the same list
+/// sets to the current page's number plus the page's records (`?offset=24` from a first page of 24, through a pager that
+/// only says "next") is enough; a path's number never is, nor a link two pages on. A pager whose "last" link is not a whole
+/// number of steps on (`?offset=44` beside `?offset=24`) breaks the rule that every number is, so it is not read as one.
+fn stepped_next(current: &Url, links: &[&Url], items: Option<u64>) -> Option<Url> {
+    let items = items.filter(|n| *n > 0);
     let mut positions: Vec<Position> = vec![Position::Tail];
     for link in links {
         for (k, _) in link.query_pairs().filter(|(k, _)| may_be_position(k)) {
@@ -176,7 +191,16 @@ fn stepped_next(current: &Url, links: &[&Url]) -> Option<Url> {
         let mut values: Vec<u64> = on_list.iter().map(|(v, _)| *v).chain([c]).collect();
         values.sort_unstable();
         values.dedup();
+        let link_to = |v: u64| on_list.iter().find(|(x, _)| *x == v).map(|(_, l)| (*l).clone());
+        if let (Some(n), Position::Param(_), [_, _]) = (items, at, values.as_slice())
+            && n >= 2
+        {
+            return link_to(c.checked_add(n)?);
+        }
         let step = values.windows(2).map(|w| w[1] - w[0]).min()?;
+        if items.is_some_and(|n| n != step) {
+            return None;
+        }
         let regular = (2..=MAX_STEP).contains(&step) && values.iter().all(|v| v.abs_diff(c) % step == 0);
         let next = c.checked_add(step)?;
         let has = |v: Option<u64>| v.is_some_and(|v| values.contains(&v));
@@ -184,7 +208,7 @@ fn stepped_next(current: &Url, links: &[&Url]) -> Option<Url> {
         if !regular || !three {
             return None;
         }
-        on_list.iter().find(|(v, _)| *v == next).map(|(_, l)| (*l).clone())
+        link_to(next)
     })
 }
 
@@ -278,7 +302,13 @@ mod tests {
     /// The next page the links name, from `current`.
     fn next(current: &str, links: &[&str]) -> Option<String> {
         let links: Vec<Url> = links.iter().map(|l| u(l)).collect();
-        numbered_next(&u(current), links.iter()).map(String::from)
+        numbered_next(&u(current), links.iter(), None).map(String::from)
+    }
+
+    /// The next page the links name, from `current`, a page that holds `items` records.
+    fn next_of(current: &str, links: &[&str], items: u64) -> Option<String> {
+        let links: Vec<Url> = links.iter().map(|l| u(l)).collect();
+        numbered_next(&u(current), links.iter(), Some(items)).map(String::from)
     }
 
     #[test]
@@ -461,6 +491,64 @@ mod tests {
             "https://x.test/c",
             &["https://x.test/c?offset=24", "https://x.test/c?offset=48", "https://x.test/c?offset=50"],
         );
+    }
+
+    #[test]
+    fn a_number_at_the_end_of_the_path_steps_from_a_middle_page() {
+        let links = ["https://x.test/shoes", "https://x.test/shoes/48", "https://x.test/shoes/24"];
+        assert_eq!(next("https://x.test/shoes/24", &links).as_deref(), Some("https://x.test/shoes/48"));
+        assert_eq!(next_of("https://x.test/shoes/24", &links, 24).as_deref(), Some("https://x.test/shoes/48"));
+        assert_eq!(next_of("https://x.test/shoes/24", &links, 20), None, "a page of 20 steps by 20");
+    }
+
+    #[test]
+    fn a_page_s_records_are_its_step_so_one_next_link_is_enough() {
+        // A pager that only says "next": one link, as many items on as the page holds.
+        let only_next = ["https://x.test/c?offset=24", "https://x.test/p/77"];
+        assert_eq!(next_of("https://x.test/c", &only_next, 24).as_deref(), Some("https://x.test/c?offset=24"));
+        let both = ["https://x.test/c?start=40", "https://x.test/c?start=0"];
+        assert_eq!(next_of("https://x.test/c?start=20", &both, 20).as_deref(), Some("https://x.test/c?start=40"));
+        // A pager of several links steps by the records too.
+        let pager = ["https://x.test/c?offset=24", "https://x.test/c?offset=48"];
+        assert_eq!(next_of("https://x.test/c", &pager, 24).as_deref(), Some("https://x.test/c?offset=24"));
+        assert_eq!(next_of("https://x.test/c", &pager, 12), None, "a step that is not the page's records");
+        // One link that is not one page on, a path's number, a page of one record, or the previous page alone are not enough.
+        assert_eq!(next_of("https://x.test/c", &["https://x.test/c?offset=30"], 24), None);
+        assert_eq!(next_of("https://x.test/c", &["https://x.test/c?offset=48"], 24), None, "two pages on");
+        assert_eq!(next_of("https://x.test/c", &["https://x.test/c/24"], 24), None);
+        assert_eq!(next_of("https://x.test/c", &["https://x.test/c?offset=1"], 1), None);
+        assert_eq!(next_of("https://x.test/c?offset=24", &["https://x.test/c"], 24), None, "the last page");
+        assert_eq!(next_of("https://x.test/c", &["https://x.test/c?id=24"], 24), None);
+        assert_eq!(next_of("https://x.test/c", &["https://x.test/c?offset=24"], 0), None, "no records");
+    }
+
+    #[test]
+    fn page_sizes_dates_and_radii_do_not_step() {
+        let none = |current: &str, links: &[&str]| assert_eq!(next(current, links), None, "{current} {links:?}");
+        // "Show 24 | 48 | 72" names the page's size, whatever word it uses.
+        for name in ["items", "ipp", "view", "results", "nb", "top", "take", "display", "hits", "qty", "per_page"] {
+            let links: Vec<String> = [24, 48, 72].iter().map(|n| format!("https://x.test/c?{name}={n}")).collect();
+            let links: Vec<&str> = links.iter().map(String::as_str).collect();
+            none("https://x.test/c", &links);
+            assert_eq!(next_of("https://x.test/c", &links[..1], 24), None, "{name}");
+        }
+        // A week calendar's dates step by 7, as numbers.
+        none(
+            "https://x.test/agenda?from=20261005",
+            &[
+                "https://x.test/agenda?from=20260928",
+                "https://x.test/agenda?from=20261012",
+                "https://x.test/agenda?from=20261019",
+            ],
+        );
+        // A radius steps evenly, and so does a discount under a name of its own: the page's records rule them out.
+        none(
+            "https://x.test/near",
+            &["https://x.test/near?radius=5", "https://x.test/near?radius=10", "https://x.test/near?radius=15"],
+        );
+        let off = ["https://x.test/c?off=10", "https://x.test/c?off=20", "https://x.test/c?off=30"];
+        assert_eq!(next("https://x.test/c", &off).as_deref(), Some("https://x.test/c?off=10"), "unknown records");
+        assert_eq!(next_of("https://x.test/c", &off, 24), None);
     }
 
     #[test]
