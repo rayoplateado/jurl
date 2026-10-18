@@ -19,7 +19,7 @@ use url::Url;
 use crate::extract::sources::Data;
 
 /// The fewest shown things an endpoint's things must link to for it to be the listing's own: one or two can be a menu's.
-pub const MIN_SHOWN: usize = 3;
+const MIN_SHOWN: usize = 3;
 /// How many things an endpoint gives at once: the most WordPress and WooCommerce give.
 const PER_PAGE: usize = 100;
 /// How many events The Events Calendar gives at once: its own most.
@@ -160,14 +160,20 @@ pub async fn listing_endpoint(
     html: &str,
     page: &Url,
     shown: &[Url],
+    listed: &[Url],
     timing: bool,
     get: impl AsyncFn(&Url) -> Option<String>,
 ) -> Option<Url> {
     let root = api_root(html, page)?;
     let here = page_key(page);
     let shown: HashSet<String> = shown.iter().filter_map(item_key).filter(|k| *k != here).collect();
+    let (kinds_at, taxonomies_at) = (endpoint(&root, "wp/v2/types", &[]), endpoint(&root, "wp/v2/taxonomies", &[]));
+    let (kinds, taxonomies) = futures::join!(get(&kinds_at), get(&taxonomies_at));
+    let has_kind = |slug: &str| {
+        kinds.as_deref().and_then(|k| serde_json::from_str::<Value>(k).ok()).is_some_and(|k| k.get(slug).is_some())
+    };
     let mut candidates = Vec::new();
-    if html.contains("tribe-events") || html.contains("the-events-calendar") {
+    if html.contains("tribe-events") || html.contains("the-events-calendar") || has_kind("tribe_events") {
         let per = EVENTS_PER_PAGE.to_string();
         candidates.push(Candidate {
             api: Api::Events,
@@ -176,7 +182,7 @@ pub async fn listing_endpoint(
             terms: vec![],
         });
     }
-    if html.contains("woocommerce") {
+    if html.contains("woocommerce") || has_kind("product") {
         candidates.push(Candidate {
             api: Api::Products,
             route: "wc/store/v1/products".into(),
@@ -184,8 +190,6 @@ pub async fn listing_endpoint(
             terms: vec![("categories".into(), "category".into())],
         });
     }
-    let (kinds_at, taxonomies_at) = (endpoint(&root, "wp/v2/types", &[]), endpoint(&root, "wp/v2/taxonomies", &[]));
-    let (kinds, taxonomies) = futures::join!(get(&kinds_at), get(&taxonomies_at));
     candidates.extend(post_kinds(kinds.as_deref(), taxonomies.as_deref()));
 
     let probes: Vec<Url> = candidates.iter().map(|c| endpoint(&root, &c.route, &c.query)).collect();
@@ -201,7 +205,16 @@ pub async fn listing_endpoint(
             best = Some((count, candidate, things));
         }
     }
-    let (_, candidate, things) = best?;
+    let (count, candidate, things) = best?;
+    // The page's own JSON-LD gives its things with their own fields (an event's date, where a post has only when it was
+    // published): when it lists as many of the shown things, it is read, not the API.
+    let listed = listed.iter().filter_map(item_key).filter(|k| shown.contains(k)).collect::<HashSet<_>>().len();
+    if listed >= count {
+        if timing {
+            eprintln!("jurl: {} is not read: the page's JSON-LD lists {listed} of its things", candidate.route);
+        }
+        return None;
+    }
     let is_shown = |t: &Value| link_of(candidate.api, t).is_some_and(|k| shown.contains(&k));
     let (on_page, off_page): (Vec<&Value>, Vec<&Value>) = things.iter().partition(|t| is_shown(t));
     // The probe asked only for what tells the list (`_fields`); the read asks for what a reader needs.
@@ -216,6 +229,29 @@ pub async fn listing_endpoint(
             narrowed = true;
         }
     }
+    // Else, the terms that none of the shown things has and that hold others (a shelter's adopted dogs, a past season) are
+    // left out.
+    let mut left_out = false;
+    if !narrowed {
+        for (key, param) in &candidate.terms {
+            let out = unshown_terms(&on_page, &off_page, key);
+            if out.is_empty() {
+                continue;
+            }
+            let ids = out.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+            if timing {
+                eprintln!(
+                    "jurl: {} leaves out {param} {ids}, which none of the things the page links has",
+                    candidate.route
+                );
+            }
+            match candidate.api {
+                Api::Products => query.extend([q(param, ids), q("category_operator", "not_in".into())]),
+                _ => query.push(q(&format!("{param}_exclude"), ids)),
+            }
+            left_out = true;
+        }
+    }
     if candidate.api == Api::Posts {
         // A site's posts are its blog, news and notices: they are a page's list only as one of their categories.
         if candidate.route == "wp/v2/posts" && !narrowed {
@@ -227,6 +263,7 @@ pub async fn listing_endpoint(
         query.push(q("_fields", READ_FIELDS.into()));
         query.push(q("_embed", "wp:featuredmedia".into()));
         if !narrowed
+            && !left_out
             && !off_page.is_empty()
             && let Some(after) = day_before_oldest(&on_page)
         {
@@ -327,6 +364,16 @@ fn narrowing_term(on_page: &[&Value], off_page: &[&Value], key: &str) -> Option<
         .filter(|(left_out, _)| *left_out > 0)
         .max_by_key(|(left_out, id)| (*left_out, std::cmp::Reverse(*id)))
         .map(|(_, id)| id)
+}
+
+/// The terms under `key` that no shown thing has and that `MIN_SHOWN` of the others or more have, in order.
+fn unshown_terms(on_page: &[&Value], off_page: &[&Value], key: &str) -> Vec<u64> {
+    let shown: HashSet<u64> = on_page.iter().flat_map(|t| term_ids(t, key)).collect();
+    let mut counts: std::collections::BTreeMap<u64, usize> = std::collections::BTreeMap::new();
+    for id in off_page.iter().flat_map(|t| term_ids(t, key)).filter(|id| !shown.contains(id)) {
+        *counts.entry(id).or_default() += 1;
+    }
+    counts.into_iter().filter(|(_, n)| *n >= MIN_SHOWN).map(|(id, _)| id).collect()
 }
 
 /// The day before the oldest shown post was published, at its start (`2026-02-28T00:00:00`): WordPress's `after` gives the
@@ -548,14 +595,25 @@ mod tests {
 
     /// A site's answers by route, recording what is asked.
     async fn discover(html: &str, shown: &[&str], answers: Vec<(&str, String)>) -> (Option<Url>, Vec<String>) {
+        discover_listed(html, shown, &[], answers).await
+    }
+
+    async fn discover_listed(
+        html: &str,
+        shown: &[&str],
+        listed: &[&str],
+        answers: Vec<(&str, String)>,
+    ) -> (Option<Url>, Vec<String>) {
         let shown: Vec<Url> = shown.iter().map(|s| u(s)).collect();
+        let listed: Vec<Url> = listed.iter().map(|s| u(s)).collect();
         let asked = std::sync::Mutex::new(Vec::new());
-        let found = listing_endpoint(html, &u("https://site.test/agenda/"), &shown, false, async |url: &Url| {
-            asked.lock().unwrap().push(url.to_string());
-            let route = route_of(url);
-            answers.iter().find(|(r, _)| *r == route).map(|(_, body)| body.clone())
-        })
-        .await;
+        let found =
+            listing_endpoint(html, &u("https://site.test/agenda/"), &shown, &listed, false, async |url: &Url| {
+                asked.lock().unwrap().push(url.to_string());
+                let route = route_of(url);
+                answers.iter().find(|(r, _)| *r == route).map(|(_, body)| body.clone())
+            })
+            .await;
         (found, asked.into_inner().unwrap())
     }
 
@@ -654,6 +712,35 @@ mod tests {
         let kinds = json!({ "show": { "rest_base": "shows", "taxonomies": [] } }).to_string();
         let answers = vec![("/wp/v2/types", kinds), ("/wp/v2/taxonomies", taxonomies()), ("/wp/v2/shows", same)];
         assert_eq!(discover(HEAD, &shown, answers).await.0, None);
+    }
+
+    #[tokio::test]
+    async fn the_terms_none_of_the_shown_things_have_are_left_out_and_a_page_s_own_json_ld_is_read_when_it_lists_as_many()
+     {
+        let product = |n: u32, cats: &[u64]| json!({ "permalink": format!("https://site.test/p/{n}/"), "categories": cats.iter().map(|c| json!({ "id": c })).collect::<Vec<_>>() });
+        // Shown dogs in no category or in several; adopted ones only in theirs.
+        let products = json!([
+            product(1, &[]),
+            product(2, &[64]),
+            product(3, &[]),
+            product(4, &[45]),
+            product(5, &[45]),
+            product(6, &[45]),
+            product(7, &[])
+        ])
+        .to_string();
+        let kinds = json!({ "product": { "rest_base": "product", "taxonomies": [] } }).to_string();
+        let shown = ["https://site.test/p/1/", "https://site.test/p/2/", "https://site.test/p/3/"];
+        let answers = vec![("/wp/v2/types", kinds), ("/wc/store/v1/products", products)];
+        assert_eq!(
+            discover(HEAD, &shown, answers.clone()).await.0.unwrap().as_str(),
+            "https://www.site.test/wp-json/wc/store/v1/products?per_page=100&category=45&category_operator=not_in",
+            "a shop told by its kinds, with no plugin name in the page"
+        );
+        let (found, _) = discover_listed(HEAD, &shown, &shown, answers.clone()).await;
+        assert_eq!(found, None);
+        let (found, _) = discover_listed(HEAD, &shown, &shown[..2], answers).await;
+        assert!(found.is_some(), "a JSON-LD that lists fewer than the API");
     }
 
     #[test]

@@ -576,14 +576,21 @@ async fn platform_listing(
     retry: fetch::Retry<'_>,
     timing: bool,
 ) -> Option<url::Url> {
-    // A page whose JSON-LD lists its things already gives them with their own fields, which a platform's list may lack (a
-    // post's date is when it was published, not the event's).
-    if extract::json_ld::items(&page.body, 0).len() >= platform::MIN_SHOWN {
-        return None;
-    }
+    // The pages the page's JSON-LD things name, which it reads instead when they are as many (see `platform`).
+    let listed: Vec<url::Url> = extract::json_ld::items(&page.body, 0)
+        .iter()
+        .flat_map(|b| {
+            b.text
+                .split("; ")
+                .map(|field| field.split_once("(JSON-LD): ").map_or(field, |(_, first)| first))
+                .filter_map(|field| field.strip_prefix("url: "))
+                .filter_map(|u| url::Url::parse(u).ok())
+                .collect::<Vec<_>>()
+        })
+        .collect();
     let shown: Vec<url::Url> = ex.site_links.iter().map(|l| l.url.clone()).collect();
     let robots = follow::Robots::load(&page.url, retry).await;
-    let found = platform::listing_endpoint(&page.body, &page.url, &shown, timing, async |url: &url::Url| {
+    let found = platform::listing_endpoint(&page.body, &page.url, &shown, &listed, timing, async |url: &url::Url| {
         if !robots.allows(url) {
             return None;
         }
