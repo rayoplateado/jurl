@@ -131,35 +131,27 @@ pub fn apply_by_shape(data: &Data, recipe: &Recipe) -> Applied {
 /// brand's 150 values of code, name and count) can be longer than its 24 products, never as rich. Empty when its data holds
 /// no list of things.
 pub fn items(data: &Data, base: &Url, first: usize) -> Vec<Block> {
-    type Best<'v> = Option<((usize, usize), Vec<&'v Map<String, Value>>)>;
-    let mut best: Best = None;
-    for (_, root) in data.entries() {
-        sources::walk_min(root, 1, &mut Vec::new(), &mut |_, objects| {
-            let score = (keys_of(&objects).len(), objects.len());
-            if best.as_ref().is_none_or(|(s, _)| score > *s) {
-                best = Some((score, objects));
-            }
-        });
-    }
-    let things = best.map(|(_, objects)| objects).unwrap_or_default();
-    things
-        .into_iter()
-        .filter_map(|thing| json_ld::data_thing(thing, base))
-        .take(MAX_THINGS)
-        .enumerate()
-        .map(|(k, text)| Block::new(first + k, Kind::Structured, text))
-        .collect()
+    things(data, base, first, 1, |_| true)
 }
 
 /// The things of an HTML page's own data that is not its JSON-LD (its app state, the objects its scripts assign, the JSON it
-/// fetched), each one block numbered from `first`, as `items` gives a batch's: those of its largest list of `sources::MIN_LIST`
-/// things or more, weighed as `sources::lists` weighs them. A shop that draws a few of its cards in the HTML and the rest from
-/// its state holds them all there. Empty when its data holds no such list.
+/// fetched), chosen as `items` chooses a batch's, from lists of `sources::MIN_LIST` things or more. A shop that draws a few of
+/// its cards in the HTML and the rest from its state holds them all there. Empty when its data holds no such list.
 pub fn page_items(data: &Data, base: &Url, first: usize) -> Vec<Block> {
-    let mut best: Option<(usize, Vec<&Map<String, Value>>)> = None;
-    for (_, root) in data.entries().filter(|(name, _)| !name.starts_with("ld:")) {
-        sources::walk_min(root, sources::MIN_LIST, &mut Vec::new(), &mut |_, objects| {
-            let score = objects.len() * keys_of(&objects).len().min(15);
+    things(data, base, first, sources::MIN_LIST, |name| !name.starts_with("ld:"))
+}
+
+/// A page's things: its JSON-LD's, or its own data's (`page_items`) when those are more.
+pub fn more_things(json_ld: Vec<Block>, data: Vec<Block>) -> Vec<Block> {
+    if data.len() > json_ld.len() { data } else { json_ld }
+}
+
+fn things(data: &Data, base: &Url, first: usize, min: usize, reads: impl Fn(&str) -> bool) -> Vec<Block> {
+    type Best<'v> = Option<((usize, usize), Vec<&'v Map<String, Value>>)>;
+    let mut best: Best = None;
+    for (_, root) in data.entries().filter(|(name, _)| reads(name)) {
+        sources::walk_min(root, min, &mut Vec::new(), &mut |_, objects| {
+            let score = (keys_of(&objects).len(), objects.len());
             if best.as_ref().is_none_or(|(s, _)| score > *s) {
                 best = Some((score, objects));
             }
@@ -379,8 +371,14 @@ mod tests {
 
     #[test]
     fn a_page_gives_the_things_of_its_largest_state_list_and_not_its_json_ld() {
+        // Its filters and its menu are longer, with fewer keys: the products have the most.
+        let facets: Vec<Value> =
+            (0..40).map(|n| serde_json::json!({ "code": n, "name": "Brand", "count": n })).collect();
+        let menu: Vec<Value> =
+            (0..80).map(|n| serde_json::json!({ "id": n, "label": "Aceites", "href": "/c" })).collect();
         let state = serde_json::json!({
-            "menu": [{ "label": "Aceites" }, { "label": "Vinagres" }, { "label": "Especias" }, { "label": "Sal" }],
+            "facets": facets,
+            "menu": menu,
             "cards": { "results": { "items": [product(1), product(2), product(3)] } },
         });
         let html = format!(
@@ -398,5 +396,16 @@ mod tests {
             ]
         );
         assert!(page_items(&sources::data_of("<p>Aceites</p>"), &url, 0).is_empty());
+    }
+
+    #[test]
+    fn a_page_keeps_its_json_ld_things_unless_its_own_data_holds_more() {
+        let blocks = |n: usize, text: &str| {
+            (0..n).map(|k| Block::new(k, Kind::Structured, text.to_string())).collect::<Vec<_>>()
+        };
+        let texts = |b: Vec<Block>| b.into_iter().map(|b| b.text).collect::<Vec<_>>();
+        assert_eq!(texts(more_things(blocks(2, "ld"), blocks(3, "data"))), ["data"; 3]);
+        assert_eq!(texts(more_things(blocks(3, "ld"), blocks(3, "data"))), ["ld"; 3]);
+        assert_eq!(texts(more_things(blocks(4, "ld"), Vec::new())), ["ld"; 4]);
     }
 }

@@ -509,8 +509,8 @@ async fn load_page(
     }
     // `--with-pages` lists the page as the run reads it: the blocks a -q read is given, and apart from them the things its
     // JSON-LD lists (see `extract::json_ld::items`) or its other data lists, when more (see `extract::data_next::page_items`),
-    // so a list read can take its rows from the page's own data, and under
-    // --with-sources and --recipe the lists its data holds and the rows a recipe takes from them (see `extract::sources`).
+    // so a list read can take its rows from the page's own data, and under --with-sources and --recipe the lists its data
+    // holds and the rows a recipe takes from them (see `extract::sources`).
     // A page that is JSON (a batch a data link names) is its own data; a list read over pages takes the page after it from its
     // data when it links none (see `extract::data_next`).
     let document = extract::data_next::document(&page.body, &page.url);
@@ -534,11 +534,8 @@ async fn load_page(
         } else if !page.is_markdown {
             // The page's JSON-LD things, or the things of its own data when that holds more (a shop drawing most of its cards from
             // its app state).
-            data.items = extract::json_ld::items(&page.body, 0);
             let state = own.as_ref().map(|own| extract::data_next::page_items(own, &page.url, 0)).unwrap_or_default();
-            if state.len() > data.items.len() {
-                data.items = state;
-            }
+            data.items = extract::data_next::more_things(extract::json_ld::items(&page.body, 0), state);
         }
         if let Some(own) = own.as_ref().filter(|_| args.with_sources || args.recipe.is_some()) {
             if args.with_sources {

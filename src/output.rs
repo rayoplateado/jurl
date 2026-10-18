@@ -90,7 +90,7 @@ struct Loaded {
     data: PageData,
 }
 
-/// What `pages` says of a page's own data, apart from its blocks: the things its JSON-LD lists (`items`), the lists its data
+/// What `pages` says of a page's own data, apart from its blocks: the things its JSON-LD lists, or its own data when that lists more (`items`), the lists its data
 /// holds (`sources`, under --with-sources) and the rows a --recipe took from it.
 #[derive(Default)]
 pub(crate) struct PageData {
@@ -131,7 +131,7 @@ impl PagesLog {
     }
 
     /// The `pages` of the JSON: in load order, once per final URL (its first load, by `links::key`), each with its route,
-    /// whether it was rendered, its blocks, `items` when its JSON-LD lists things, `sources` when its data holds lists, and
+    /// whether it was rendered, its blocks, `items` when its JSON-LD or its own data lists things, `sources` when its data holds lists, and
     /// `rows` (or `recipe_error`) when a recipe was given, with `rows_truncated` when the list had more than it gives.
     pub(crate) fn json(&self) -> Result<Value> {
         let loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
