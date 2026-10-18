@@ -61,7 +61,6 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
         pages: Vec::new(),
         data_next: None,
         data_shapes: Vec::new(),
-        data_batch: false,
         app_shell: is_app_shell(doc, body),
     }
 }

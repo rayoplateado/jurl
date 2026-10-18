@@ -167,8 +167,6 @@ pub struct Extracted {
     /// The keys of the lists of things the page's data holds, when a list read over pages looked: how a batch a data link
     /// gave is told to hold the list's things (see `data_next::holds_like`).
     pub data_shapes: Vec<Vec<String>>,
-    /// Whether `--pages` read the page as a batch its list's data named next: the list ends where such a batch names none.
-    pub data_batch: bool,
     /// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no
     /// text, the page is a JS app.
     pub app_shell: bool,

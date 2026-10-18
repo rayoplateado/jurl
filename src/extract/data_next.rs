@@ -9,6 +9,7 @@
 
 use std::collections::HashSet;
 
+use scraper::{Html, Selector};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -33,10 +34,12 @@ pub struct DataNext {
 
 /// The pages after `base` as its data names them: the links of the data that holds the largest list, those sharing more of
 /// that list's path first, then the shorter. A link counts when it is a web address on the page's own site, and not the page.
-pub fn next_of(data: &Data, base: &Url) -> Option<DataNext> {
+/// The list is of 3 things or more (`sources::MIN_LIST`), unless the page is a `batch` a data link gave: a batch may hold one.
+pub fn next_of(data: &Data, base: &Url, batch: bool) -> Option<DataNext> {
+    let min = if batch { 1 } else { sources::MIN_LIST };
     let mut best: Option<(usize, DataNext)> = None;
     for (_, root) in data.entries() {
-        let Some((score, list_path, keys)) = largest_list(root) else { continue };
+        let Some((score, list_path, keys)) = largest_list(root, min) else { continue };
         let mut links = Vec::new();
         links_in(root, &mut Vec::new(), base, &mut links);
         let near = |path: &Vec<String>| path.iter().zip(&list_path).take_while(|(a, b)| a == b).count();
@@ -73,13 +76,26 @@ pub fn holds_like(shapes: &[Vec<String>], keys: &[String]) -> bool {
 
 /// A page that is itself JSON, such as a batch a data link names, as the page's data: one piece, named as the JSON the page
 /// would fetch is named when it is rendered (`json:fetch:PATH`, see render_capture.js), so a recipe written for one reads the
-/// other. None for a page that is no JSON.
+/// other. A browser that shows JSON (a render, the stealth route) wraps it in a `<pre>` of an otherwise empty page, which is
+/// read the same. None for a page that is no JSON.
 pub fn document(body: &str, url: &Url) -> Option<Data> {
     let text = body.trim_start();
-    if !text.starts_with(['{', '[']) {
+    let value: Value = if text.starts_with(['{', '[']) {
+        serde_json::from_str(text).ok()?
+    } else if text.starts_with('<') && text.contains("<pre") {
+        let doc = Html::parse_document(text);
+        let pre = Selector::parse("body > pre").expect("static selector");
+        let mut shown = doc.select(&pre);
+        let (Some(pre), None) = (shown.next(), shown.next()) else { return None };
+        let inner: String = pre.text().collect();
+        let all: String = doc.root_element().text().collect();
+        if all.trim() != inner.trim() {
+            return None;
+        }
+        serde_json::from_str(inner.trim()).ok()?
+    } else {
         return None;
-    }
-    let value: Value = serde_json::from_str(text).ok()?;
+    };
     Some(Data::from_entries(vec![(format!("json:fetch:{}", url.path()), value)]))
 }
 
@@ -105,11 +121,10 @@ pub fn apply_by_shape(data: &Data, recipe: &Recipe) -> Applied {
     }
 }
 
-/// The largest list of things in a piece of data (as `sources::lists` weighs them), its path and its things' keys. A list of
-/// one or two things counts here: a batch may be that short, and the batch its link gives must hold things like them.
-fn largest_list(root: &Value) -> Option<(usize, Vec<String>, Vec<String>)> {
+/// The largest list of `min` things or more in a piece of data (as `sources::lists` weighs them), its path and its things' keys.
+fn largest_list(root: &Value, min: usize) -> Option<(usize, Vec<String>, Vec<String>)> {
     let mut best: Option<(usize, Vec<String>, Vec<String>)> = None;
-    sources::walk_min(root, 1, &mut Vec::new(), &mut |path, objects| {
+    sources::walk_min(root, min, &mut Vec::new(), &mut |path, objects| {
         let keys = keys_of(&objects);
         let score = objects.len() * keys.len().min(15);
         if best.as_ref().is_none_or(|(s, _, _)| score > *s) {
@@ -165,17 +180,20 @@ fn is_next_key(key: &str) -> bool {
     NEXT_KEYS.contains(&key.as_str())
 }
 
-/// A link's address on the page's own host, not the page itself: an `http(s)` link resolved against the page.
+/// A link's address on the page's own host, not the page itself: a text written as an address (a path, a query, or a whole
+/// `http(s)` address), resolved against the page. A word ("Next"), a cursor or a page number is no address: a sibling path
+/// made of one would be a page of the site that does not exist. The scheme stays the page's, or goes from `http` to `https`.
 fn on_site(base: &Url, text: &str) -> Option<Url> {
     let text = text.trim();
-    if text.is_empty() || text.starts_with('#') {
+    let written = ["/", "?", "http://", "https://"].iter().any(|start| text.starts_with(start));
+    if !written {
         return None;
     }
     let mut url = base.join(text).ok()?;
     url.set_fragment(None);
-    let same = matches!(url.scheme(), "http" | "https")
-        && url.host_str() == base.host_str()
-        && url.port_or_known_default() == base.port_or_known_default();
+    let scheme = url.scheme() == base.scheme() || (base.scheme() == "http" && url.scheme() == "https");
+    let same =
+        scheme && url.host_str() == base.host_str() && url.port_or_known_default() == base.port_or_known_default();
     let mut here = base.clone();
     here.set_fragment(None);
     (same && url != here).then_some(url)
@@ -210,28 +228,44 @@ mod tests {
 
     #[test]
     fn the_next_page_is_the_link_the_data_of_the_largest_list_names_on_the_site() {
-        let next = next_of(&data(store()), &base()).unwrap();
+        let next = next_of(&data(store()), &base(), false).unwrap();
         assert_eq!(next.urls[0].as_str(), "https://shop.test/api/list?page=2");
         assert_eq!(next.keys, ["display_name", "prices", "sku", "url"]);
         // Linked as an object, as many APIs do.
         let linked = serde_json::json!({ "data": (1..=3).map(product).collect::<Vec<_>>(), "links": { "next": { "href": "https://shop.test/api/list?cursor=x" } } });
-        assert_eq!(next_of(&data(linked), &base()).unwrap().urls[0].as_str(), "https://shop.test/api/list?cursor=x");
+        assert_eq!(
+            next_of(&data(linked), &base(), false).unwrap().urls[0].as_str(),
+            "https://shop.test/api/list?cursor=x"
+        );
     }
 
     #[test]
     fn no_next_page_off_the_site_nor_the_page_itself_nor_where_the_data_holds_no_list() {
         let off =
             serde_json::json!({ "items": (1..=3).map(product).collect::<Vec<_>>(), "next": "https://ads.test/next" });
-        assert_eq!(next_of(&data(off), &base()), None);
+        assert_eq!(next_of(&data(off), &base(), false), None);
         let itself = serde_json::json!({ "items": (1..=3).map(product).collect::<Vec<_>>(), "next": BASE });
-        assert_eq!(next_of(&data(itself), &base()), None);
+        assert_eq!(next_of(&data(itself), &base(), false), None);
         let no_list = serde_json::json!({ "page": { "next_url": "/api/list?page=2" } });
-        assert_eq!(next_of(&data(no_list), &base()), None);
+        assert_eq!(next_of(&data(no_list), &base(), false), None);
+        // A label, a cursor or a page number under a next key is no address.
+        for text in ["Next", "eyJvZmZzZXQiOjIwfQ==", "3"] {
+            let labelled =
+                serde_json::json!({ "items": (1..=3).map(product).collect::<Vec<_>>(), "i18n": { "next": text } });
+            assert_eq!(next_of(&data(labelled), &base(), false), None, "{text}");
+        }
+        // Two things are no list on a page, but a batch may hold two.
+        let two = serde_json::json!({ "items": [product(1), product(2)], "next": "/api/list?page=2" });
+        assert_eq!(next_of(&data(two.clone()), &base(), false), None);
+        assert!(next_of(&data(two), &base(), true).is_some());
+        // Not to another port, nor from https down to http.
+        let other = serde_json::json!({ "items": (1..=3).map(product).collect::<Vec<_>>(), "next": "http://shop.test/api/list?page=2" });
+        assert_eq!(next_of(&data(other), &base(), false), None);
     }
 
     #[test]
     fn a_batch_counts_when_its_data_holds_things_like_the_lists_and_one_thing_is_enough() {
-        let keys = next_of(&data(store()), &base()).unwrap().keys;
+        let keys = next_of(&data(store()), &base(), false).unwrap().keys;
         let last = serde_json::json!({ "items": [product(9)] });
         assert!(holds_like(&shapes_of(&data(last)), &keys));
         let feed = serde_json::json!({ "events": [{ "event": "view", "ts": 1 }, { "event": "click", "ts": 2 }], "pagination": { "next_url": "/api/feed?page=2" } });
@@ -246,7 +280,7 @@ mod tests {
                 .to_string();
         let page = document(&body, &url).unwrap();
         assert_eq!(page.entries().next().unwrap().0, "json:fetch:/api/list");
-        assert_eq!(next_of(&page, &url).unwrap().urls[0].as_str(), "https://shop.test/api/list?page=3");
+        assert_eq!(next_of(&page, &url, true).unwrap().urls[0].as_str(), "https://shop.test/api/list?page=3");
         let recipe = Recipe {
             source: "json:app".to_string(),
             path: ["state", "section", "items"].iter().map(|s| s.to_string()).collect(),
@@ -258,5 +292,12 @@ mod tests {
         let Applied::Rows { rows, .. } = apply_by_shape(&page, &recipe) else { panic!("no rows") };
         assert_eq!(rows.iter().map(|r| r["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Oil 5", "Oil 6"]);
         assert!(document("<html></html>", &url).is_none());
+        // As a browser shows it, and not a page with a code sample in it.
+        let shown = format!(
+            "<html><head></head><body><pre>{}</pre></body></html>",
+            body.replace('&', "&amp;").replace('<', "&lt;")
+        );
+        assert!(document(&shown, &url).is_some());
+        assert!(document(&format!("<html><body><h1>API</h1><pre>{body}</pre></body></html>"), &url).is_none());
     }
 }

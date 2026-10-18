@@ -351,6 +351,8 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
     };
     let mut seen: HashSet<String> = novelty(&start, &ex).into_iter().collect();
     let mut pages = vec![(start, ex)];
+    // Whether the last page read is a batch its list's data named next (see `extract::data_next`).
+    let mut last_batch = false;
     'pages: while pages.len() < args.pages {
         let Some((last, last_ex)) = pages.last() else { break };
         // The page the last one links next; else the pages its data names next, nearest its list first, each of which must hold
@@ -359,7 +361,7 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
             (Some(next), _) => (vec![next.clone()], None),
             (None, Some(data)) => (data.urls.clone(), Some(data.keys.as_slice())),
             // A batch that its data names no next after is the list's last: its address is the data's, not a page's to guess at.
-            (None, None) if last_ex.data_batch => break,
+            (None, None) if last_batch => break,
             (None, None) => {
                 let guessed =
                     args.recipe.as_ref().filter(|_| !seen.is_empty()).and_then(|_| paging::guessed_next(last));
@@ -368,7 +370,11 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
         };
         let keys = keys.map(<[String]>::to_vec);
         for next in candidates {
+            // A page already read ends the list, unless the data named it: its next link may be another one.
             if pages.iter().any(|(u, _)| *u == next) {
+                if keys.is_some() {
+                    continue;
+                }
                 break 'pages;
             }
             let host = next.host_str().unwrap_or_default().to_string();
@@ -381,6 +387,13 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
             }
             let (url, next_ex) = match load(args, cfg, &next, t).await {
                 Ok((url, next_ex, _)) => (url, next_ex),
+                // A page the data named that fails leaves its other links to try.
+                Err(e) if keys.is_some() => {
+                    if args.timing {
+                        eprintln!("jurl: {next}, which the page's data names next, is not read: {e:#}");
+                    }
+                    continue;
+                }
                 Err(e) => {
                     eprintln!("jurl: {next} is not read, so the list is {} pages: {e:#}", pages.len());
                     break 'pages;
@@ -405,7 +418,7 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
                 break 'pages;
             }
             seen.extend(new);
-            let next_ex = Extracted { data_batch: keys.is_some(), ..next_ex };
+            last_batch = keys.is_some();
             pages.push((url, next_ex));
             continue 'pages;
         }
@@ -501,16 +514,16 @@ async fn load_page(
     // data when it links none (see `extract::data_next`).
     let document = extract::data_next::document(&page.body, &page.url);
     let is_document = document.is_some();
-    let reads_data = args.pages > 1 || (args.with_pages && (args.with_sources || args.recipe.is_some()));
+    // A list read over pages looks into the data of a page that links no next page (a page that links one is read on from there).
+    let pages_by_data = args.pages > 1 && ex.next_page.is_none();
+    let reads_data = pages_by_data || (args.with_pages && (args.with_sources || args.recipe.is_some()));
     let own = match document {
         Some(own) => Some(own),
         None if reads_data && !page.is_markdown => Some(extract::sources::data_of(&page.body)),
         None => None,
     };
-    if args.pages > 1
-        && let Some(own) = &own
-    {
-        ex.data_next = extract::data_next::next_of(own, &page.url);
+    if pages_by_data && let Some(own) = &own {
+        ex.data_next = extract::data_next::next_of(own, &page.url, is_document);
         ex.data_shapes = extract::data_next::shapes_of(own);
     }
     if args.with_pages {
