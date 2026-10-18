@@ -1299,7 +1299,8 @@ const RENDER_CAPTURE: &str = include_str!("render_capture.js");
 /// cards and images a page adds as a person scrolls are in the DOM it returns (see the script). The render waits for it.
 const RENDER_LAZY: &str = include_str!("render_lazy.js");
 
-/// What a render waits for before its dump: real visible text, and the lazy script having scrolled the page to its end.
+/// What a render waits for before its dump: real visible text, and the lazy script having scrolled the page to its end. A page
+/// the script did not run on waits the full 8 s, as one with too little text does.
 const RENDER_WAIT: &str = "document.body && (document.body.innerText || '').trim().length > 1500 && !!window.__jurlLazy && window.__jurlLazy.done";
 
 /// The DOM Lightpanda returns for `url`, run with the arguments `proxy` (none for a direct render).
