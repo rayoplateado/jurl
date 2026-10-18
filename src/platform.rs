@@ -155,12 +155,12 @@ struct Candidate {
 /// The endpoint a list read over pages takes the listing's things from, page 1, when the page's site runs on a platform with
 /// a public API and one of its lists is the page's (see the module's doc). `get` gives an address's body, or none when it
 /// can't be read (or its robots.txt does not let jurl read it); the lists are asked for together. `shown` are the links on
-/// the page. Under `timing`, what each list held of the page is said on stderr.
+/// the page, and `listed` how many things the page's own JSON-LD lists. Under `timing`, what each list held of the page is said on stderr.
 pub async fn listing_endpoint(
     html: &str,
     page: &Url,
     shown: &[Url],
-    listed: &[Url],
+    listed: usize,
     timing: bool,
     get: impl AsyncFn(&Url) -> Option<String>,
 ) -> Option<Url> {
@@ -196,7 +196,12 @@ pub async fn listing_endpoint(
     let bodies = futures::future::join_all(probes.iter().map(|probe| get(probe))).await;
     let mut best: Option<(usize, Candidate, Vec<Value>)> = None;
     for (candidate, body) in candidates.into_iter().zip(bodies) {
-        let Some(things) = body.and_then(|body| things_of(candidate.api, &body)) else { continue };
+        let Some(things) = body.and_then(|body| things_of(candidate.api, &body)) else {
+            if timing {
+                eprintln!("jurl: {} gives no list", candidate.route);
+            }
+            continue;
+        };
         let count = shown_in(candidate.api, &things, &shown);
         if timing {
             eprintln!("jurl: {} gives {} things, {count} of them linked from the page", candidate.route, things.len());
@@ -208,7 +213,6 @@ pub async fn listing_endpoint(
     let (count, candidate, things) = best?;
     // The page's own JSON-LD gives its things with their own fields (an event's date, where a post has only when it was
     // published): when it lists as many of the shown things, it is read, not the API.
-    let listed = listed.iter().filter_map(item_key).filter(|k| shown.contains(k)).collect::<HashSet<_>>().len();
     if listed >= count {
         if timing {
             eprintln!("jurl: {} is not read: the page's JSON-LD lists {listed} of its things", candidate.route);
@@ -231,7 +235,6 @@ pub async fn listing_endpoint(
     }
     // Else, the terms that none of the shown things has and that hold others (a shelter's adopted dogs, a past season) are
     // left out.
-    let mut left_out = false;
     if !narrowed {
         for (key, param) in &candidate.terms {
             let out = unshown_terms(&on_page, &off_page, key);
@@ -249,7 +252,6 @@ pub async fn listing_endpoint(
                 Api::Products => query.extend([q(param, ids), q("category_operator", "not_in".into())]),
                 _ => query.push(q(&format!("{param}_exclude"), ids)),
             }
-            left_out = true;
         }
     }
     if candidate.api == Api::Posts {
@@ -263,7 +265,6 @@ pub async fn listing_endpoint(
         query.push(q("_fields", READ_FIELDS.into()));
         query.push(q("_embed", "wp:featuredmedia".into()));
         if !narrowed
-            && !left_out
             && !off_page.is_empty()
             && let Some(after) = day_before_oldest(&on_page)
         {
@@ -595,20 +596,19 @@ mod tests {
 
     /// A site's answers by route, recording what is asked.
     async fn discover(html: &str, shown: &[&str], answers: Vec<(&str, String)>) -> (Option<Url>, Vec<String>) {
-        discover_listed(html, shown, &[], answers).await
+        discover_listed(html, shown, 0, answers).await
     }
 
     async fn discover_listed(
         html: &str,
         shown: &[&str],
-        listed: &[&str],
+        listed: usize,
         answers: Vec<(&str, String)>,
     ) -> (Option<Url>, Vec<String>) {
         let shown: Vec<Url> = shown.iter().map(|s| u(s)).collect();
-        let listed: Vec<Url> = listed.iter().map(|s| u(s)).collect();
         let asked = std::sync::Mutex::new(Vec::new());
         let found =
-            listing_endpoint(html, &u("https://site.test/agenda/"), &shown, &listed, false, async |url: &Url| {
+            listing_endpoint(html, &u("https://site.test/agenda/"), &shown, listed, false, async |url: &Url| {
                 asked.lock().unwrap().push(url.to_string());
                 let route = route_of(url);
                 answers.iter().find(|(r, _)| *r == route).map(|(_, body)| body.clone())
@@ -737,9 +737,9 @@ mod tests {
             "https://www.site.test/wp-json/wc/store/v1/products?per_page=100&category=45&category_operator=not_in",
             "a shop told by its kinds, with no plugin name in the page"
         );
-        let (found, _) = discover_listed(HEAD, &shown, &shown, answers.clone()).await;
+        let (found, _) = discover_listed(HEAD, &shown, 3, answers.clone()).await;
         assert_eq!(found, None);
-        let (found, _) = discover_listed(HEAD, &shown, &shown[..2], answers).await;
+        let (found, _) = discover_listed(HEAD, &shown, 2, answers).await;
         assert!(found.is_some(), "a JSON-LD that lists fewer than the API");
     }
 

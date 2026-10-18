@@ -568,6 +568,9 @@ async fn load_page(
     Ok((page.url, ex, served))
 }
 
+/// The longest a request to a site's platform API is waited for: it is a guess at a better way to read, not the read.
+const PLATFORM_PROBE: std::time::Duration = std::time::Duration::from_secs(8);
+
 /// The endpoint of the page's site's platform API that holds the listing's things (see `platform::listing_endpoint`). Its
 /// requests are the site's API, read as the page was, and only where its robots.txt lets jurl read.
 async fn platform_listing(
@@ -576,25 +579,21 @@ async fn platform_listing(
     retry: fetch::Retry<'_>,
     timing: bool,
 ) -> Option<url::Url> {
-    // The pages the page's JSON-LD things name, which it reads instead when they are as many (see `platform`).
-    let listed: Vec<url::Url> = extract::json_ld::items(&page.body, 0)
-        .iter()
-        .flat_map(|b| {
-            b.text
-                .split("; ")
-                .map(|field| field.split_once("(JSON-LD): ").map_or(field, |(_, first)| first))
-                .filter_map(|field| field.strip_prefix("url: "))
-                .filter_map(|u| url::Url::parse(u).ok())
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    // How many things the page's JSON-LD lists: those of its commonest type ("Event Hamlet (JSON-LD): …"), which it reads
+    // instead when they are as many (see `platform`).
+    let mut types: HashMap<String, usize> = HashMap::new();
+    for b in extract::json_ld::items(&page.body, 0) {
+        *types.entry(b.text.split([' ', '(']).next().unwrap_or_default().to_string()).or_default() += 1;
+    }
+    let listed = types.into_values().max().unwrap_or(0);
     let shown: Vec<url::Url> = ex.site_links.iter().map(|l| l.url.clone()).collect();
     let robots = follow::Robots::load(&page.url, retry).await;
-    let found = platform::listing_endpoint(&page.body, &page.url, &shown, &listed, timing, async |url: &url::Url| {
+    let found = platform::listing_endpoint(&page.body, &page.url, &shown, listed, timing, async |url: &url::Url| {
         if !robots.allows(url) {
             return None;
         }
-        fetch::fetch(url.as_str(), retry).await.ok().map(|p| p.body)
+        let read = tokio::time::timeout(PLATFORM_PROBE, fetch::fetch(url.as_str(), retry)).await;
+        read.ok()?.ok().map(|p| p.body)
     })
     .await;
     if timing && let Some(url) = &found {
