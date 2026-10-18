@@ -528,6 +528,9 @@ async fn load_page(
     // A batch of a platform's API, in a list read over pages, gives what a reader needs of each thing and names the batch
     // after it (see `platform`); its own data stays as it is for its sources and a recipe.
     let platform = document.as_ref().filter(|_| args.pages > 1).and_then(|own| platform::batch(own, &page.url));
+    if let Some((things, _)) = &platform {
+        ex.blocks = platform::blocks(things);
+    }
     // A list read over pages looks into the data of a page that links no next page (a page that links one is read on from there).
     let pages_by_data = args.pages > 1 && ex.next_page.is_none();
     let reads_data = pages_by_data || (args.with_pages && (args.with_sources || args.recipe.is_some()));

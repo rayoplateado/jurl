@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::extract::sources::Data;
+use crate::extract::{Block, Kind};
 
 /// The fewest shown things an endpoint's things must link to for it to be the listing's own: one or two can be a menu's.
 const MIN_SHOWN: usize = 3;
@@ -461,6 +462,45 @@ pub fn batch(data: &Data, url: &Url) -> Option<(Data, Option<Url>)> {
     Some((Data::from_entries(vec![(name.to_string(), Value::Array(tidied))]), next))
 }
 
+/// A batch's things as the page's text: one record per thing (a list's item, see `Block::record`), with its photo, its name and then its other values one per line under their key, linked
+/// to its page. Read as text, the batch would be its JSON: on a shop's hundred products half a megabyte that a reader can make
+/// nothing of, and that leaves a page's pages no room for its things.
+pub fn blocks(things: &Data) -> Vec<Block> {
+    let Some((_, Value::Array(things))) = things.entries().next() else { return Vec::new() };
+    things
+        .iter()
+        .filter_map(Value::as_object)
+        .enumerate()
+        .map(|(i, thing)| {
+            let url = thing.get("url").and_then(Value::as_str).map(str::to_string);
+            let mut lines: Vec<String> =
+                thing.get("name").and_then(Value::as_str).map(str::to_string).into_iter().collect();
+            for (key, value) in thing.iter().filter(|(k, _)| !matches!(k.as_str(), "name" | "url" | "image")) {
+                match value {
+                    Value::Object(fields) => lines.extend(fields.iter().filter_map(|(k, v)| line(k, v))),
+                    _ => lines.extend(line(key, value)),
+                }
+            }
+            Block {
+                links: url.clone().into_iter().collect(),
+                href: url,
+                record: Some(i + 1),
+                image: thing.get("image").and_then(Value::as_str).map(str::to_string),
+                ..Block::new(i, Kind::Para, lines.join("\n"))
+            }
+        })
+        .collect()
+}
+
+fn line(key: &str, value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.is_empty() => Some(format!("{key}: {text}")),
+        Value::Number(n) => Some(format!("{key}: {n}")),
+        Value::Bool(b) => Some(format!("{key}: {b}")),
+        _ => None,
+    }
+}
+
 /// The same endpoint, one page on.
 fn next_numbered(url: &Url) -> Url {
     let page = url.query_pairs().find(|(k, _)| k == "page").and_then(|(_, v)| v.parse::<u32>().ok()).unwrap_or(1);
@@ -586,6 +626,20 @@ mod tests {
 
     fn read(body: &str, url: &Url) -> Option<(Data, Option<Url>)> {
         batch(&crate::extract::data_next::document(body, url)?, url)
+    }
+
+    #[test]
+    fn a_batch_reads_as_one_block_per_thing_with_its_values_by_key() {
+        let url = u("https://site.test/wp-json/wc/store/v1/products?per_page=100");
+        let body = json!([{ "name": "Luna", "permalink": "https://site.test/animal/luna/", "short_description": "<p>Mastina</p>",
+            "prices": { "price": "0", "currency_minor_unit": 2, "currency_code": "EUR" }, "images": [{ "src": "https://site.test/l.jpg" }] }])
+        .to_string();
+        let (things, _) = read(&body, &url).unwrap();
+        let blocks = blocks(&things);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text, "Luna\ncurrency: EUR\nprice: 0.00\nsummary: Mastina");
+        assert_eq!(blocks[0].href.as_deref(), Some("https://site.test/animal/luna/"));
+        assert_eq!((blocks[0].record, blocks[0].image.as_deref()), (Some(1), Some("https://site.test/l.jpg")));
     }
 
     #[test]
