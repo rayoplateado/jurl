@@ -167,6 +167,9 @@ pub struct Extracted {
     /// The keys of the lists of things the page's data holds, when a list read over pages looked: how a batch a data link
     /// gave is told to hold the list's things (see `data_next::holds_like`).
     pub data_shapes: Vec<Vec<String>>,
+    /// The endpoint of the site's platform API that holds the listing's things, page 1, when a list read over pages starts on
+    /// a page whose site has one (see `platform`): what `--pages` reads after the start page, before any page it links.
+    pub platform_next: Option<url::Url>,
     /// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no
     /// text, the page is a JS app.
     pub app_shell: bool,

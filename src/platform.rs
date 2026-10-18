@@ -1,0 +1,673 @@
+//! A list's things from the public API of the platform its site runs on, when it runs on one that has one: WordPress's REST
+//! API (each kind of post: shows, dogs, courses), a WooCommerce shop's Store API (its products), and The Events Calendar's
+//! events API. These are the site's own data, served to anyone as JSON, so a list read over pages can take every thing from
+//! them, with its name, date, price, photo and link as the site keeps them, instead of reading them off the page's text.
+//!
+//! Nothing here knows a site. A platform is told by the page's own head (WordPress links its API root with
+//! `rel="https://api.w.org/"`) and by the plugins' names in its markup. Which of its lists is the page's is told by the links:
+//! the endpoint whose things link to the pages the listing links to (`MIN_SHOWN` of them, or more) is the listing's own, and
+//! the one that links to the most of them wins. A list that holds more than the page shows (every show the site ever had, a
+//! shop's every product) is narrowed with the site's own filters: a category or other term that every shown thing has and
+//! others lack, else, for posts, the date of the oldest one shown.
+
+use std::collections::HashSet;
+
+use scraper::{Html, Selector};
+use serde_json::{Map, Value};
+use url::Url;
+
+use crate::extract::sources::Data;
+
+/// The fewest shown things an endpoint's things must link to for it to be the listing's own: one or two can be a menu's.
+const MIN_SHOWN: usize = 3;
+/// How many things an endpoint gives at once: the most WordPress and WooCommerce give.
+const PER_PAGE: usize = 100;
+/// How many events The Events Calendar gives at once: its own most.
+const EVENTS_PER_PAGE: usize = 50;
+/// What a post is read with (see `tidy`): its photo comes embedded, which WordPress gives only with `_links` and `_embedded`
+/// asked for. A plugin's fields for SEO, the post's whole text and the API's bookkeeping are left out.
+const READ_FIELDS: &str = "id,date,link,title,excerpt,acf,_links,_embedded";
+/// The most kinds of post that are tried: each one tried is a request to the site.
+const MAX_KINDS: usize = 4;
+
+/// Kinds of post that are no list a page shows: the site's own building blocks, and the kinds the shop and events APIs give
+/// more fully.
+const NOT_LISTS: [&str; 12] = [
+    "attachment",
+    "page",
+    "nav_menu_item",
+    "wp_block",
+    "wp_template",
+    "wp_template_part",
+    "wp_navigation",
+    "wp_global_styles",
+    "wp_font_family",
+    "wp_font_face",
+    "product",
+    "tribe_events",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Api {
+    /// WordPress's REST API: `wp/v2/<kind>`.
+    Posts,
+    /// WooCommerce's Store API: `wc/store/v1/products`.
+    Products,
+    /// The Events Calendar: `tribe/events/v1/events`.
+    Events,
+}
+
+impl Api {
+    /// The API a URL is an endpoint of, by its route.
+    fn of(url: &Url) -> Option<Api> {
+        let route = route_of(url);
+        if route.starts_with("/wp/v2/") {
+            Some(Api::Posts)
+        } else if route.starts_with("/wc/store/") {
+            Some(Api::Products)
+        } else if route.starts_with("/tribe/events/v1/events") {
+            Some(Api::Events)
+        } else {
+            None
+        }
+    }
+
+    /// The key that holds a thing's own page.
+    fn link_key(self) -> &'static str {
+        match self {
+            Api::Posts => "link",
+            Api::Products => "permalink",
+            Api::Events => "url",
+        }
+    }
+}
+
+/// The route of an endpoint: the path after `/wp-json`, or the `rest_route` of a site without pretty addresses.
+fn route_of(url: &Url) -> String {
+    if let Some((_, route)) = url.query_pairs().find(|(k, _)| k == "rest_route") {
+        return route.into_owned();
+    }
+    let path = url.path();
+    path.find("/wp-json/").map(|at| path[at + "/wp-json".len()..].to_string()).unwrap_or_default()
+}
+
+/// The root of the site's WordPress API as its page links it (`<link rel="https://api.w.org/">`), when it is on the page's
+/// own site.
+pub fn api_root(html: &str, page: &Url) -> Option<Url> {
+    let doc = Html::parse_document(html);
+    let link = Selector::parse(r#"link[rel="https://api.w.org/"]"#).expect("static selector");
+    let href = doc.select(&link).find_map(|l| l.value().attr("href"))?;
+    let root = page.join(href.trim()).ok()?;
+    (site_of(&root) == site_of(page) && matches!(root.scheme(), "http" | "https")).then_some(root)
+}
+
+/// An endpoint of the API at `root`: its route, and its query.
+fn endpoint(root: &Url, route: &str, query: &[(String, String)]) -> Url {
+    let mut url = root.clone();
+    if root.query_pairs().any(|(k, _)| k == "rest_route") {
+        url.query_pairs_mut().clear().append_pair("rest_route", &format!("/{route}"));
+    } else {
+        let path = format!("{}/{route}", root.path().trim_end_matches('/'));
+        url.set_path(&path);
+        url.set_query(None);
+    }
+    if !query.is_empty() {
+        let mut pairs = url.query_pairs_mut();
+        for (k, v) in query {
+            pairs.append_pair(k, v);
+        }
+    }
+    url
+}
+
+/// A host without its `www.`.
+fn site_of(url: &Url) -> String {
+    url.host_str().unwrap_or_default().trim_start_matches("www.").to_ascii_lowercase()
+}
+
+/// A page's address as a link to it is told by: its site and its path, without the trailing slash, query or fragment.
+fn page_key(url: &Url) -> String {
+    format!("{}{}", site_of(url), url.path().trim_end_matches('/'))
+}
+
+/// One list an API may give: the endpoint that tells what it holds, the things it gave, and how its taxonomies are asked for.
+struct Candidate {
+    api: Api,
+    /// The route and query of the endpoint the list is read from, before narrowing.
+    route: String,
+    query: Vec<(String, String)>,
+    /// The keys of its things that hold their terms (`categories`, a kind's own taxonomies), with the query parameter each is
+    /// asked by.
+    terms: Vec<(String, String)>,
+}
+
+/// The endpoint a list read over pages takes the listing's things from, page 1, when the page's site runs on a platform with
+/// a public API and one of its lists is the page's (see the module's doc). `get` gives an address's body, or none when it
+/// can't be read (or its robots.txt does not let jurl read it). `shown` are the links on the page.
+pub async fn listing_endpoint(
+    html: &str,
+    page: &Url,
+    shown: &[Url],
+    mut get: impl AsyncFnMut(&Url) -> Option<String>,
+) -> Option<Url> {
+    let root = api_root(html, page)?;
+    let here = page_key(page);
+    let shown: HashSet<String> = shown.iter().map(page_key).filter(|k| *k != here).collect();
+    let mut candidates = Vec::new();
+    if html.contains("tribe-events") || html.contains("the-events-calendar") {
+        let per = EVENTS_PER_PAGE.to_string();
+        candidates.push(Candidate {
+            api: Api::Events,
+            route: "tribe/events/v1/events".into(),
+            query: vec![q("per_page", per)],
+            terms: vec![],
+        });
+    }
+    if html.contains("woocommerce") {
+        candidates.push(Candidate {
+            api: Api::Products,
+            route: "wc/store/v1/products".into(),
+            query: vec![q("per_page", PER_PAGE.to_string())],
+            terms: vec![("categories".into(), "category".into())],
+        });
+    }
+    let kinds = get(&endpoint(&root, "wp/v2/types", &[])).await;
+    let taxonomies = match &kinds {
+        Some(_) => get(&endpoint(&root, "wp/v2/taxonomies", &[])).await,
+        None => None,
+    };
+    candidates.extend(post_kinds(kinds.as_deref(), taxonomies.as_deref()));
+
+    let mut best: Option<(usize, Candidate, Vec<Value>)> = None;
+    for candidate in candidates {
+        let probe = endpoint(&root, &candidate.route, &candidate.query);
+        let Some(things) = get(&probe).await.and_then(|body| things_of(candidate.api, &body)) else { continue };
+        let count = things.iter().filter(|t| link_of(candidate.api, t).is_some_and(|k| shown.contains(&k))).count();
+        if count >= MIN_SHOWN && best.as_ref().is_none_or(|(c, _, _)| count > *c) {
+            best = Some((count, candidate, things));
+        }
+    }
+    let (_, candidate, things) = best?;
+    let is_shown = |t: &Value| link_of(candidate.api, t).is_some_and(|k| shown.contains(&k));
+    let (on_page, off_page): (Vec<&Value>, Vec<&Value>) = things.iter().partition(|t| is_shown(t));
+    // The probe asked only for what tells the list (`_fields`); the read asks for what a reader needs.
+    let mut query: Vec<(String, String)> = candidate.query.iter().filter(|(k, _)| k != "_fields").cloned().collect();
+    let mut narrowed = false;
+    for (key, param) in &candidate.terms {
+        if let Some(term) = narrowing_term(&on_page, &off_page, key) {
+            query.push(q(param, term.to_string()));
+            narrowed = true;
+        }
+    }
+    if candidate.api == Api::Posts {
+        query.push(q("_fields", READ_FIELDS.into()));
+        query.push(q("_embed", "wp:featuredmedia".into()));
+        if !narrowed
+            && !off_page.is_empty()
+            && let Some(after) = day_before_oldest(&on_page)
+        {
+            query.push(q("after", after));
+        }
+    }
+    Some(endpoint(&root, &candidate.route, &query))
+}
+
+fn q(name: &str, value: String) -> (String, String) {
+    (name.to_string(), value)
+}
+
+/// The kinds of post a site's `wp/v2/types` lists that may be a page's list, its own kinds first, then its posts, with the
+/// taxonomies of each as `wp/v2/taxonomies` names their parameters.
+fn post_kinds(kinds: Option<&str>, taxonomies: Option<&str>) -> Vec<Candidate> {
+    let Some(Value::Object(kinds)) = kinds.and_then(|k| serde_json::from_str::<Value>(k).ok()) else { return vec![] };
+    let taxonomies: Map<String, Value> = taxonomies
+        .and_then(|t| serde_json::from_str::<Value>(t).ok())
+        .and_then(|t| t.as_object().cloned())
+        .unwrap_or_default();
+    let mut out: Vec<(bool, Candidate)> = Vec::new();
+    for (slug, kind) in &kinds {
+        let Some(base) = kind.get("rest_base").and_then(Value::as_str).filter(|b| !b.is_empty()) else { continue };
+        if NOT_LISTS.contains(&slug.as_str()) || kind.get("viewable").and_then(Value::as_bool) == Some(false) {
+            continue;
+        }
+        let terms: Vec<(String, String)> = kind
+            .get("taxonomies")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|tax| taxonomies.get(tax).and_then(|t| t.get("rest_base")).and_then(Value::as_str))
+            .map(|base| (base.to_string(), base.to_string()))
+            .collect();
+        let mut fields = vec!["link".to_string(), "date".to_string()];
+        fields.extend(terms.iter().map(|(k, _)| k.clone()));
+        out.push((
+            slug == "post",
+            Candidate {
+                api: Api::Posts,
+                route: format!("wp/v2/{base}"),
+                query: vec![q("per_page", PER_PAGE.to_string()), q("_fields", fields.join(","))],
+                terms,
+            },
+        ));
+    }
+    out.sort_by_key(|(post, _)| *post);
+    out.into_iter().map(|(_, c)| c).take(MAX_KINDS).collect()
+}
+
+/// The things an endpoint's body holds: its list, or the events of The Events Calendar's answer.
+fn things_of(api: Api, body: &str) -> Option<Vec<Value>> {
+    let value: Value = serde_json::from_str(body.trim_start()).ok()?;
+    let list = match (api, value) {
+        (Api::Events, Value::Object(mut answer)) => answer.remove("events")?,
+        (_, list) => list,
+    };
+    match list {
+        Value::Array(things) => Some(things.into_iter().filter(Value::is_object).collect()),
+        _ => None,
+    }
+}
+
+/// The page a thing links to, as links are told by (`page_key`).
+fn link_of(api: Api, thing: &Value) -> Option<String> {
+    thing.get(api.link_key()).and_then(Value::as_str).and_then(|l| Url::parse(l).ok()).map(|u| page_key(&u))
+}
+
+/// The ids of the terms a thing has under `key`: a list of ids, or of terms with their `id`.
+fn term_ids(thing: &Value, key: &str) -> Vec<u64> {
+    thing
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t.as_u64().or_else(|| t.get("id").and_then(Value::as_u64)))
+        .collect()
+}
+
+/// The term under `key` that every shown thing has and that leaves out the most of the others, when one leaves out any.
+fn narrowing_term(on_page: &[&Value], off_page: &[&Value], key: &str) -> Option<u64> {
+    let (first, rest) = on_page.split_first()?;
+    let mut common: Vec<u64> = term_ids(first, key);
+    for thing in rest {
+        let ids = term_ids(thing, key);
+        common.retain(|id| ids.contains(id));
+    }
+    common
+        .into_iter()
+        .map(|id| (off_page.iter().filter(|t| !term_ids(t, key).contains(&id)).count(), id))
+        .filter(|(left_out, _)| *left_out > 0)
+        .max_by_key(|(left_out, id)| (*left_out, std::cmp::Reverse(*id)))
+        .map(|(_, id)| id)
+}
+
+/// The day before the oldest shown post was published, at its start (`2026-02-28T00:00:00`): WordPress's `after` gives the
+/// posts published after it, so the oldest shown one is kept, and the site's older posts (its past seasons) are not read.
+fn day_before_oldest(on_page: &[&Value]) -> Option<String> {
+    let oldest = on_page.iter().filter_map(|t| t.get("date").and_then(Value::as_str)).filter_map(ymd).min()?;
+    let (y, m, d) = civil(days(oldest) - 1);
+    Some(format!("{y:04}-{m:02}-{d:02}T00:00:00"))
+}
+
+/// A date's year, month and day, from its first ten characters (`2026-03-01`).
+fn ymd(date: &str) -> Option<(i64, u32, u32)> {
+    let mut parts = date.get(..10)?.split('-');
+    let y = parts.next()?.parse().ok()?;
+    let m = parts.next()?.parse().ok().filter(|m| (1..=12).contains(m))?;
+    let d = parts.next()?.parse().ok().filter(|d| (1..=31).contains(d))?;
+    Some((y, m, d))
+}
+
+/// Days since 1970-01-01 of a date of the proleptic Gregorian calendar.
+fn days((y, m, d): (i64, u32, u32)) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (i64::from(m) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The date a count of days since 1970-01-01 is.
+fn civil(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+/// A page that is a batch of one of these APIs, as the page's data (named as `data_next::document` names a JSON page), with
+/// each thing given by what a reader of the list needs (see `tidy`), and the batch after it: The Events Calendar names it
+/// (`next_rest_url`); WordPress and WooCommerce have one when this one is full. None for any other page.
+pub fn document(body: &str, url: &Url) -> Option<(Data, Option<Url>)> {
+    let api = Api::of(url)?;
+    let value: Value = serde_json::from_str(body.trim_start()).ok()?;
+    let next = match api {
+        Api::Events => value
+            .get("next_rest_url")
+            .and_then(Value::as_str)
+            .and_then(|n| Url::parse(n).ok())
+            .filter(|n| site_of(n) == site_of(url) && n != url),
+        _ => {
+            let per = url.query_pairs().find(|(k, _)| k == "per_page").and_then(|(_, v)| v.parse::<usize>().ok());
+            let full = per.is_some_and(|per| value.as_array().is_some_and(|things| things.len() >= per));
+            full.then(|| next_numbered(url))
+        }
+    };
+    let things = things_of(api, &value.to_string())?;
+    let tidied: Vec<Value> = things.iter().filter_map(|t| tidy(api, t)).collect();
+    let name = format!("json:fetch:{}", route_of(url));
+    Some((Data::from_entries(vec![(name, Value::Array(tidied))]), next))
+}
+
+/// The same endpoint, one page on.
+fn next_numbered(url: &Url) -> Url {
+    let page = url.query_pairs().find(|(k, _)| k == "page").and_then(|(_, v)| v.parse::<u32>().ok()).unwrap_or(1);
+    let pairs: Vec<(String, String)> =
+        url.query_pairs().filter(|(k, _)| k != "page").map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    let mut next = url.clone();
+    {
+        let mut query = next.query_pairs_mut();
+        query.clear();
+        for (k, v) in &pairs {
+            query.append_pair(k, v);
+        }
+        query.append_pair("page", &(page + 1).to_string());
+    }
+    next
+}
+
+/// One thing as a reader of the list needs it: its name, its page, its date, price and photo where the API has them, and
+/// a short text, each value as the site keeps it. Texts the site keeps as HTML (`title.rendered`) are given as the page shows
+/// them; a WooCommerce price is kept in the currency's minor unit (`1350` with 2 decimals) and is given as the page shows it
+/// (`13.50`). The API's own bookkeeping (links to itself, ids, every size of each photo) is left out.
+fn tidy(api: Api, thing: &Value) -> Option<Value> {
+    let mut out = Map::new();
+    let mut put = |key: &str, value: Option<Value>| {
+        if let Some(v) = value.filter(|v| !v.is_null() && v.as_str() != Some("")) {
+            out.insert(key.to_string(), v);
+        }
+    };
+    let text = |v: Option<&Value>| v.and_then(Value::as_str).map(shown_text).map(Value::String);
+    let at = |path: &[&str]| {
+        path.iter().try_fold(thing, |v, k| v.get(k).or_else(|| k.parse::<usize>().ok().and_then(|i| v.get(i))))
+    };
+    match api {
+        Api::Posts => {
+            put("name", text(at(&["title", "rendered"])));
+            put("url", at(&["link"]).cloned());
+            put("date", at(&["date"]).cloned());
+            put("summary", text(at(&["excerpt", "rendered"])));
+            put("image", at(&["_embedded", "wp:featuredmedia", "0", "source_url"]).cloned());
+            put("fields", at(&["acf"]).filter(|a| a.as_object().is_some_and(|o| !o.is_empty())).cloned());
+        }
+        Api::Products => {
+            let minor = at(&["prices", "currency_minor_unit"]).and_then(Value::as_u64).unwrap_or(0);
+            let price = |key: &str| {
+                at(&["prices", key]).and_then(Value::as_str).and_then(|p| decimal(p, minor)).map(Value::String)
+            };
+            put("name", text(at(&["name"])));
+            put("url", at(&["permalink"]).cloned());
+            put("price", price("price"));
+            if at(&["on_sale"]).and_then(Value::as_bool) == Some(true) {
+                put("regular_price", price("regular_price"));
+            }
+            put("currency", at(&["prices", "currency_code"]).cloned());
+            put("image", at(&["images", "0", "src"]).cloned());
+            put("categories", names(at(&["categories"])));
+            put("summary", text(at(&["short_description"])));
+            put("in_stock", at(&["is_in_stock"]).cloned());
+        }
+        Api::Events => {
+            put("name", text(at(&["title"])));
+            put("url", at(&["url"]).cloned());
+            put("start_date", at(&["start_date"]).cloned());
+            put("end_date", at(&["end_date"]).cloned());
+            put("cost", text(at(&["cost"])));
+            put("image", at(&["image", "url"]).cloned());
+            put("venue", text(at(&["venue", "venue"])));
+            put("city", text(at(&["venue", "city"])));
+            put("categories", names(at(&["categories"])));
+            put("summary", text(at(&["excerpt"])));
+        }
+    }
+    out.contains_key("name").then_some(Value::Object(out))
+}
+
+/// The names of a list of terms, as one text.
+fn names(terms: Option<&Value>) -> Option<Value> {
+    let names: Vec<&str> = terms?.as_array()?.iter().filter_map(|t| t.get("name").and_then(Value::as_str)).collect();
+    (!names.is_empty()).then(|| Value::String(names.iter().map(|n| shown_text(n)).collect::<Vec<_>>().join(", ")))
+}
+
+/// A text the site keeps as HTML, as its page shows it: its entities read, its tags dropped, its spaces collapsed.
+fn shown_text(html: &str) -> String {
+    let fragment = Html::parse_fragment(html);
+    let text: String = fragment.root_element().text().collect::<Vec<_>>().join(" ");
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A whole number of a currency's minor unit as its amount (`1350`, 2 → `13.50`).
+fn decimal(minor_units: &str, places: u64) -> Option<String> {
+    let digits = minor_units.trim();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let places = places as usize;
+    if places == 0 {
+        return Some(digits.to_string());
+    }
+    let padded = format!("{digits:0>width$}", width = places + 1);
+    let (whole, part) = padded.split_at(padded.len() - places);
+    Some(format!("{whole}.{part}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn u(s: &str) -> Url {
+        Url::parse(s).unwrap()
+    }
+
+    const HEAD: &str =
+        r#"<html><head><link rel="https://api.w.org/" href="https://www.site.test/wp-json/"></head><body>"#;
+
+    #[test]
+    fn the_api_root_is_the_one_the_head_links_on_the_page_s_own_site() {
+        let page = u("https://site.test/agenda/");
+        assert_eq!(api_root(HEAD, &page).unwrap().as_str(), "https://www.site.test/wp-json/");
+        let off = r#"<link rel="https://api.w.org/" href="https://other.test/wp-json/">"#;
+        assert_eq!(api_root(off, &page), None);
+        let plain = r#"<link rel="https://api.w.org/" href="https://site.test/?rest_route=/">"#;
+        let root = api_root(plain, &page).unwrap();
+        assert_eq!(
+            endpoint(&root, "wp/v2/types", &[q("per_page", "100".into())]).as_str(),
+            "https://site.test/?rest_route=%2Fwp%2Fv2%2Ftypes&per_page=100"
+        );
+        assert_eq!(Api::of(&endpoint(&root, "wp/v2/dogs", &[])), Some(Api::Posts));
+        assert_eq!(
+            endpoint(&u("https://site.test/wp-json/"), "wc/store/v1/products", &[]).as_str(),
+            "https://site.test/wp-json/wc/store/v1/products"
+        );
+    }
+
+    fn post(n: u32, date: &str, cats: &[u64]) -> Value {
+        json!({ "link": format!("https://www.site.test/shows/{n}/"), "date": date, "categories": cats })
+    }
+
+    fn types() -> String {
+        json!({
+            "post": { "slug": "post", "rest_base": "posts", "taxonomies": ["category"] },
+            "page": { "slug": "page", "rest_base": "pages", "taxonomies": [] },
+            "attachment": { "slug": "attachment", "rest_base": "media", "taxonomies": [] },
+            "show": { "slug": "show", "rest_base": "shows", "taxonomies": ["season"] },
+        })
+        .to_string()
+    }
+
+    fn taxonomies() -> String {
+        json!({ "category": { "rest_base": "categories" }, "season": { "rest_base": "seasons" } }).to_string()
+    }
+
+    /// A site's answers by route, recording what is asked.
+    async fn discover(html: &str, shown: &[&str], answers: Vec<(&str, String)>) -> (Option<Url>, Vec<String>) {
+        let mut asked = Vec::new();
+        let shown: Vec<Url> = shown.iter().map(|s| u(s)).collect();
+        let found = listing_endpoint(html, &u("https://site.test/agenda/"), &shown, async |url: &Url| {
+            asked.push(url.to_string());
+            let route = route_of(url);
+            answers.iter().find(|(r, _)| *r == route).map(|(_, body)| body.clone())
+        })
+        .await;
+        (found, asked)
+    }
+
+    #[tokio::test]
+    async fn the_kind_whose_posts_the_page_links_to_is_read_narrowed_to_the_term_they_share() {
+        let shows = json!([
+            { "link": "https://site.test/shows/1/", "date": "2026-09-01T10:00:00", "seasons": [7] },
+            { "link": "https://site.test/shows/2/", "date": "2026-08-01T10:00:00", "seasons": [7, 3] },
+            { "link": "https://site.test/shows/3/", "date": "2026-07-01T10:00:00", "seasons": [7] },
+            { "link": "https://site.test/shows/4/", "date": "2019-07-01T10:00:00", "seasons": [3] },
+        ])
+        .to_string();
+        let posts = json!([post(9, "2026-01-01T00:00:00", &[1])]).to_string();
+        let shown = [
+            "https://site.test/shows/1",
+            "https://site.test/shows/2/",
+            "https://site.test/shows/3/",
+            "https://site.test/agenda/",
+        ];
+        let answers = vec![
+            ("/wp/v2/types", types()),
+            ("/wp/v2/taxonomies", taxonomies()),
+            ("/wp/v2/shows", shows),
+            ("/wp/v2/posts", posts),
+        ];
+        let (found, asked) = discover(HEAD, &shown, answers).await;
+        assert_eq!(
+            found.unwrap().as_str(),
+            "https://www.site.test/wp-json/wp/v2/shows?per_page=100&seasons=7&_fields=id%2Cdate%2Clink%2Ctitle%2Cexcerpt%2Cacf%2C_links%2C_embedded&_embed=wp%3Afeaturedmedia"
+        );
+        assert!(asked.iter().all(|a| !a.contains("/pages") && !a.contains("/media")), "{asked:?}");
+        assert!(asked[2].contains("/shows"), "a site's own kinds are tried before its posts");
+    }
+
+    #[tokio::test]
+    async fn without_a_term_to_narrow_by_posts_are_read_from_the_day_before_the_oldest_shown() {
+        let shows = json!([
+            post(1, "2026-03-01T10:00:00", &[]),
+            post(2, "2026-02-10T10:00:00", &[]),
+            post(3, "2026-01-01T09:00:00", &[]),
+            post(4, "2018-01-01T09:00:00", &[]),
+        ])
+        .to_string();
+        let shown = ["https://site.test/shows/1/", "https://site.test/shows/2/", "https://site.test/shows/3/"];
+        let answers = vec![("/wp/v2/types", types()), ("/wp/v2/taxonomies", taxonomies()), ("/wp/v2/shows", shows)];
+        let found = discover(HEAD, &shown, answers).await.0.unwrap();
+        assert!(found.as_str().ends_with("&after=2025-12-31T00%3A00%3A00"), "{found}");
+    }
+
+    #[tokio::test]
+    async fn no_endpoint_when_its_things_link_to_fewer_than_three_shown_pages_or_the_site_has_no_api() {
+        let shows = json!([post(1, "2026-03-01T10:00:00", &[]), post(2, "2026-02-10T10:00:00", &[])]).to_string();
+        let shown = ["https://site.test/shows/1/", "https://site.test/shows/2/"];
+        let answers = vec![("/wp/v2/types", types()), ("/wp/v2/taxonomies", taxonomies()), ("/wp/v2/shows", shows)];
+        assert_eq!(discover(HEAD, &shown, answers.clone()).await.0, None);
+        let (found, asked) = discover("<html><head></head></html>", &shown, answers).await;
+        assert_eq!(found, None);
+        assert!(asked.is_empty(), "a page that links no API asks nothing");
+    }
+
+    #[tokio::test]
+    async fn a_shop_s_products_are_narrowed_to_the_category_the_shown_ones_share_and_events_are_read_as_given() {
+        let product = |n: u32, cats: &[u64]| json!({ "permalink": format!("https://site.test/p/{n}/"), "categories": cats.iter().map(|c| json!({ "id": c, "name": "x" })).collect::<Vec<_>>() });
+        let products = json!([product(1, &[5, 9]), product(2, &[5]), product(3, &[5]), product(4, &[8])]).to_string();
+        let shop = format!("{HEAD}<body class=\"woocommerce\">");
+        let shown = ["https://site.test/p/1/", "https://site.test/p/2/", "https://site.test/p/3/"];
+        let answers = vec![("/wc/store/v1/products", products)];
+        assert_eq!(
+            discover(&shop, &shown, answers).await.0.unwrap().as_str(),
+            "https://www.site.test/wp-json/wc/store/v1/products?per_page=100&category=5"
+        );
+        let events = json!({ "events": (1..=3).map(|n| json!({ "url": format!("https://site.test/event/{n}/") })).collect::<Vec<_>>() }).to_string();
+        let calendar = format!("{HEAD}<div class=\"tribe-events\">");
+        let shown = ["https://site.test/event/1/", "https://site.test/event/2/", "https://site.test/event/3/"];
+        assert_eq!(
+            discover(&calendar, &shown, vec![("/tribe/events/v1/events", events)]).await.0.unwrap().as_str(),
+            "https://www.site.test/wp-json/tribe/events/v1/events?per_page=50"
+        );
+    }
+
+    #[test]
+    fn a_batch_gives_each_thing_as_the_page_shows_it_and_the_batch_after_a_full_one() {
+        let url = u("https://site.test/wp-json/wp/v2/shows?per_page=2&_embed=wp%3Afeaturedmedia");
+        let body = json!([
+            { "id": 1, "link": "https://site.test/shows/1/", "date": "2026-09-01T10:00:00",
+              "title": { "rendered": "Hamlet &#8211; <em>new</em>" }, "excerpt": { "rendered": "<p>A  play.</p>\n" },
+              "_links": { "self": [{ "href": "x" }] },
+              "_embedded": { "wp:featuredmedia": [{ "source_url": "https://site.test/h.jpg", "media_details": { "sizes": {} } }] } },
+            { "id": 2, "link": "https://site.test/shows/2/", "title": { "rendered": "" } },
+        ])
+        .to_string();
+        let (data, next) = document(&body, &url).unwrap();
+        let (name, value) = data.entries().next().unwrap();
+        assert_eq!(name, "json:fetch:/wp/v2/shows");
+        assert_eq!(
+            value,
+            &json!([{ "name": "Hamlet – new", "url": "https://site.test/shows/1/", "date": "2026-09-01T10:00:00",
+                      "summary": "A play.", "image": "https://site.test/h.jpg" }])
+        );
+        assert_eq!(
+            next.unwrap().as_str(),
+            "https://site.test/wp-json/wp/v2/shows?per_page=2&_embed=wp%3Afeaturedmedia&page=2"
+        );
+        let last = document(&json!([{ "link": "a", "title": { "rendered": "A" } }]).to_string(), &url).unwrap();
+        assert_eq!(last.1, None, "a batch that is not full is the last");
+        assert!(document("[]", &u("https://site.test/api/list")).is_none());
+    }
+
+    #[test]
+    fn a_product_s_price_is_given_in_its_currency_and_an_event_s_next_batch_is_the_one_it_names() {
+        let url = u("https://site.test/wp-json/wc/store/v1/products?per_page=100");
+        let body = json!([{ "name": "Curso de sushi", "permalink": "https://site.test/p/1/",
+            "prices": { "price": "1350", "regular_price": "1500", "currency_minor_unit": 2, "currency_code": "EUR" },
+            "on_sale": true, "images": [{ "src": "https://site.test/s.jpg" }], "categories": [{ "id": 5, "name": "Cursos &amp; talleres" }],
+            "is_in_stock": true }])
+        .to_string();
+        let (data, _) = document(&body, &url).unwrap();
+        assert_eq!(
+            data.entries().next().unwrap().1,
+            &json!([{ "name": "Curso de sushi", "url": "https://site.test/p/1/", "price": "13.50", "regular_price": "15.00",
+                      "currency": "EUR", "image": "https://site.test/s.jpg", "categories": "Cursos & talleres", "in_stock": true }])
+        );
+        assert_eq!(decimal("5", 2).as_deref(), Some("0.05"));
+        let url = u("https://site.test/wp-json/tribe/events/v1/events?per_page=50");
+        let body = json!({ "events": [{ "title": "Concierto", "url": "https://site.test/e/1/", "start_date": "2026-11-05 21:00:00",
+            "cost": "15 €", "image": { "url": "https://site.test/e.jpg", "sizes": {} }, "venue": { "venue": "Sala" } }],
+            "next_rest_url": "https://site.test/wp-json/tribe/events/v1/events?per_page=50&page=2" })
+        .to_string();
+        let (data, next) = document(&body, &url).unwrap();
+        assert_eq!(
+            data.entries().next().unwrap().1,
+            &json!([{ "name": "Concierto", "url": "https://site.test/e/1/", "start_date": "2026-11-05 21:00:00",
+                      "cost": "15 €", "image": "https://site.test/e.jpg", "venue": "Sala" }])
+        );
+        assert_eq!(next.unwrap().as_str(), "https://site.test/wp-json/tribe/events/v1/events?per_page=50&page=2");
+    }
+
+    #[test]
+    fn days_and_dates_go_both_ways() {
+        for date in [(1970, 1, 1), (2024, 2, 29), (2026, 3, 1), (2000, 12, 31)] {
+            assert_eq!(civil(days(date)), date);
+        }
+        assert_eq!(civil(days((2026, 3, 1)) - 1), (2026, 2, 28));
+    }
+}
