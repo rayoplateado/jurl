@@ -576,13 +576,15 @@ async fn platform_listing(
     retry: fetch::Retry<'_>,
     timing: bool,
 ) -> Option<url::Url> {
+    // A page whose JSON-LD lists its things already gives them with their own fields, which a platform's list may lack (a
+    // post's date is when it was published, not the event's).
+    if extract::json_ld::items(&page.body, 0).len() >= platform::MIN_SHOWN {
+        return None;
+    }
     let shown: Vec<url::Url> = ex.site_links.iter().map(|l| l.url.clone()).collect();
-    let mut robots: Option<follow::Robots> = None;
-    let found = platform::listing_endpoint(&page.body, &page.url, &shown, async |url: &url::Url| {
-        if robots.is_none() {
-            robots = Some(follow::Robots::load(url, retry).await);
-        }
-        if !robots.as_ref().is_some_and(|r| r.allows(url)) {
+    let robots = follow::Robots::load(&page.url, retry).await;
+    let found = platform::listing_endpoint(&page.body, &page.url, &shown, timing, async |url: &url::Url| {
+        if !robots.allows(url) {
             return None;
         }
         fetch::fetch(url.as_str(), retry).await.ok().map(|p| p.body)
