@@ -508,7 +508,8 @@ async fn load_page(
         extract::json_ld::add_to(&mut ex, &page.body);
     }
     // `--with-pages` lists the page as the run reads it: the blocks a -q read is given, and apart from them the things its
-    // JSON-LD lists (see `extract::json_ld::items`), so a list read can take its rows from the page's own data, and under
+    // JSON-LD lists (see `extract::json_ld::items`) or its other data lists, when more (see `extract::data_next::page_items`),
+    // so a list read can take its rows from the page's own data, and under
     // --with-sources and --recipe the lists its data holds and the rows a recipe takes from them (see `extract::sources`).
     // A page that is JSON (a batch a data link names) is its own data; a list read over pages takes the page after it from its
     // data when it links none (see `extract::data_next`).
@@ -516,7 +517,7 @@ async fn load_page(
     let is_document = document.is_some();
     // A list read over pages looks into the data of a page that links no next page (a page that links one is read on from there).
     let pages_by_data = args.pages > 1 && ex.next_page.is_none();
-    let reads_data = pages_by_data || (args.with_pages && (args.with_sources || args.recipe.is_some()));
+    let reads_data = pages_by_data || args.with_pages;
     let own = match document {
         Some(own) => Some(own),
         None if reads_data && !page.is_markdown => Some(extract::sources::data_of(&page.body)),
@@ -531,7 +532,13 @@ async fn load_page(
         if let Some(own) = own.as_ref().filter(|_| is_document) {
             data.items = extract::data_next::items(own, &page.url, 0);
         } else if !page.is_markdown {
+            // The page's JSON-LD things, or the things of its own data when that holds more (a shop drawing most of its cards from
+            // its app state).
             data.items = extract::json_ld::items(&page.body, 0);
+            let state = own.as_ref().map(|own| extract::data_next::page_items(own, &page.url, 0)).unwrap_or_default();
+            if state.len() > data.items.len() {
+                data.items = state;
+            }
         }
         if let Some(own) = own.as_ref().filter(|_| args.with_sources || args.recipe.is_some()) {
             if args.with_sources {

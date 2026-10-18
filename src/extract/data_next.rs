@@ -151,6 +151,30 @@ pub fn items(data: &Data, base: &Url, first: usize) -> Vec<Block> {
         .collect()
 }
 
+/// The things of an HTML page's own data that is not its JSON-LD (its app state, the objects its scripts assign, the JSON it
+/// fetched), each one block numbered from `first`, as `items` gives a batch's: those of its largest list of `sources::MIN_LIST`
+/// things or more, weighed as `sources::lists` weighs them. A shop that draws a few of its cards in the HTML and the rest from
+/// its state holds them all there. Empty when its data holds no such list.
+pub fn page_items(data: &Data, base: &Url, first: usize) -> Vec<Block> {
+    let mut best: Option<(usize, Vec<&Map<String, Value>>)> = None;
+    for (_, root) in data.entries().filter(|(name, _)| !name.starts_with("ld:")) {
+        sources::walk_min(root, sources::MIN_LIST, &mut Vec::new(), &mut |_, objects| {
+            let score = objects.len() * keys_of(&objects).len().min(15);
+            if best.as_ref().is_none_or(|(s, _)| score > *s) {
+                best = Some((score, objects));
+            }
+        });
+    }
+    let things = best.map(|(_, objects)| objects).unwrap_or_default();
+    things
+        .into_iter()
+        .filter_map(|thing| json_ld::data_thing(thing, base))
+        .take(MAX_THINGS)
+        .enumerate()
+        .map(|(k, text)| Block::new(first + k, Kind::Structured, text))
+        .collect()
+}
+
 /// The largest list of `min` things or more in a piece of data (as `sources::lists` weighs them), its path and its things' keys.
 fn largest_list(root: &Value, min: usize) -> Option<(usize, Vec<String>, Vec<String>)> {
     let mut best: Option<(usize, Vec<String>, Vec<String>)> = None;
@@ -351,5 +375,28 @@ mod tests {
         );
         assert!(blocks.iter().all(|b| b.kind == Kind::Structured));
         assert!(items(&document("{\"total\": 0}", &url).unwrap(), &url, 0).is_empty());
+    }
+
+    #[test]
+    fn a_page_gives_the_things_of_its_largest_state_list_and_not_its_json_ld() {
+        let state = serde_json::json!({
+            "menu": [{ "label": "Aceites" }, { "label": "Vinagres" }, { "label": "Especias" }, { "label": "Sal" }],
+            "cards": { "results": { "items": [product(1), product(2), product(3)] } },
+        });
+        let html = format!(
+            r#"<script type="application/ld+json">{{"@type": "ItemList", "itemListElement": [{{"@type": "Product", "name": "A"}}, {{"@type": "Product", "name": "B"}}, {{"@type": "Product", "name": "C"}}, {{"@type": "Product", "name": "D"}}, {{"@type": "Product", "name": "E"}}]}}</script><script>window.__INITIAL_STATE__ = {state};</script>"#
+        );
+        let url = Url::parse("https://shop.test/oils").unwrap();
+        let texts: Vec<String> =
+            page_items(&sources::data_of(&html), &url, 4).into_iter().map(|b| format!("{} {}", b.i, b.text)).collect();
+        assert_eq!(
+            texts,
+            [
+                "4 Thing (data): display_name: Oil 1; prices.price: 1; sku: 1; url: https://shop.test/p/1",
+                "5 Thing (data): display_name: Oil 2; prices.price: 2; sku: 2; url: https://shop.test/p/2",
+                "6 Thing (data): display_name: Oil 3; prices.price: 3; sku: 3; url: https://shop.test/p/3",
+            ]
+        );
+        assert!(page_items(&sources::data_of("<p>Aceites</p>"), &url, 0).is_empty());
     }
 }
