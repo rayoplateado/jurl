@@ -1256,7 +1256,7 @@ async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url
 }
 
 /// Run the page's JavaScript in Lightpanda and return the resulting DOM.
-/// Waits for the network to settle and for real visible text to appear, capped at 8s:
+/// Waits for the network to settle, for real visible text to appear and for the page to be scrolled to its end, capped at 8s:
 /// SPAs keep background traffic going and often paint content after the network calms down.
 /// A host on the fallback proxy is rendered through it: Lightpanda is given the render's meter (see `meter.rs`) in place of the
 /// proxy, and every request of the render goes through it, the page's scripts and images included (see the README). Its bytes are
@@ -1295,12 +1295,20 @@ async fn end_render_meter(fallback: &Fallback, meter: Option<Meter>) {
 /// returns, so a page built from its data still has that data to read (see the script).
 const RENDER_CAPTURE: &str = include_str!("render_capture.js");
 
+/// The script a render runs before the page's own: it shows the page each element it watches as in view, and scrolls it, so the
+/// cards and images a page adds as a person scrolls are in the DOM it returns (see the script). The render waits for it.
+const RENDER_LAZY: &str = include_str!("render_lazy.js");
+
+/// What a render waits for before its dump: real visible text, and the lazy script having scrolled the page to its end. A page
+/// the script did not run on waits the full 8 s, as one with too little text does.
+const RENDER_WAIT: &str = "document.body && (document.body.innerText || '').trim().length > 1500 && !!window.__jurlLazy && window.__jurlLazy.done";
+
 /// The DOM Lightpanda returns for `url`, run with the arguments `proxy` (none for a direct render).
 async fn dom_of(bin: &Path, url: &Url, proxy: &[String]) -> Result<String> {
     let run = Command::new(bin)
         .args(["fetch", "--json", "--dump", "html", "--wait-until", "networkalmostidle", "--wait-ms", "8000"])
-        .args(["--inject-script", RENDER_CAPTURE])
-        .args(["--wait-script", "document.body && (document.body.innerText || '').trim().length > 1500"])
+        .args(["--inject-script", RENDER_CAPTURE, "--inject-script", RENDER_LAZY])
+        .args(["--wait-script", RENDER_WAIT])
         .args(proxy)
         .arg(url.as_str())
         .stdin(Stdio::null())
@@ -3124,6 +3132,28 @@ mod tests {
             [("json:fetch:/api/items", 3)]
         );
         let _ = std::fs::remove_dir_all(bin.parent().expect("a directory"));
+    }
+
+    /// A page that adds its cards as they come into view, rendered by the real Lightpanda that `JURL_TEST_LIGHTPANDA` names: every
+    /// card is in the DOM, not only the first. Without that variable it checks nothing, as `cargo test` has no browser.
+    #[tokio::test]
+    async fn a_render_scrolls_a_page_that_adds_its_cards_as_they_come_into_view_to_its_end() {
+        let Some(bin) = std::env::var_os("JURL_TEST_LIGHTPANDA") else { return };
+        let page = r#"<html><body><h1>Shop</h1><div id="grid"></div><div id="end">more</div><script>
+            let n = 0; const grid = document.getElementById("grid");
+            const add = () => { for (let i = 0; i < 8; i++) { n++; const card = document.createElement("article");
+              card.textContent = "Card " + n + " of the shop, with a name long enough to be read as the page's text."; grid.appendChild(card); } };
+            add();
+            new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting) && n < 24) add(); }).observe(document.getElementById("end"));
+            window.addEventListener("scroll", () => { if (n < 24) add(); });
+            </script></body></html>"#;
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            page.len()
+        );
+        let url = Url::parse(&test_server::serve(head, page.as_bytes().to_vec(), false)).expect("a URL");
+        let rendered = render(std::path::Path::new(&bin), &url, &Fallback::with(None, false)).await.expect("rendered");
+        assert!(rendered.body.contains("Card 24 of the shop"), "every card is rendered");
     }
 
     #[test]
