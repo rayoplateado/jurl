@@ -453,7 +453,7 @@ url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · 
 - **Models choose, they don't write.** That's why the output is safe to pipe into `xargs curl`.
 - **Clef is better at "what is this?" than at "does this matter?"** Asked whether a chart was "meaningful content", Clef said 0.12. Asked *what it shows* (photo, chart, logo, avatar…), it was right. `--vision` adds up the content classes and averages them with Jev's judgement of the page context: a portrait is content on Wikipedia and noise in an author box.
 - **For `--find`, Clef decides alone.** It sees the pixels *and* the alt text and caption.
-- **Rendering waits for text, not silence.** Single-page apps never stop talking to the network, so Lightpanda waits for the network to calm down *and* for 1,500 characters of visible text, up to 8 s.
+- **Rendering waits for text, not silence.** Single-page apps never stop talking to the network, so Lightpanda waits for the network to calm down *and* for 1,500 characters of visible text, up to 8 s. A page that adds its cards or images as you scroll (an `IntersectionObserver` on them, or a scroll listener) is scrolled to its end first: every element the page watches is told it is in view, and the window scrolls, until the page stops growing (about a second on a page that never does) or after 20 tries, so its later cards are in the text jurl reads.
 - **Several tricks keep `--vision` fast:**
   - Clef runs at the same time as Jev.
   - Each image gets its own HTTP/1 connection: sharing one HTTP/2 connection made the slowest calls about twice as slow.
