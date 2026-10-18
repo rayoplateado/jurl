@@ -13,11 +13,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// The fewest objects an array needs to count as a list of things.
-const MIN_LIST: usize = 3;
+pub(crate) const MIN_LIST: usize = 3;
 /// The most lists a page gives: the largest ones.
 const MAX_LISTS: usize = 8;
 /// The elements of an array that are looked into for lists inside them: a long list's lists are its elements' own.
-const MAX_WALKED: usize = 50;
+pub(crate) const MAX_WALKED: usize = 50;
 /// The values a sample element gives, and the characters of each: a sample shows paths, not whole texts.
 const MAX_SAMPLE_VALUES: usize = 60;
 const MAX_SAMPLE_CHARS: usize = 120;
@@ -60,6 +60,18 @@ pub enum Applied {
 
 /// A page's data, read once for both `lists` and `apply`: each piece under the name a recipe gives it.
 pub struct Data(Vec<(String, Value)>);
+
+impl Data {
+    /// Data made of these pieces, each under its name.
+    pub fn from_entries(entries: Vec<(String, Value)>) -> Data {
+        Data(entries)
+    }
+
+    /// The pieces of the data, each with its name.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.0.iter().map(|(name, value)| (name.as_str(), value))
+    }
+}
 
 /// Reads `--recipe`: a JSON object with `source`, `path` (empty for data that is itself the list) and `fields`, each field a
 /// path.
@@ -109,14 +121,19 @@ pub fn apply(data: &Data, recipe: &Recipe) -> Applied {
     let Some(Value::Array(elements)) = at(root, &recipe.path) else {
         return Applied::RecipeError(format!("no list at {} {}", recipe.source, recipe.path.join(" ")));
     };
-    let objects: Vec<&Value> = elements.iter().filter(|e| e.is_object()).collect();
+    let objects: Vec<&Map<String, Value>> = elements.iter().filter_map(Value::as_object).collect();
+    rows_from(&objects, recipe)
+}
+
+/// The rows a recipe takes from a list's things: a row per thing, with each field that has a value.
+pub(crate) fn rows_from(objects: &[&Map<String, Value>], recipe: &Recipe) -> Applied {
     let rows = objects
         .iter()
         .take(MAX_ROWS)
         .map(|element| {
             let mut row = Map::new();
             for (name, path) in &recipe.fields {
-                if let Some(text) = at(element, path).and_then(scalar) {
+                if let Some(text) = at_object(element, path).and_then(scalar) {
                     row.insert(name.clone(), Value::String(text));
                 }
             }
@@ -124,6 +141,26 @@ pub fn apply(data: &Data, recipe: &Recipe) -> Applied {
         })
         .collect();
     Applied::Rows { rows, truncated: objects.len() > MAX_ROWS }
+}
+
+/// Whether a thing gives a value, as `rows_from` reads it, at a path.
+pub(crate) fn scalar_at(element: &Map<String, Value>, path: &[String]) -> bool {
+    at_object(element, path).and_then(scalar).is_some()
+}
+
+fn at_object<'a>(element: &'a Map<String, Value>, path: &[String]) -> Option<&'a Value> {
+    let (first, rest) = path.split_first()?;
+    let step = match first.strip_suffix('*') {
+        Some(prefix) => {
+            let mut matching = element.iter().filter(|(k, _)| k.starts_with(prefix));
+            match (matching.next(), matching.next()) {
+                (Some((_, v)), None) => v,
+                _ => return None,
+            }
+        }
+        None => element.get(first)?,
+    };
+    at(step, rest)
 }
 
 /// Every piece of data the page holds, named as a recipe names it. A script that is not JSON is skipped. JSON-LD is found
@@ -202,26 +239,31 @@ fn assigned(body: &str, tried: &mut usize) -> Vec<(String, Value)> {
 }
 
 /// What `walk` calls with each list it finds: the list's path and its objects.
-type Found<'a, 'v> = dyn FnMut(&[String], Vec<&'v Map<String, Value>>) + 'a;
+pub(crate) type Found<'a, 'v> = dyn FnMut(&[String], Vec<&'v Map<String, Value>>) + 'a;
 
 /// Calls `found` with the path and objects of every array of 3 or more objects inside `value`.
 fn walk<'v>(value: &'v Value, path: &mut Vec<String>, found: &mut Found<'_, 'v>) {
+    walk_min(value, MIN_LIST, path, found);
+}
+
+/// `walk` for arrays of `min` objects or more.
+pub(crate) fn walk_min<'v>(value: &'v Value, min: usize, path: &mut Vec<String>, found: &mut Found<'_, 'v>) {
     match value {
         Value::Array(items) => {
             let objects: Vec<&Map<String, Value>> = items.iter().filter_map(Value::as_object).collect();
-            if objects.len() >= MIN_LIST {
+            if objects.len() >= min.max(1) {
                 found(path, objects);
             }
             for (i, item) in items.iter().take(MAX_WALKED).enumerate() {
                 path.push(i.to_string());
-                walk(item, path, found);
+                walk_min(item, min, path, found);
                 path.pop();
             }
         }
         Value::Object(map) => {
             for (key, child) in map {
                 path.push(key.clone());
-                walk(child, path, found);
+                walk_min(child, min, path, found);
                 path.pop();
             }
         }

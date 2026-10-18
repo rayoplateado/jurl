@@ -328,7 +328,8 @@ async fn read(
 /// `--pages`: the start page, and the pages after it one after another, each the next page of the one before (see `paging`),
 /// as one list (`paging::merge`). A page that the site's robots.txt does not let jurl read ends the list, as does a page
 /// already read or one with no text that is new (under a --recipe, no row that is new). A page that fails ends it too, with a
-/// note on stderr: the pages before it are judged as they are.
+/// note on stderr: the pages before it are judged as they are. A page that links no next page may name it in its data (see
+/// `extract::data_next`).
 async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t: &mut Timer) -> Extracted {
     let retry = fetch::Retry::for_run(
         args.no_browser_retry,
@@ -350,48 +351,74 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
     };
     let mut seen: HashSet<String> = novelty(&start, &ex).into_iter().collect();
     let mut pages = vec![(start, ex)];
-    while pages.len() < args.pages {
+    'pages: while pages.len() < args.pages {
         let Some((last, last_ex)) = pages.last() else { break };
-        let guessed = || args.recipe.as_ref().filter(|_| !seen.is_empty()).and_then(|_| paging::guessed_next(last));
-        let Some(next) = last_ex.next_page.clone().or_else(guessed) else { break };
-        if pages.iter().any(|(u, _)| *u == next) {
-            break;
-        }
-        let host = next.host_str().unwrap_or_default().to_string();
-        if !robots.contains_key(&host) {
-            robots.insert(host.clone(), follow::Robots::load(&next, retry).await);
-        }
-        if !robots[&host].allows(&next) {
-            eprintln!("jurl: {next} is not read: its robots.txt does not let jurl read it");
-            break;
-        }
-        match load(args, cfg, &next, t).await {
-            Ok((url, next_ex, _)) => {
-                let new = novelty(&url, &next_ex);
-                if new.iter().all(|n| seen.contains(n)) {
-                    if args.recipe.is_some() && args.timing {
-                        eprintln!(
-                            "jurl: {url} gives no row the pages before it didn't, so the list is {} pages",
-                            pages.len()
-                        );
-                    }
-                    break;
+        // The page the last one links next; else the pages its data names next, nearest its list first, each of which must hold
+        // the list's things (a data link can name another feed's next page); else, under a recipe, a guess.
+        let (candidates, keys): (Vec<url::Url>, Option<&[String]>) = match (&last_ex.next_page, &last_ex.data_next) {
+            (Some(next), _) => (vec![next.clone()], None),
+            (None, Some(data)) => (data.urls.clone(), Some(data.keys.as_slice())),
+            // A batch that its data names no next after is the list's last: its address is the data's, not a page's to guess at.
+            (None, None) if last_ex.data_batch => break,
+            (None, None) => {
+                let guessed =
+                    args.recipe.as_ref().filter(|_| !seen.is_empty()).and_then(|_| paging::guessed_next(last));
+                (guessed.into_iter().collect(), None)
+            }
+        };
+        let keys = keys.map(<[String]>::to_vec);
+        for next in candidates {
+            if pages.iter().any(|(u, _)| *u == next) {
+                break 'pages;
+            }
+            let host = next.host_str().unwrap_or_default().to_string();
+            if !robots.contains_key(&host) {
+                robots.insert(host.clone(), follow::Robots::load(&next, retry).await);
+            }
+            if !robots[&host].allows(&next) {
+                eprintln!("jurl: {next} is not read: its robots.txt does not let jurl read it");
+                break 'pages;
+            }
+            let (url, next_ex) = match load(args, cfg, &next, t).await {
+                Ok((url, next_ex, _)) => (url, next_ex),
+                Err(e) => {
+                    eprintln!("jurl: {next} is not read, so the list is {} pages: {e:#}", pages.len());
+                    break 'pages;
                 }
-                seen.extend(new);
-                pages.push((url, next_ex));
+            };
+            if let Some(keys) = &keys
+                && !extract::data_next::holds_like(&next_ex.data_shapes, keys)
+            {
+                if args.timing {
+                    eprintln!("jurl: {url}, which the page's data names next, holds none of its list's things");
+                }
+                continue;
             }
-            Err(e) => {
-                eprintln!("jurl: {next} is not read, so the list is {} pages: {e:#}", pages.len());
-                break;
+            let new = novelty(&url, &next_ex);
+            if new.iter().all(|n| seen.contains(n)) {
+                if args.recipe.is_some() && args.timing {
+                    eprintln!(
+                        "jurl: {url} gives no row the pages before it didn't, so the list is {} pages",
+                        pages.len()
+                    );
+                }
+                break 'pages;
             }
+            seen.extend(new);
+            let next_ex = Extracted { data_batch: keys.is_some(), ..next_ex };
+            pages.push((url, next_ex));
+            continue 'pages;
         }
+        break;
     }
-    // Every page given was read: the page after the last one, when the page itself links it, is where the list goes on, for a later read
-    // to start at. A guessed page is not: nothing shows the list goes on (the pages read after a guess are checked for new rows, and a later
-    // read starting there could not be). Only `--json` prints it.
+    // Every page given was read: the page after the last one, when the page itself links it or its data names it (its first such link),
+    // is where the list goes on, for a later read to start at. A guessed page is not: nothing shows the list goes on (the pages read after
+    // a guess are checked for new rows, and a later read starting there could not be). Only `--json` prints it.
     if args.json
         && pages.len() >= args.pages
-        && let Some(next) = pages.last().and_then(|(_, last_ex)| last_ex.next_page.clone())
+        && let Some(next) = pages.last().and_then(|(_, last_ex)| {
+            last_ex.next_page.clone().or_else(|| last_ex.data_next.as_ref().and_then(|d| d.urls.first().cloned()))
+        })
         && !pages.iter().any(|(u, _)| *u == next)
     {
         let host = next.host_str().unwrap_or_default().to_string();
@@ -470,17 +497,35 @@ async fn load_page(
     // `--with-pages` lists the page as the run reads it: the blocks a -q read is given, and apart from them the things its
     // JSON-LD lists (see `extract::json_ld::items`), so a list read can take its rows from the page's own data, and under
     // --with-sources and --recipe the lists its data holds and the rows a recipe takes from them (see `extract::sources`).
+    // A page that is JSON (a batch a data link names) is its own data; a list read over pages takes the page after it from its
+    // data when it links none (see `extract::data_next`).
+    let document = extract::data_next::document(&page.body, &page.url);
+    let is_document = document.is_some();
+    let reads_data = args.pages > 1 || (args.with_pages && (args.with_sources || args.recipe.is_some()));
+    let own = match document {
+        Some(own) => Some(own),
+        None if reads_data && !page.is_markdown => Some(extract::sources::data_of(&page.body)),
+        None => None,
+    };
+    if args.pages > 1
+        && let Some(own) = &own
+    {
+        ex.data_next = extract::data_next::next_of(own, &page.url);
+        ex.data_shapes = extract::data_next::shapes_of(own);
+    }
     if args.with_pages {
         let mut data = output::PageData::default();
-        if !page.is_markdown {
+        if !page.is_markdown && !is_document {
             data.items = extract::json_ld::items(&page.body, 0);
-            if args.with_sources || args.recipe.is_some() {
-                let own = extract::sources::data_of(&page.body);
-                if args.with_sources {
-                    data.sources = extract::sources::lists(&own);
-                }
-                data.recipe = args.recipe.as_ref().map(|r| extract::sources::apply(&own, r));
+        }
+        if let Some(own) = own.as_ref().filter(|_| args.with_sources || args.recipe.is_some()) {
+            if args.with_sources {
+                data.sources = extract::sources::lists(own);
             }
+            data.recipe = args.recipe.as_ref().map(|r| match extract::sources::apply(own, r) {
+                extract::sources::Applied::RecipeError(_) if is_document => extract::data_next::apply_by_shape(own, r),
+                applied => applied,
+            });
         }
         args.pages_log.record(number, &page.url, served, &ex.blocks, data);
     }
