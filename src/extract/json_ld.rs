@@ -5,6 +5,7 @@
 
 use scraper::{Html, Selector};
 use serde_json::{Map, Value};
+use url::Url;
 
 use super::{Block, Extracted, Kind};
 
@@ -212,11 +213,25 @@ fn thing(map: &Map<String, Value>, in_list: bool, out: &mut Vec<String>) {
     for key in keys.iter().filter(|k| !lists.contains(k)) {
         flatten(key, &map[*key], &mut values);
     }
-    // A value said again under a path of the same last name (an offer's url that is the event's) is said once.
+    if let Some(text) = said(&format!("{kind} (JSON-LD): "), &values)
+        && !out.contains(&text)
+    {
+        out.push(text);
+    }
+    for key in lists {
+        for element in list_of(&map[key]).into_iter().flatten() {
+            thing(element, true, out);
+        }
+    }
+}
+
+/// A thing's text: `head`, then each of its values with its path, as long as the text stays within MAX_ITEM_CHARS. A value said
+/// again under a path of the same last name (an offer's url that is the event's) is said once. None when it says no value.
+fn said(head: &str, values: &[(String, String)]) -> Option<String> {
     let mut seen = std::collections::HashSet::new();
-    let mut text = format!("{kind} (JSON-LD): ");
+    let mut text = head.to_string();
     let mut said = 0;
-    for (path, value) in &values {
+    for (path, value) in values {
         if !seen.insert((path.rsplit('.').next().unwrap_or(path), value.as_str())) {
             continue;
         }
@@ -227,14 +242,37 @@ fn thing(map: &Map<String, Value>, in_list: bool, out: &mut Vec<String>) {
         text.push_str(&part);
         said += 1;
     }
-    if said > 0 && !out.contains(&text) {
-        out.push(text);
+    (said > 0).then_some(text)
+}
+
+/// The text of one thing of a page's own data, as a JSON-LD thing's (see `items`): "Thing (data): name: …; prices.price: 5.75".
+/// The data writes its own addresses from the site's root ("/product_images/1.jpg"), so a value that reads as such a path is
+/// given whole, on `base` (see `site_path`).
+pub fn data_thing(map: &Map<String, Value>, base: &Url) -> Option<String> {
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort_by_key(|k| *k != "name");
+    let mut values = Vec::new();
+    for key in keys {
+        flatten(key, &map[key], &mut values);
     }
-    for key in lists {
-        for element in list_of(&map[key]).into_iter().flatten() {
-            thing(element, true, out);
+    for (_, value) in values.iter_mut() {
+        if site_path(value)
+            && let Ok(url) = base.join(value)
+        {
+            *value = url.to_string();
         }
     }
+    said("Thing (data): ", &values)
+}
+
+/// Whether a value reads as an address on the site written from its root: no spaces, not cut (see `flatten`), and a file
+/// ("/img/1.jpg") or two steps or more ("/aceites/p/188385"). A unit ("/kg") or the root alone is no address.
+fn site_path(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix('/') else { return false };
+    !rest.starts_with('/')
+        && !value.contains(char::is_whitespace)
+        && !value.ends_with('…')
+        && (rest.trim_end_matches('/').contains('/') || rest.rsplit('/').next().is_some_and(|last| last.contains('.')))
 }
 
 /// Every value under `path`, with its path: a text with its spaces collapsed and cut to MAX_VALUE_CHARS (a link kept whole),
@@ -489,5 +527,16 @@ mod tests {
         );
         assert!(ex.blocks.is_empty());
         assert_eq!(ex.structured.len(), 1);
+    }
+
+    #[test]
+    fn a_data_thing_gives_its_site_paths_whole_and_leaves_other_values() {
+        let base = Url::parse("https://shop.test/api/c?page=2").unwrap();
+        let thing =
+            serde_json::json!({ "name": "Oil", "image": "/img/1.jpg", "url": "/oils/p/1", "per": "/kg", "root": "/" });
+        assert_eq!(
+            data_thing(thing.as_object().unwrap(), &base).unwrap(),
+            "Thing (data): name: Oil; image: https://shop.test/img/1.jpg; per: /kg; root: /; url: https://shop.test/oils/p/1"
+        );
     }
 }

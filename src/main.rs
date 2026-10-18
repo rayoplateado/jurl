@@ -528,7 +528,9 @@ async fn load_page(
     }
     if args.with_pages {
         let mut data = output::PageData::default();
-        if !page.is_markdown && !is_document {
+        if let Some(own) = own.as_ref().filter(|_| is_document) {
+            data.items = extract::data_next::items(own, &page.url, 0);
+        } else if !page.is_markdown {
             data.items = extract::json_ld::items(&page.body, 0);
         }
         if let Some(own) = own.as_ref().filter(|_| args.with_sources || args.recipe.is_some()) {

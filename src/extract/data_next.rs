@@ -14,6 +14,7 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use super::sources::{self, Applied, Data, Recipe};
+use super::{Block, Kind, json_ld};
 
 /// What a key that names the next page is, with its case, `_` and `-` dropped.
 const NEXT_KEYS: [&str; 6] = ["next", "nexturl", "nextpage", "nextpageurl", "nextlink", "nexthref"];
@@ -21,6 +22,9 @@ const NEXT_KEYS: [&str; 6] = ["next", "nexturl", "nextpage", "nextpageurl", "nex
 const KEYED_ELEMENTS: usize = 5;
 /// The most lists of a page whose keys are kept for `holds_like`.
 const MAX_SHAPES: usize = 16;
+
+/// The most things a batch gives as blocks, as a page's JSON-LD gives at most (see `json_ld::items`).
+const MAX_THINGS: usize = 300;
 
 /// The most links a page's data names next that are tried, nearest its list first: each one tried is a page loaded.
 const MAX_LINKS: usize = 3;
@@ -119,6 +123,32 @@ pub fn apply_by_shape(data: &Data, recipe: &Recipe) -> Applied {
         Some((_, objects)) => sources::rows_from(&objects, recipe),
         None => Applied::RecipeError(format!("no list like {} {} in the page", recipe.source, recipe.path.join(" "))),
     }
+}
+
+/// The things of a page that is JSON (see `document`), each one block numbered from `first`, as a page's JSON-LD things are
+/// (see `json_ld::items`): those of its list whose things have the most keys, then the longest, one thing or more, so a list
+/// read takes a batch's things from its data as it takes them from a page's JSON-LD. Keys go first: a batch's filters (a
+/// brand's 150 values of code, name and count) can be longer than its 24 products, never as rich. Empty when its data holds
+/// no list of things.
+pub fn items(data: &Data, base: &Url, first: usize) -> Vec<Block> {
+    type Best<'v> = Option<((usize, usize), Vec<&'v Map<String, Value>>)>;
+    let mut best: Best = None;
+    for (_, root) in data.entries() {
+        sources::walk_min(root, 1, &mut Vec::new(), &mut |_, objects| {
+            let score = (keys_of(&objects).len(), objects.len());
+            if best.as_ref().is_none_or(|(s, _)| score > *s) {
+                best = Some((score, objects));
+            }
+        });
+    }
+    let things = best.map(|(_, objects)| objects).unwrap_or_default();
+    things
+        .into_iter()
+        .filter_map(|thing| json_ld::data_thing(thing, base))
+        .take(MAX_THINGS)
+        .enumerate()
+        .map(|(k, text)| Block::new(first + k, Kind::Structured, text))
+        .collect()
 }
 
 /// The largest list of `min` things or more in a piece of data (as `sources::lists` weighs them), its path and its things' keys.
@@ -299,5 +329,27 @@ mod tests {
         );
         assert!(document(&shown, &url).is_some());
         assert!(document(&format!("<html><body><h1>API</h1><pre>{body}</pre></body></html>"), &url).is_none());
+    }
+
+    #[test]
+    fn a_batch_gives_its_things_as_blocks_with_their_addresses_whole() {
+        let body = serde_json::json!({
+            "facets": [{ "values": (0..9).map(|n| serde_json::json!({ "code": n, "name": "Brand", "count": n })).collect::<Vec<_>>() }],
+            "items": [product(1), product(2)],
+            "pagination": { "next_url": "/api/oils?page=3" },
+        })
+        .to_string();
+        let url = Url::parse("https://shop.test/api/oils?page=2").unwrap();
+        let blocks = items(&document(&body, &url).unwrap(), &url, 0);
+        let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Thing (data): display_name: Oil 1; prices.price: 1; sku: 1; url: https://shop.test/p/1",
+                "Thing (data): display_name: Oil 2; prices.price: 2; sku: 2; url: https://shop.test/p/2",
+            ]
+        );
+        assert!(blocks.iter().all(|b| b.kind == Kind::Structured));
+        assert!(items(&document("{\"total\": 0}", &url).unwrap(), &url, 0).is_empty());
     }
 }
