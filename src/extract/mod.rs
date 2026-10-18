@@ -9,6 +9,7 @@ use url::Url;
 
 mod block_images;
 mod cards;
+pub mod data_next;
 mod html;
 mod join;
 pub mod json_ld;
@@ -160,6 +161,12 @@ pub struct Extracted {
     pub next_page: Option<url::Url>,
     /// The pages a list was read from, in order, when `--pages` read more than one (see `paging::merge`); empty otherwise.
     pub pages: Vec<url::Url>,
+    /// The page after this one as the page's own data names it, when a list read over pages looked (see `data_next`): what
+    /// `--pages` reads next when the page links none.
+    pub data_next: Option<data_next::DataNext>,
+    /// The keys of the lists of things the page's data holds, when a list read over pages looked: how a batch a data link
+    /// gave is told to hold the list's things (see `data_next::holds_like`).
+    pub data_shapes: Vec<Vec<String>>,
     /// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no
     /// text, the page is a JS app.
     pub app_shell: bool,

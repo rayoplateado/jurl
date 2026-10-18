@@ -54,8 +54,9 @@ pub(crate) struct Args {
     pub(crate) follow: Option<usize>,
     /// Read up to this many pages of a list (50 at most): the page's own next-page links (`rel="next"`, a `?page=2` one
     /// page on, or an item offset one page on, as `?offset=24` from a page of 24), one after another, judged as one
-    /// list. With --recipe, a page that links none is followed to its page number one on (`?page=2` added when it has
-    /// none), until a page gives no new row. The default block count is multiplied by the pages read; -a keeps all. Not
+    /// list. A page that links none but whose own data names its next batch (`next`, `next_url`, `links.next`…, on its site) is
+    /// followed there, as long as each batch holds the list's things. With --recipe, a page that links none is followed to its
+    /// page number one on (`?page=2` added when it has none), until a page gives no new row. The default block count is multiplied by the pages read; -a keeps all. Not
     /// with --follow, --links, --image or --vision
     #[arg(long, value_name = "N", default_value_t = 1)]
     pub(crate) pages: usize,
