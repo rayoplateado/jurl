@@ -390,6 +390,9 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
             }
             if !robots[&host].allows(&next) {
                 eprintln!("jurl: {next} is not read: its robots.txt does not let jurl read it");
+                if platform.as_ref() == Some(&next) {
+                    continue;
+                }
                 break 'pages;
             }
             let (url, next_ex) = match load(args, cfg, &next, t).await {
@@ -397,7 +400,8 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
                 // A page the data named that fails leaves its other links to try.
                 Err(e) if keys.is_some() || platform.as_ref() == Some(&next) => {
                     if args.timing {
-                        eprintln!("jurl: {next}, which the page's data names next, is not read: {e:#}");
+                        let named = if keys.is_some() { "the page's data names next" } else { "its site's API gives" };
+                        eprintln!("jurl: {next}, which {named}, is not read: {e:#}");
                     }
                     continue;
                 }
@@ -519,12 +523,11 @@ async fn load_page(
     // --with-sources and --recipe the lists its data holds and the rows a recipe takes from them (see `extract::sources`).
     // A page that is JSON (a batch a data link names) is its own data; a list read over pages takes the page after it from its
     // data when it links none (see `extract::data_next`).
-    // A batch of a platform's API is given by what a reader needs of each thing, with the batch after it (see `platform`).
-    let (document, platform_after) = match platform::document(&page.body, &page.url) {
-        Some((own, after)) => (Some(own), Some(after)),
-        None => (extract::data_next::document(&page.body, &page.url), None),
-    };
+    let document = extract::data_next::document(&page.body, &page.url);
     let is_document = document.is_some();
+    // A batch of a platform's API, in a list read over pages, gives what a reader needs of each thing and names the batch
+    // after it (see `platform`); its own data stays as it is for its sources and a recipe.
+    let platform = document.as_ref().filter(|_| args.pages > 1).and_then(|own| platform::batch(own, &page.url));
     // A list read over pages looks into the data of a page that links no next page (a page that links one is read on from there).
     let pages_by_data = args.pages > 1 && ex.next_page.is_none();
     let reads_data = pages_by_data || (args.with_pages && (args.with_sources || args.recipe.is_some()));
@@ -534,14 +537,19 @@ async fn load_page(
         None => None,
     };
     if pages_by_data && let Some(own) = &own {
-        ex.data_shapes = extract::data_next::shapes_of(own);
-        ex.data_next = match platform_after {
-            Some(after) => after.map(|url| extract::data_next::DataNext {
-                urls: vec![url],
-                keys: ex.data_shapes.first().cloned().unwrap_or_default(),
-            }),
-            None => extract::data_next::next_of(own, &page.url, is_document),
-        };
+        match &platform {
+            Some((things, after)) => {
+                ex.data_shapes = extract::data_next::shapes_of(things);
+                ex.data_next = after.clone().map(|url| extract::data_next::DataNext {
+                    urls: vec![url],
+                    keys: ex.data_shapes.first().cloned().unwrap_or_default(),
+                });
+            }
+            None => {
+                ex.data_shapes = extract::data_next::shapes_of(own);
+                ex.data_next = extract::data_next::next_of(own, &page.url, is_document);
+            }
+        }
     }
     // A list read over pages that starts on a page of a site with a platform API looks for the listing's things there.
     if start && args.pages > 1 && args.recipe.is_none() && !is_document && !page.is_markdown {
@@ -549,7 +557,9 @@ async fn load_page(
     }
     if args.with_pages {
         let mut data = output::PageData::default();
-        if let Some(own) = own.as_ref().filter(|_| is_document) {
+        if let Some((things, _)) = &platform {
+            data.items = extract::data_next::items(things, &page.url, 0);
+        } else if let Some(own) = own.as_ref().filter(|_| is_document) {
             data.items = extract::data_next::items(own, &page.url, 0);
         } else if !page.is_markdown {
             data.items = extract::json_ld::items(&page.body, 0);
@@ -570,9 +580,11 @@ async fn load_page(
 
 /// The longest a request to a site's platform API is waited for: it is a guess at a better way to read, not the read.
 const PLATFORM_PROBE: std::time::Duration = std::time::Duration::from_secs(8);
+/// The most of a probe's answer that is read: a shop's hundred products with their photos and texts.
+const PLATFORM_PROBE_MAX: usize = 4 << 20;
 
 /// The endpoint of the page's site's platform API that holds the listing's things (see `platform::listing_endpoint`). Its
-/// requests are the site's API, read as the page was, and only where its robots.txt lets jurl read.
+/// requests are the site's API, read only where its robots.txt lets jurl read.
 async fn platform_listing(
     page: &fetch::Page,
     ex: &Extracted,
@@ -587,13 +599,15 @@ async fn platform_listing(
     }
     let listed = types.into_values().max().unwrap_or(0);
     let shown: Vec<url::Url> = ex.site_links.iter().map(|l| l.url.clone()).collect();
-    let robots = follow::Robots::load(&page.url, retry).await;
+    let root = platform::api_root(&page.body, &page.url)?;
+    let robots = follow::Robots::load(&root, retry).await;
+    // A probe is a small read that never climbs the ladder: a site that keeps its API to itself refuses it, and that refusal
+    // is no reason to read its pages through the proxy or the sidecar.
     let found = platform::listing_endpoint(&page.body, &page.url, &shown, listed, timing, async |url: &url::Url| {
         if !robots.allows(url) {
             return None;
         }
-        let read = tokio::time::timeout(PLATFORM_PROBE, fetch::fetch(url.as_str(), retry)).await;
-        read.ok()?.ok().map(|p| p.body)
+        fetch::fetch_small(url, PLATFORM_PROBE_MAX, PLATFORM_PROBE, retry, std::time::Instant::now()).await
     })
     .await;
     if timing && let Some(url) = &found {

@@ -136,9 +136,22 @@ fn page_key(url: &Url) -> String {
 }
 
 /// A link as a thing's own page is told by (`page_key`): a page of its own on the site, not the site's front page, nor a
-/// page told by its query (`?elementor_snippet=12`, a site's building blocks, which every one of them shares the path of).
+/// page told by another query (`?elementor_snippet=12`, a site's building blocks, which every one of them shares the path of).
 fn item_key(url: &Url) -> Option<String> {
-    (url.query().is_none() && url.path().trim_matches('/').contains(|c: char| c != '/')).then(|| page_key(url))
+    if url.query().is_none() {
+        return url.path().trim_matches('/').contains(|c: char| c != '/').then(|| page_key(url));
+    }
+    // A site without pretty addresses names a post by its query (`/?p=123`, `/?post_type=show&p=5`).
+    let mut post: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| matches!(k.as_ref(), "p" | "page_id" | "post_type"))
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    post.sort();
+    let named = post.iter().any(|(k, _)| k != "post_type");
+    (named && url.path().trim_matches('/').is_empty()).then(|| {
+        format!("{}?{}", page_key(url), post.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&"))
+    })
 }
 
 /// One list an API may give: the endpoint that tells what it holds, the things it gave, and how its taxonomies are asked for.
@@ -169,9 +182,8 @@ pub async fn listing_endpoint(
     let shown: HashSet<String> = shown.iter().filter_map(item_key).filter(|k| *k != here).collect();
     let (kinds_at, taxonomies_at) = (endpoint(&root, "wp/v2/types", &[]), endpoint(&root, "wp/v2/taxonomies", &[]));
     let (kinds, taxonomies) = futures::join!(get(&kinds_at), get(&taxonomies_at));
-    let has_kind = |slug: &str| {
-        kinds.as_deref().and_then(|k| serde_json::from_str::<Value>(k).ok()).is_some_and(|k| k.get(slug).is_some())
-    };
+    let kind_list: Option<Value> = kinds.as_deref().and_then(|k| serde_json::from_str(k).ok());
+    let has_kind = |slug: &str| kind_list.as_ref().is_some_and(|k| k.get(slug).is_some());
     let mut candidates = Vec::new();
     if html.contains("tribe-events") || html.contains("the-events-calendar") || has_kind("tribe_events") {
         let per = EVENTS_PER_PAGE.to_string();
@@ -293,7 +305,13 @@ fn post_kinds(kinds: Option<&str>, taxonomies: Option<&str>) -> Vec<Candidate> {
         .unwrap_or_default();
     let mut out: Vec<(bool, Candidate)> = Vec::new();
     for (slug, kind) in &kinds {
-        let Some(base) = kind.get("rest_base").and_then(Value::as_str).filter(|b| !b.is_empty()) else { continue };
+        let Some(base) = kind
+            .get("rest_base")
+            .and_then(Value::as_str)
+            .filter(|b| !b.is_empty() && b.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'))
+        else {
+            continue;
+        };
         if NOT_LISTS.contains(&slug.as_str()) || kind.get("viewable").and_then(Value::as_bool) == Some(false) {
             continue;
         }
@@ -325,14 +343,16 @@ fn post_kinds(kinds: Option<&str>, taxonomies: Option<&str>) -> Vec<Candidate> {
 /// The things an endpoint's body holds: its list, or the events of The Events Calendar's answer.
 fn things_of(api: Api, body: &str) -> Option<Vec<Value>> {
     let value: Value = serde_json::from_str(body.trim_start()).ok()?;
-    let list = match (api, value) {
-        (Api::Events, Value::Object(mut answer)) => answer.remove("events")?,
-        (_, list) => list,
+    things_in(api, &value).map(|things| things.into_iter().cloned().collect())
+}
+
+/// The things an endpoint's answer holds, as `things_of`.
+fn things_in(api: Api, value: &Value) -> Option<Vec<&Value>> {
+    let list = match api {
+        Api::Events => value.get("events")?,
+        _ => value,
     };
-    match list {
-        Value::Array(things) => Some(things.into_iter().filter(Value::is_object).collect()),
-        _ => None,
-    }
+    Some(list.as_array()?.iter().filter(|t| t.is_object()).collect())
 }
 
 /// The page a thing links to, as links are told by (`page_key`).
@@ -418,28 +438,27 @@ fn civil(z: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
-/// A page that is a batch of one of these APIs, as the page's data (named as `data_next::document` names a JSON page), with
-/// each thing given by what a reader of the list needs (see `tidy`), and the batch after it: The Events Calendar names it
-/// (`next_rest_url`); WordPress and WooCommerce have one when this one is full. None for any other page.
-pub fn document(body: &str, url: &Url) -> Option<(Data, Option<Url>)> {
+/// A page of a list read over pages that is a batch of one of these APIs (its data, as `data_next::document` reads a JSON
+/// page), as the things a reader of the list needs (see `tidy`), named as the page's data is, and the batch after it: The
+/// Events Calendar names it (`next_rest_url`); WordPress and WooCommerce have one when this one is full. None for any other
+/// page.
+pub fn batch(data: &Data, url: &Url) -> Option<(Data, Option<Url>)> {
     let api = Api::of(url)?;
-    let value: Value = serde_json::from_str(body.trim_start()).ok()?;
+    let (name, value) = data.entries().next()?;
     let next = match api {
         Api::Events => value
             .get("next_rest_url")
             .and_then(Value::as_str)
             .and_then(|n| Url::parse(n).ok())
-            .filter(|n| site_of(n) == site_of(url) && n != url),
+            .filter(|n| matches!(n.scheme(), "http" | "https") && site_of(n) == site_of(url) && n != url),
         _ => {
             let per = url.query_pairs().find(|(k, _)| k == "per_page").and_then(|(_, v)| v.parse::<usize>().ok());
             let full = per.is_some_and(|per| value.as_array().is_some_and(|things| things.len() >= per));
             full.then(|| next_numbered(url))
         }
     };
-    let things = things_of(api, &value.to_string())?;
-    let tidied: Vec<Value> = things.iter().filter_map(|t| tidy(api, t)).collect();
-    let name = format!("json:fetch:{}", route_of(url));
-    Some((Data::from_entries(vec![(name, Value::Array(tidied))]), next))
+    let tidied: Vec<Value> = things_in(api, value)?.iter().filter_map(|t| tidy(api, t)).collect();
+    Some((Data::from_entries(vec![(name.to_string(), Value::Array(tidied))]), next))
 }
 
 /// The same endpoint, one page on.
@@ -477,12 +496,20 @@ fn tidy(api: Api, thing: &Value) -> Option<Value> {
     };
     match api {
         Api::Posts => {
-            put("name", text(at(&["title", "rendered"])));
+            put("name", text(at(&["title", "rendered"]).or_else(|| at(&["title"]))));
             put("url", at(&["link"]).cloned());
             put("published", at(&["date"]).cloned());
             put("summary", text(at(&["excerpt", "rendered"])));
             put("image", at(&["_embedded", "wp:featuredmedia", "0", "source_url"]).cloned());
-            put("fields", at(&["acf"]).filter(|a| a.as_object().is_some_and(|o| !o.is_empty())).cloned());
+            // A post's own fields, the ones that are a value: a gallery or a list of rows in them is no field of the list.
+            let fields: Map<String, Value> = at(&["acf"])
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+                .filter(|(_, v)| matches!(v, Value::String(_) | Value::Number(_) | Value::Bool(_)))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            put("fields", (!fields.is_empty()).then_some(Value::Object(fields)));
         }
         Api::Products => {
             let minor = at(&["prices", "currency_minor_unit"]).and_then(Value::as_u64).unwrap_or(0);
@@ -556,6 +583,29 @@ mod tests {
 
     const HEAD: &str =
         r#"<html><head><link rel="https://api.w.org/" href="https://www.site.test/wp-json/"></head><body>"#;
+
+    fn read(body: &str, url: &Url) -> Option<(Data, Option<Url>)> {
+        batch(&crate::extract::data_next::document(body, url)?, url)
+    }
+
+    #[test]
+    fn a_batch_keeps_plain_fields_drops_lists_follows_only_its_own_site_and_reads_a_wrapped_body() {
+        let url = u("https://site.test/wp-json/wp/v2/shows?per_page=100");
+        let body = json!([{ "link": "https://site.test/shows/1/", "title": "Hamlet",
+            "acf": { "venue": "Sala", "gallery": [1, 2], "seats": 90 } }])
+        .to_string();
+        let wrapped = format!("<html><body><pre>{body}</pre></body></html>");
+        let (data, _) = read(&wrapped, &url).unwrap();
+        assert_eq!(
+            data.entries().next().unwrap().1,
+            &json!([{ "name": "Hamlet", "url": "https://site.test/shows/1/", "fields": { "venue": "Sala", "seats": 90 } }])
+        );
+        let url = u("https://site.test/wp-json/tribe/events/v1/events?per_page=50");
+        let body = json!({ "events": [{ "title": "A", "url": "https://site.test/e/1/" }],
+            "next_rest_url": "https://elsewhere.test/wp-json/tribe/events/v1/events?page=2" })
+        .to_string();
+        assert_eq!(read(&body, &url).unwrap().1, None, "a next batch on another site is not followed");
+    }
 
     #[test]
     fn the_api_root_is_the_one_the_head_links_on_the_page_s_own_site() {
@@ -782,9 +832,9 @@ mod tests {
             { "id": 2, "link": "https://site.test/shows/2/", "title": { "rendered": "" } },
         ])
         .to_string();
-        let (data, next) = document(&body, &url).unwrap();
+        let (data, next) = read(&body, &url).unwrap();
         let (name, value) = data.entries().next().unwrap();
-        assert_eq!(name, "json:fetch:/wp/v2/shows");
+        assert_eq!(name, "json:fetch:/wp-json/wp/v2/shows");
         assert_eq!(
             value,
             &json!([{ "name": "Hamlet – new", "url": "https://site.test/shows/1/", "published": "2026-09-01T10:00:00",
@@ -794,9 +844,9 @@ mod tests {
             next.unwrap().as_str(),
             "https://site.test/wp-json/wp/v2/shows?per_page=2&_embed=wp%3Afeaturedmedia&page=2"
         );
-        let last = document(&json!([{ "link": "a", "title": { "rendered": "A" } }]).to_string(), &url).unwrap();
+        let last = read(&json!([{ "link": "a", "title": { "rendered": "A" } }]).to_string(), &url).unwrap();
         assert_eq!(last.1, None, "a batch that is not full is the last");
-        assert!(document("[]", &u("https://site.test/api/list")).is_none());
+        assert!(read("[]", &u("https://site.test/api/list")).is_none());
     }
 
     #[test]
@@ -807,7 +857,7 @@ mod tests {
             "on_sale": true, "images": [{ "src": "https://site.test/s.jpg" }], "categories": [{ "id": 5, "name": "Cursos &amp; talleres" }],
             "is_in_stock": true }])
         .to_string();
-        let (data, _) = document(&body, &url).unwrap();
+        let (data, _) = read(&body, &url).unwrap();
         assert_eq!(
             data.entries().next().unwrap().1,
             &json!([{ "name": "Curso de sushi", "url": "https://site.test/p/1/", "price": "13.50", "regular_price": "15.00",
@@ -819,13 +869,25 @@ mod tests {
             "cost": "15 €", "image": { "url": "https://site.test/e.jpg", "sizes": {} }, "venue": { "venue": "Sala" } }],
             "next_rest_url": "https://site.test/wp-json/tribe/events/v1/events?per_page=50&page=2" })
         .to_string();
-        let (data, next) = document(&body, &url).unwrap();
+        let (data, next) = read(&body, &url).unwrap();
         assert_eq!(
             data.entries().next().unwrap().1,
             &json!([{ "name": "Concierto", "url": "https://site.test/e/1/", "start_date": "2026-11-05 21:00:00",
                       "cost": "15 €", "image": "https://site.test/e.jpg", "venue": "Sala" }])
         );
         assert_eq!(next.unwrap().as_str(), "https://site.test/wp-json/tribe/events/v1/events?per_page=50&page=2");
+    }
+
+    #[test]
+    fn a_post_named_by_its_query_is_an_item_but_a_query_on_a_listing_is_not() {
+        assert!(item_key(&u("https://site.test/?p=12")).is_some());
+        assert_eq!(
+            item_key(&u("https://site.test/?post_type=show&p=5")),
+            item_key(&u("https://site.test/?p=5&post_type=show"))
+        );
+        assert!(item_key(&u("https://site.test/?s=hamlet")).is_none());
+        assert!(item_key(&u("https://site.test/shows/?page=2")).is_none());
+        assert!(item_key(&u("https://site.test/")).is_none());
     }
 
     #[test]
