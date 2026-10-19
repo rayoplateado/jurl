@@ -556,7 +556,8 @@ async fn load_page(
     }
     // A list read over pages that starts on a page of a site with a platform API looks for the listing's things there.
     if start && args.pages > 1 && args.recipe.is_none() && !is_document && !page.is_markdown {
-        ex.platform_next = platform_listing(&page, &ex, retry, args.timing).await;
+        ex.platform_next =
+            platform_listing(&page, &ex, args.ask.as_deref().unwrap_or_default(), retry, args.timing).await;
     }
     if args.with_pages {
         let mut data = output::PageData::default();
@@ -591,6 +592,7 @@ const PLATFORM_PROBE_MAX: usize = 4 << 20;
 async fn platform_listing(
     page: &fetch::Page,
     ex: &Extracted,
+    question: &str,
     retry: fetch::Retry<'_>,
     timing: bool,
 ) -> Option<url::Url> {
@@ -606,13 +608,14 @@ async fn platform_listing(
     let robots = follow::Robots::load(&root, retry).await;
     // A probe is a small read that never climbs the ladder: a site that keeps its API to itself refuses it, and that refusal
     // is no reason to read its pages through the proxy or the sidecar.
-    let found = platform::listing_endpoint(&page.body, &page.url, &shown, listed, timing, async |url: &url::Url| {
-        if !robots.allows(url) {
-            return None;
-        }
-        fetch::fetch_small(url, PLATFORM_PROBE_MAX, PLATFORM_PROBE, retry, std::time::Instant::now()).await
-    })
-    .await;
+    let found =
+        platform::listing_endpoint(&page.body, &page.url, &shown, listed, question, timing, async |url: &url::Url| {
+            if !robots.allows(url) {
+                return None;
+            }
+            fetch::fetch_small(url, PLATFORM_PROBE_MAX, PLATFORM_PROBE, retry, std::time::Instant::now()).await
+        })
+        .await;
     if timing && let Some(url) = &found {
         eprintln!("jurl: the listing's things are read from its site's API, {url}");
     }

@@ -169,12 +169,14 @@ struct Candidate {
 /// The endpoint a list read over pages takes the listing's things from, page 1, when the page's site runs on a platform with
 /// a public API and one of its lists is the page's (see the module's doc). `get` gives an address's body, or none when it
 /// can't be read (or its robots.txt does not let jurl read it); the lists are asked for together. `shown` are the links on
-/// the page, and `listed` how many things the page's own JSON-LD lists. Under `timing`, what each list held of the page is said on stderr.
+/// the page, `listed` how many things the page's own JSON-LD lists, and `question` what the read asks. Under `timing`, what each list
+/// held of the page is said on stderr.
 pub async fn listing_endpoint(
     html: &str,
     page: &Url,
     shown: &[Url],
     listed: usize,
+    question: &str,
     timing: bool,
     get: impl AsyncFn(&Url) -> Option<String>,
 ) -> Option<Url> {
@@ -246,6 +248,30 @@ pub async fn listing_endpoint(
             narrowed = true;
         }
     }
+    // Else, the term the question names ("Perros en adopción" for "the dogs for adoption at this shelter"), when the page shows
+    // a few things of the site's whole catalogue (a home page's latest products), which share none.
+    let shared = narrowed;
+    if !narrowed && words(question).any(|w| w.chars().count() > 3) {
+        for (_, param) in &candidate.terms {
+            let at = match candidate.api {
+                Api::Products => {
+                    endpoint(&root, "wc/store/v1/products/categories", &[q("per_page", PER_PAGE.to_string())])
+                }
+                _ => endpoint(
+                    &root,
+                    &format!("wp/v2/{param}"),
+                    &[q("per_page", PER_PAGE.to_string()), q("_fields", "id,name,count".into())],
+                ),
+            };
+            let Some(term) = get(&at).await.and_then(|body| named_term(&body, question)) else { continue };
+            if timing {
+                eprintln!("jurl: {} narrowed to {param}={term}, which the question names", candidate.route);
+            }
+            query.push(q(param, term.to_string()));
+            narrowed = true;
+            break;
+        }
+    }
     // Else, the terms that none of the shown things has and that hold others (a shelter's adopted dogs, a past season) are
     // left out.
     if !narrowed {
@@ -277,7 +303,7 @@ pub async fn listing_endpoint(
         }
         query.push(q("_fields", READ_FIELDS.into()));
         query.push(q("_embed", "wp:featuredmedia".into()));
-        if !narrowed
+        if !shared
             && !off_page.is_empty()
             && let Some(after) = day_before_oldest(&on_page)
         {
@@ -285,6 +311,11 @@ pub async fn listing_endpoint(
         }
     }
     Some(endpoint(&root, &candidate.route, &query))
+}
+
+/// Whether a site's name for a list is a plain name (`shows`, `event-types`), which may go in a path.
+fn plain(base: &str) -> bool {
+    !base.is_empty() && base.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
 /// How many different pages the page links to that `things` link to.
@@ -306,11 +337,7 @@ fn post_kinds(kinds: Option<&str>, taxonomies: Option<&str>) -> Vec<Candidate> {
         .unwrap_or_default();
     let mut out: Vec<(bool, Candidate)> = Vec::new();
     for (slug, kind) in &kinds {
-        let Some(base) = kind
-            .get("rest_base")
-            .and_then(Value::as_str)
-            .filter(|b| !b.is_empty() && b.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'))
-        else {
+        let Some(base) = kind.get("rest_base").and_then(Value::as_str).filter(|b| plain(b)) else {
             continue;
         };
         if NOT_LISTS.contains(&slug.as_str()) || kind.get("viewable").and_then(Value::as_bool) == Some(false) {
@@ -323,6 +350,7 @@ fn post_kinds(kinds: Option<&str>, taxonomies: Option<&str>) -> Vec<Candidate> {
             .flatten()
             .filter_map(Value::as_str)
             .filter_map(|tax| taxonomies.get(tax).and_then(|t| t.get("rest_base")).and_then(Value::as_str))
+            .filter(|b| plain(b))
             .map(|base| (base.to_string(), base.to_string()))
             .collect();
         let mut fields = vec!["link".to_string(), "date".to_string()];
@@ -386,6 +414,36 @@ fn narrowing_term(on_page: &[&Value], off_page: &[&Value], key: &str) -> Option<
         .filter(|(left_out, _)| *left_out > 0)
         .max_by_key(|(left_out, id)| (*left_out, std::cmp::Reverse(*id)))
         .map(|(_, id)| id)
+}
+
+/// Of a taxonomy's terms (`[{"id", "name", "count"}]`), the one whose name's words are all words of the question, with the most
+/// words and then the most things, when it holds `MIN_SHOWN` things or more and its name is more than one word and more than small
+/// words: "Perros en adopción" for the dogs for adoption at a shelter, not "Gatos en adopción", nor a one-word tag the question
+/// happens to hold ("Madrid"), which would read only the things tagged with it.
+fn named_term(body: &str, question: &str) -> Option<u64> {
+    let asked: HashSet<String> = words(question).collect();
+    let terms: Vec<Value> = serde_json::from_str(body).ok()?;
+    let mut best: Option<(usize, u64, u64)> = None;
+    for term in &terms {
+        let (Some(id), Some(name)) = (term.get("id").and_then(Value::as_u64), term.get("name").and_then(Value::as_str))
+        else {
+            continue;
+        };
+        let count = term.get("count").and_then(Value::as_u64).unwrap_or(0);
+        let named: Vec<String> = words(&shown_text(name)).collect();
+        let named_by_question =
+            named.len() > 1 && named.iter().any(|w| w.chars().count() > 3) && named.iter().all(|w| asked.contains(w));
+        if count >= MIN_SHOWN as u64 && named_by_question && best.is_none_or(|(n, c, _)| (named.len(), count) > (n, c))
+        {
+            best = Some((named.len(), count, id));
+        }
+    }
+    best.map(|(_, _, id)| id)
+}
+
+/// A text's words, in lower case.
+fn words(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase)
 }
 
 /// The terms under `key` that no shown thing has and that `MIN_SHOWN` of the others or more have, in order.
@@ -700,24 +758,32 @@ mod tests {
 
     /// A site's answers by route, recording what is asked.
     async fn discover(html: &str, shown: &[&str], answers: Vec<(&str, String)>) -> (Option<Url>, Vec<String>) {
-        discover_listed(html, shown, 0, answers).await
+        discover_listed(html, shown, 0, "", answers).await
     }
 
     async fn discover_listed(
         html: &str,
         shown: &[&str],
         listed: usize,
+        question: &str,
         answers: Vec<(&str, String)>,
     ) -> (Option<Url>, Vec<String>) {
         let shown: Vec<Url> = shown.iter().map(|s| u(s)).collect();
         let asked = std::sync::Mutex::new(Vec::new());
-        let found =
-            listing_endpoint(html, &u("https://site.test/agenda/"), &shown, listed, false, async |url: &Url| {
+        let found = listing_endpoint(
+            html,
+            &u("https://site.test/agenda/"),
+            &shown,
+            listed,
+            question,
+            false,
+            async |url: &Url| {
                 asked.lock().unwrap().push(url.to_string());
                 let route = route_of(url);
                 answers.iter().find(|(r, _)| *r == route).map(|(_, body)| body.clone())
-            })
-            .await;
+            },
+        )
+        .await;
         (found, asked.into_inner().unwrap())
     }
 
@@ -841,10 +907,37 @@ mod tests {
             "https://www.site.test/wp-json/wc/store/v1/products?per_page=100&category=45&category_operator=not_in",
             "a shop told by its kinds, with no plugin name in the page"
         );
-        let (found, _) = discover_listed(HEAD, &shown, 3, answers.clone()).await;
+        let (found, _) = discover_listed(HEAD, &shown, 3, "", answers.clone()).await;
         assert_eq!(found, None);
-        let (found, _) = discover_listed(HEAD, &shown, 2, answers).await;
+        let (found, asked) = discover_listed(HEAD, &shown, 2, "", answers.clone()).await;
         assert!(found.is_some(), "a JSON-LD that lists fewer than the API");
+        assert!(!asked.iter().any(|a| a.contains("categories")), "no question, no term to look for");
+        let categories = json!([
+            { "id": 45, "name": "Todos los ADOPTADOS", "count": 1395 },
+            { "id": 29, "name": "Gatos en adopción", "count": 25 },
+            { "id": 28, "name": "Perros en adopción", "count": 68 },
+        ])
+        .to_string();
+        let answers = [answers, vec![("/wc/store/v1/products/categories", categories)]].concat();
+        let (found, _) = discover_listed(HEAD, &shown, 0, "Los perros en adopción de esta protectora", answers).await;
+        assert_eq!(
+            found.unwrap().as_str(),
+            "https://www.site.test/wp-json/wc/store/v1/products?per_page=100&category=28",
+            "the category the question names, before leaving out the ones the page shows none of"
+        );
+    }
+
+    #[test]
+    fn the_term_a_question_names_is_its_longest_then_largest_one_of_more_than_small_words() {
+        let terms = |list: Value| list.to_string();
+        let asked = "Los perros en adopción de esta protectora";
+        let both = terms(
+            json!([{ "id": 1, "name": "Perros", "count": 90 }, { "id": 2, "name": "Perros en adopción", "count": 60 }]),
+        );
+        assert_eq!(named_term(&both, asked), Some(2));
+        assert_eq!(named_term(&terms(json!([{ "id": 3, "name": "En", "count": 9 }])), asked), None);
+        assert_eq!(named_term(&terms(json!([{ "id": 4, "name": "Perros", "count": 2 }])), asked), None);
+        assert_eq!(named_term(&terms(json!([{ "id": 5, "name": "Gatos en adopción", "count": 30 }])), asked), None);
     }
 
     #[test]
