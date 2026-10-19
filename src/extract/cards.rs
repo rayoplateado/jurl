@@ -86,10 +86,15 @@ fn card_shaped(pieces: &[Block]) -> bool {
 }
 
 /// A piece that is a field: every line of it is short, so it is a date, a price, a venue or a short title, and a run of such
-/// lines (a date, a time, a day) is a field too.
+/// lines (a date, a time, a day) is a field too, as is a line of short fields set apart by a separator ("Male | 12 kg | Born
+/// 2023", "Jazz · 20:30").
 fn is_field(b: &Block) -> bool {
-    b.text.lines().all(|l| l.chars().count() < SHORT_BLOCK_CHARS)
+    let fields = |l: &str| FIELD_SEPARATORS.iter().fold(l.to_string(), |l, sep| l.replace(sep, " | "));
+    b.text.lines().all(|l| fields(l).split(" | ").all(|f| f.trim().chars().count() < SHORT_BLOCK_CHARS))
 }
+
+/// What a card sets between the fields it puts on one line, spaced on both sides: a bare `·` is also a letter's (`l·l`).
+const FIELD_SEPARATORS: [&str; 2] = [" · ", " • "];
 
 #[cfg(test)]
 mod tests {
@@ -176,6 +181,30 @@ mod tests {
         ]);
         let merged = merge_cards(blocks, &members);
         assert_eq!(merged.iter().filter(|b| b.record.is_some()).count(), 3, "{merged:?}");
+    }
+
+    #[test]
+    fn a_line_of_short_fields_set_apart_by_a_separator_is_a_field() {
+        // Each card has a line of fields ("Male | 12.5 kg | Born…") and one longer line: one piece that is not a field.
+        let card = |name: &str, other: &str| {
+            vec![
+                piece(Kind::Para, name),
+                piece(Kind::Para, "Male | 12.5 kg | Born: 10/05/2021"),
+                piece(Kind::Para, other),
+            ]
+        };
+        let (blocks, members) = lists_of(&[
+            ("div(div)", card("Ades", "Sponsors: Maria Diaz, Loreto")),
+            ("div(div)", card("Dina", "Sponsor: Jorge Juan Perez")),
+            ("div(div)", card("Amazon", "Mixed")),
+        ]);
+        assert_eq!(merge_cards(blocks, &members).iter().filter(|b| b.record.is_some()).count(), 3);
+        assert!(!is_field(&piece(Kind::Para, "A sentence that runs well past a field | and on")));
+        assert!(
+            !is_field(&piece(Kind::Para, "Col·legi de Periodistes de Catalunya")),
+            "a letter's dot is no separator"
+        );
+        assert!(is_field(&piece(Kind::Para, "Jazz · 20:30 · Sala Paral·lel 62")));
     }
 
     #[test]

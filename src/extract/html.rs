@@ -39,14 +39,16 @@ pub fn html_with_placeholders(body: &str, base: &Url) -> (Extracted, bool) {
     (extract_doc(&doc, body, base), has_placeholders(&doc))
 }
 
-fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
+fn extract_doc(doc: &Html, body: &str, page: &Url) -> Extracted {
     let root = content_root(doc);
     let in_body = root.value().name() == "body";
-    let site_links = collect_site_links(doc, base);
-    let mut blocks = join_short(walk(doc, root, in_body, base));
+    // The page's links and images are relative to its `<base href>` when it declares one, as a browser resolves them.
+    let base = &declared_base(doc, page).unwrap_or_else(|| page.clone());
+    let site_links = collect_site_links(doc, page, base);
+    let mut blocks = join_short(walk(doc, root, in_body, page, base));
     cards::number_records(&mut blocks);
     let records = blocks.iter().filter_map(|b| b.record).max().map(|n| n as u64);
-    let images = collect_images(doc, root, in_body, base);
+    let images = collect_images(doc, root, in_body, page, base);
     block_images::attach(&mut blocks, &images);
     Extracted {
         title: collapse(&page_title(doc)),
@@ -55,8 +57,8 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
         blocks,
         structured: Vec::new(),
         images,
-        links: collect_links(root, in_body, base),
-        next_page: next_page(doc, &site_links, base, records),
+        links: collect_links(root, in_body, page, base),
+        next_page: next_page(doc, &site_links, page, base, records),
         site_links,
         pages: Vec::new(),
         data_next: None,
@@ -66,10 +68,18 @@ fn extract_doc(doc: &Html, body: &str, base: &Url) -> Extracted {
     }
 }
 
+/// The address the page's relative links are resolved against: the first `<base href>`, resolved against the page, when it is
+/// a web address (`http` or `https`).
+fn declared_base(doc: &Html, page: &Url) -> Option<Url> {
+    let base = Selector::parse("base[href]").expect("static selector");
+    let href = doc.select(&base).next()?.value().attr("href")?;
+    page.join(href.trim()).ok().filter(|url| matches!(url.scheme(), "http" | "https"))
+}
+
 /// The page after this one in its list (see `paging`): the target of a `rel="next"` link (in the head, or an anchor that is
 /// not hidden) when it is on the same site, else the link whose page number is this one's plus one, or whose item offset is
-/// one step on (`?offset=24`, see `paging`).
-fn next_page(doc: &Html, site_links: &[Link], base: &Url, records: Option<u64>) -> Option<Url> {
+/// one step on (`?offset=24`, see `paging`). Its `href` is resolved against `base`, the page's `<base href>` or its address.
+fn next_page(doc: &Html, site_links: &[Link], page: &Url, base: &Url, records: Option<u64>) -> Option<Url> {
     let standard = doc
         .select(&sel("link[rel~=next], a[rel~=next]"))
         .filter(|e| !hidden(*e))
@@ -78,8 +88,8 @@ fn next_page(doc: &Html, site_links: &[Link], base: &Url, records: Option<u64>) 
             u.set_fragment(None);
             u
         })
-        .find(|u| u != base && matches!(u.scheme(), "http" | "https") && paging::same_site(base, u));
-    standard.or_else(|| paging::numbered_next(base, site_links.iter().map(|l| &l.url), records))
+        .find(|u| u != page && matches!(u.scheme(), "http" | "https") && paging::same_site(page, u));
+    standard.or_else(|| paging::numbered_next(page, site_links.iter().map(|l| &l.url), records))
 }
 
 /// The other versions of the page the page declares: each `<link rel="alternate" hreflang="…" href="…">`, its `href` on the page's
@@ -139,7 +149,7 @@ fn content_root(doc: &Html) -> ElementRef<'_> {
 }
 
 /// The blocks of the content root, in page order.
-fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool, base: &Url) -> Vec<Block> {
+fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool, page: &Url, base: &Url) -> Vec<Block> {
     // React streams late content (a Suspense boundary) as `<div hidden id="S:n">` at the end of the body, and a
     // script moves it into `<template id="B:n">`, where it belongs. Read it there.
     let segments: HashMap<String, ElementRef> = doc
@@ -155,6 +165,7 @@ fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool, base: &Url) -> V
         list: None,
         lists: 0,
         depth: 0,
+        page: page.clone(),
         base: base.clone(),
     };
     w.container(root);
@@ -165,13 +176,13 @@ fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool, base: &Url) -> V
 /// The images of the page: `og:image` first, then a product's photos from its JSON-LD, then the `<img>`s of the content root
 /// that a reader can see, then its `<picture>` sources. `push_image` keeps each URL once, so a picture's `<img>` and its
 /// `<source>` that name one file are one candidate.
-fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Vec<Image> {
+fn collect_images(doc: &Html, root: ElementRef, in_body: bool, page: &Url, base: &Url) -> Vec<Image> {
     let mut images = Vec::new();
     if let Some(og) = meta(doc, "meta[property='og:image']") {
-        push_image(&mut images, base, &og, None, String::new(), String::new(), None, None);
+        push_image(&mut images, page, base, &og, None, String::new(), String::new(), None, None);
     }
     for src in super::json_ld::product_images(doc) {
-        push_image(&mut images, base, &src, None, String::new(), String::new(), None, None);
+        push_image(&mut images, page, base, &src, None, String::new(), String::new(), None, None);
     }
     for img in root.select(&sel("img")) {
         if image_skipped(img, in_body) {
@@ -187,7 +198,8 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
         let alt = collapse(a("alt").or(a("title")).unwrap_or(""));
         let caption = figcaption(img);
         let dim = |k| a(k).and_then(|v: &str| v.trim_end_matches("px").parse().ok());
-        let at = push_image(&mut images, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
+        let at =
+            push_image(&mut images, page, base, &src, preview.as_deref(), alt, caption, dim("width"), dim("height"));
         set_card(&mut images, at, img, Some(img));
     }
     // A responsive picture's banner is often only in its <source> srcsets, with the <img> as the fallback. Its sources are
@@ -214,7 +226,7 @@ fn collect_images(doc: &Html, root: ElementRef, in_body: bool, base: &Url) -> Ve
             .next()
             .map(|img| collapse(img.value().attr("alt").unwrap_or("")))
             .unwrap_or_default();
-        let at = push_image(&mut images, base, &src, preview.as_deref(), alt, String::new(), None, None);
+        let at = push_image(&mut images, page, base, &src, preview.as_deref(), alt, String::new(), None, None);
         set_card(&mut images, at, picture, picture.select(&sel("img")).next());
     }
     images
@@ -280,7 +292,7 @@ fn first_attr<'a>(el: ElementRef<'a>, names: &[&str]) -> Option<&'a str> {
 }
 
 /// The links of the content root. Hidden links, and links inside skipped elements, are left out.
-fn collect_links(root: ElementRef, in_body: bool, base: &Url) -> Vec<Link> {
+fn collect_links(root: ElementRef, in_body: bool, page: &Url, base: &Url) -> Vec<Link> {
     let mut links = Vec::new();
     for a in root.select(&sel("a[href]")) {
         if hidden(a) || has_skipped_ancestor(a, in_body) {
@@ -309,7 +321,7 @@ fn collect_links(root: ElementRef, in_body: bool, base: &Url) -> Vec<Link> {
             .filter(|c| *c != text)
             .map(|c| c.chars().take(200).collect())
             .unwrap_or_default();
-        push_link(&mut links, base, v.attr("href").unwrap_or(""), text, context, marginal(a));
+        push_link(&mut links, page, base, v.attr("href").unwrap_or(""), text, context, marginal(a));
     }
     links
 }
@@ -373,7 +385,7 @@ fn name_then(s: &str, close: &str) -> bool {
 }
 
 /// Every link on the page, menus and footers included: only hidden links are left out.
-fn collect_site_links(doc: &Html, base: &Url) -> Vec<Link> {
+fn collect_site_links(doc: &Html, page: &Url, base: &Url) -> Vec<Link> {
     // Menus and footers are where a site keeps "Pricing" and "Docs": only hidden links are left out here.
     let mut site_links = Vec::new();
     for a in doc.select(&sel("a[href]")) {
@@ -387,7 +399,7 @@ fn collect_site_links(doc: &Html, base: &Url) -> Vec<Link> {
         } else {
             text
         };
-        push_link(&mut site_links, base, v.attr("href").unwrap_or(""), text, String::new(), marginal(a));
+        push_link(&mut site_links, page, base, v.attr("href").unwrap_or(""), text, String::new(), marginal(a));
     }
     site_links
 }
@@ -408,7 +420,9 @@ struct Walker<'a> {
     lists: usize,
     /// How many containers the walk is inside of, capped at `MAX_WALK_DEPTH`.
     depth: usize,
-    /// The page's own address: what its links are resolved against.
+    /// The page's own address: a link to it is no link of a block's.
+    page: Url,
+    /// What the page's links are resolved against: its `<base href>`, else its own address.
     base: Url,
 }
 
@@ -457,7 +471,7 @@ impl<'a> Walker<'a> {
         let mut links = Vec::new();
         let selector = sel("a[href]");
         let anchors = std::iter::once(el).filter(|e| e.value().name() == "a").chain(el.select(&selector));
-        let page = self.base.as_str().split('#').next().unwrap_or_default();
+        let page = self.page.as_str().split('#').next().unwrap_or_default();
         add_links(
             &mut links,
             anchors
@@ -536,7 +550,7 @@ impl<'a> Walker<'a> {
         match name {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let level = name[1..].parse().ok();
-                let href = headline_href(el, &self.base);
+                let href = headline_href(el, &self.page, &self.base);
                 let links = self.links_of(el);
                 self.push_with(Kind::Heading, level, None, collapse(&inline_text(el)), href, links);
             }
@@ -746,26 +760,26 @@ fn permalink(el: ElementRef) -> bool {
 /// The page a heading is a headline of, if it is one: a heading whose text is one link to another page (a news front page's
 /// headline in an `<h2>`), or a heading inside a link to another page (a card whose title is the link's own). A section title
 /// is none of these, and neither is a heading whose link is only part of its text, or a link to this page or its own sections.
-fn headline_href(heading: ElementRef, base: &Url) -> Option<String> {
+fn headline_href(heading: ElementRef, page: &Url, base: &Url) -> Option<String> {
     let text = collapse(&inline_text(heading));
     let inside = heading
         .select(&sel("a[href]"))
         .filter(|a| !permalink(*a) && collapse(&a.text().collect::<String>()) == text)
-        .find_map(|a| link_target(a, base));
+        .find_map(|a| link_target(a, page, base));
     inside.or_else(|| {
         heading
             .ancestors()
             .filter_map(ElementRef::wrap)
             .filter(|a| a.value().name() == "a")
-            .find_map(|a| link_target(a, base))
+            .find_map(|a| link_target(a, page, base))
     })
 }
 
 /// The address a link goes to, absolute, when it is a page of its own: http or https, and not this page (a fragment
-/// apart) or one of its sections (`#…`).
-fn link_target(link: ElementRef, base: &Url) -> Option<String> {
+/// apart) or one of its sections (`#…`). Its `href` is resolved against `base`.
+fn link_target(link: ElementRef, page: &Url, base: &Url) -> Option<String> {
     let url = link_url(base, link.value().attr("href")?)?;
-    let (mut page, mut here) = (url.clone(), base.clone());
+    let (mut page, mut here) = (url.clone(), page.clone());
     page.set_fragment(None);
     here.set_fragment(None);
     (page != here).then(|| url.to_string())
@@ -1072,6 +1086,70 @@ mod tests {
 
     fn base() -> Url {
         Url::parse("https://example.com/post/").unwrap()
+    }
+
+    #[test]
+    fn each_card_of_a_list_with_a_line_of_fields_keeps_its_own_link() {
+        // Each card opens on its name, sets its fields on one line and closes on a bare "More" link: that link is its own, never
+        // glued to the next card's name.
+        let card = |id: u32, name: &str, sponsor: &str| {
+            format!(
+                r#"<div class="col"><div class="card"><div><img src="/img/{id}.jpg" alt="{name}"><div><span>{name}</span></div></div>
+                <div class="body"><p>Male | 12.5 kg | Born: 10/05/2021</p><div><div>Mixed breed</div><div>{sponsor}</div></div></div>
+                <a href="/animals/{id}">More details</a></div></div>"#
+            )
+        };
+        let page = format!(
+            "<html><body><div class=\"grid\">{}{}{}</div></body></html>",
+            card(1, "Ades", "Sponsor me!"),
+            card(2, "Dina", "Sponsors: Maria Diaz, Loreto"),
+            card(3, "Amazon", "Sponsor: Jorge Juan Perez")
+        );
+        let ex = html(&page, &Url::parse("https://shelter.test/dogs").unwrap());
+        let cards: Vec<_> =
+            ex.blocks.iter().filter(|b| b.record.is_some()).map(|b| (b.text.lines().next(), b.links.clone())).collect();
+        assert_eq!(
+            cards,
+            [
+                (Some("Ades"), vec!["https://shelter.test/animals/1".to_string()]),
+                (Some("Dina"), vec!["https://shelter.test/animals/2".to_string()]),
+                (Some("Amazon"), vec!["https://shelter.test/animals/3".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn links_and_images_resolve_against_the_page_s_base_href() {
+        let page = r#"<html><head><base href="https://site.test"></head><body>
+            <p><a href="es/cursos/pasta">Pasta fresca</a> <img src="img/pasta.jpg" alt="Pasta"></p>
+            <a rel="next" href="es/cursos/?page=2">Next</a></body></html>"#;
+        let at = Url::parse("https://site.test/es/cursos/").unwrap();
+        let got = html(page, &at);
+        assert!(got.links.iter().any(|l| l.url.as_str() == "https://site.test/es/cursos/pasta"), "{:?}", got.links);
+        assert!(got.images.iter().any(|i| i.url.as_str() == "https://site.test/img/pasta.jpg"));
+        assert_eq!(got.next_page.as_ref().map(Url::as_str), Some("https://site.test/es/cursos/?page=2"));
+        let without = html(r#"<p><a href="pasta">Pasta</a></p>"#, &at);
+        assert_eq!(without.links[0].url.as_str(), "https://site.test/es/cursos/pasta", "no base: the page's address");
+        let other = html(
+            r#"<html><head><base href="javascript:void(0)"></head><body><a href="pasta">Pasta</a></body></html>"#,
+            &at,
+        );
+        assert_eq!(
+            other.links[0].url.as_str(),
+            "https://site.test/es/cursos/pasta",
+            "a base that is no web address is ignored"
+        );
+        // A base at the site's root: a link to the root is a link, and one back to the page itself is still none.
+        let root = html(
+            r#"<html><head><base href="//site.test/"></head><body><p><a href="/">Home</a> <a href="es/cursos/">Courses</a> <a href="es/">Spanish</a></p></body></html>"#,
+            &at,
+        );
+        let urls: Vec<_> = root.links.iter().map(|l| l.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            ["https://site.test/", "https://site.test/es/"],
+            "protocol-relative base, the page's own link left out"
+        );
     }
 
     #[test]
