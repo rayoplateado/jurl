@@ -57,10 +57,10 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
             } else {
                 collapse(line).chars().take(200).collect()
             };
-            push_link(&mut links, base, href, collapse(text), context, false);
+            push_link(&mut links, base, base, href, collapse(text), context, false);
         }
         for (alt, src) in md_images(line) {
-            push_image(&mut images, base, src, None, collapse(alt), String::new(), None, None);
+            push_image(&mut images, base, base, src, None, collapse(alt), String::new(), None, None);
         }
     }
     push_chunk(&mut cur, &mut blocks, &mut lists);

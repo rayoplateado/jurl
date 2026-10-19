@@ -183,6 +183,7 @@ const BREAK: char = '\u{1F}';
 #[allow(clippy::too_many_arguments)]
 fn push_image(
     out: &mut Vec<Image>,
+    page: &Url,
     base: &Url,
     src: &str,
     preview: Option<&str>,
@@ -202,7 +203,7 @@ fn push_image(
     // A src that resolves to the page itself ("?q=80" in an og:image left without its path) is the page, not a
     // picture of anything.
     let bare = |u: &Url| u.as_str().split(['?', '#']).next().unwrap_or_default().to_string();
-    if bare(&url) == bare(base) {
+    if bare(&url) == bare(page) {
         return None;
     }
     if let Some(existing) = out.iter_mut().find(|i| i.url == url) {
@@ -235,10 +236,12 @@ fn noise(url: &Url, width: Option<u32>, height: Option<u32>) -> bool {
     WORDS.iter().any(|w| full.contains(w))
 }
 
-fn push_link(out: &mut Vec<Link>, base: &Url, href: &str, text: String, context: String, marginal: bool) {
+/// Adds a link resolved against `base` (the page's `<base href>`, else `page`), unless it goes to `page` itself.
+#[allow(clippy::too_many_arguments)]
+fn push_link(out: &mut Vec<Link>, page: &Url, base: &Url, href: &str, text: String, context: String, marginal: bool) {
     let Some(mut url) = link_url(base, href) else { return };
     url.set_fragment(None);
-    let mut page = base.clone();
+    let mut page = page.clone();
     page.set_fragment(None);
     if url == page {
         return;
