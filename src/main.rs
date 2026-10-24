@@ -419,6 +419,10 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
                 continue;
             }
             let new = novelty(&url, &next_ex);
+            // The site's API that gives nothing new leaves the page's own next link to try.
+            if new.iter().all(|n| seen.contains(n)) && platform.as_ref() == Some(&next) {
+                continue;
+            }
             if new.iter().all(|n| seen.contains(n)) {
                 if args.recipe.is_some() && args.timing {
                     eprintln!(
@@ -554,10 +558,11 @@ async fn load_page(
             }
         }
     }
-    // A list read over pages that starts on a page of a site with a platform API looks for the listing's things there, under a
-    // --recipe too: a recipe learnt from the API's batch (its source `json:fetch:<route>`) takes its rows from that batch, not
-    // from the page.
-    if start && args.pages > 1 && !is_document && !page.is_markdown {
+    // A list read over pages that starts on a page of a site with a platform API looks for the listing's things there; under a
+    // --recipe only when the recipe was learnt from such a batch (its source `json:fetch:<route>`), whose rows are the batch's,
+    // not the page's. A recipe of the page's own data reads on through the page's own next pages.
+    let batch_recipe = args.recipe.as_ref().is_none_or(|r| r.source.starts_with("json:fetch:"));
+    if start && args.pages > 1 && batch_recipe && !is_document && !page.is_markdown {
         ex.platform_next =
             platform_listing(&page, &ex, args.ask.as_deref().unwrap_or_default(), retry, args.timing).await;
     }
