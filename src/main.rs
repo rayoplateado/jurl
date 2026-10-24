@@ -554,8 +554,10 @@ async fn load_page(
             }
         }
     }
-    // A list read over pages that starts on a page of a site with a platform API looks for the listing's things there.
-    if start && args.pages > 1 && args.recipe.is_none() && !is_document && !page.is_markdown {
+    // A list read over pages that starts on a page of a site with a platform API looks for the listing's things there, under a
+    // --recipe too: a recipe learnt from the API's batch (its source `json:fetch:<route>`) takes its rows from that batch, not
+    // from the page.
+    if start && args.pages > 1 && !is_document && !page.is_markdown {
         ex.platform_next =
             platform_listing(&page, &ex, args.ask.as_deref().unwrap_or_default(), retry, args.timing).await;
     }
