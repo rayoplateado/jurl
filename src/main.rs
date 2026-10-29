@@ -14,6 +14,7 @@ mod fallback;
 mod feeds;
 mod fetch;
 mod follow;
+mod forms;
 mod hosts;
 mod judge;
 mod langtag;
@@ -598,6 +599,11 @@ async fn load_page(
             data.items = extract::data_next::items(own, &page.url, 0);
         } else if !page.is_markdown {
             data.items = extract::json_ld::items(&page.body, 0);
+        }
+        if !page.is_markdown {
+            let html = scraper::Html::parse_document(&page.body);
+            data.forms = forms::search_forms(&html, &page.url);
+            data.search_links = forms::search_links(&html, &page.url);
         }
         if let Some(own) = own.as_ref().filter(|_| args.with_sources || args.recipe.is_some()) {
             if args.with_sources {
