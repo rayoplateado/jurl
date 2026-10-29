@@ -11,6 +11,7 @@ mod country;
 mod decide;
 mod extract;
 mod fallback;
+mod feeds;
 mod fetch;
 mod follow;
 mod hosts;
