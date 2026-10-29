@@ -92,13 +92,16 @@ struct Loaded {
 }
 
 /// What `pages` says of a page's own data, apart from its blocks: the things its JSON-LD lists (`items`), the lists its data
-/// holds (`sources`, under --with-sources), the rows a --recipe took from it and its photos (`images`).
+/// holds (`sources`, under --with-sources), the rows a --recipe took from it, its photos (`images`) and its own search
+/// (`forms`, `search_links`).
 #[derive(Default)]
 pub(crate) struct PageData {
     pub(crate) items: Vec<Block>,
     pub(crate) sources: Vec<Source>,
     pub(crate) recipe: Option<Applied>,
     pub(crate) images: Vec<PageImage>,
+    pub(crate) forms: Vec<crate::forms::Form>,
+    pub(crate) search_links: Vec<String>,
 }
 
 /// A photo of a page, as `pages` lists it: its address and its alt text, what a later `jurl --find WHAT -` looks at.
@@ -204,7 +207,8 @@ impl PagesLog {
     }
 
     /// The `pages` of the JSON: in load order, once per final URL (its first load, by `links::key`), each with its route,
-    /// whether it was rendered, its blocks, `images` when it has photos, `items` when its JSON-LD lists things, `sources` when its data holds lists, and
+    /// whether it was rendered, its blocks, `images` when it has photos, `items` when its JSON-LD lists things, `sources` when its data holds lists,
+    /// `forms` and `search_links` when it has a search of its own (forms.rs), and
     /// `rows` (or `recipe_error`) when a recipe was given, with `rows_truncated` when the list had more than it gives.
     pub(crate) fn json(&self) -> Result<Value> {
         let loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
@@ -227,6 +231,12 @@ impl PagesLog {
             }
             if !p.data.images.is_empty() {
                 page["images"] = serde_json::to_value(&p.data.images)?;
+            }
+            if !p.data.forms.is_empty() {
+                page["forms"] = serde_json::to_value(&p.data.forms)?;
+            }
+            if !p.data.search_links.is_empty() {
+                page["search_links"] = serde_json::to_value(&p.data.search_links)?;
             }
             match &p.data.recipe {
                 Some(Applied::Rows { rows, truncated }) => {
