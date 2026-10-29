@@ -201,7 +201,7 @@ Photos you already have, from many pages, are looked at the same way: give `-` a
 $ jurl --find "a terrace" -a --threshold 0 --json - < photos.txt
 ```
 
-`--find` looks at 80 images at most, as on a page: a longer list is shortlisted by its text first, and listed photos have none, so give it 80 or fewer at a time.
+`--find` looks at 80 images at most, as on a page: a longer list is shortlisted by its text first, and listed photos have none, so give it 80 or fewer at a time (`--vision` without a description looks at the first 12). An address listed twice is looked at once, and the JSON's `url` is `stdin:`.
 
 Images are picked from `<img>` tags (`src`, `srcset` and the usual lazy-loading attributes) and the page's `og:image`. SVG images aren't candidates: they're mostly icons and logos, and Clef only reads raster images, so a post whose diagrams are all SVG (Stripe's engineering blog) has nothing to find.
 

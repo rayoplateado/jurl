@@ -194,8 +194,8 @@ pub(crate) const STDIN: &str = "-";
 /// The URL and flags made whole and checked: `--find` is a question for `--vision`, a bare domain gets https://.
 pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.url == STDIN {
-        if !(args.image || args.vision || args.find.is_some()) {
-            bail!("`-` reads images' addresses from stdin: use it with --image, --vision or --find");
+        if !(args.image || args.vision || args.find.is_some()) || args.render {
+            bail!("`-` reads images' addresses from stdin: use it with --image, --vision or --find, and without -r");
         }
     } else if !args.url.contains("://") {
         args.url = format!("https://{}", args.url);

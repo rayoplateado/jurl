@@ -128,8 +128,8 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
 }
 
 /// The images stdin lists for `-`, one per line: an image's web address, then, after a space, the page it is on, which its
-/// download sends as its Referer (an image without one is its own). They are judged as one page's images: --find looks at
-/// 80 at most, so a longer list is shortlisted by its text first, and listed images have none.
+/// download sends as its Referer (an image without one is its own), each address once. They are judged as one page's images:
+/// --find looks at 80 at most, so a longer list is shortlisted by its text first, and listed images have none; --vision at 12.
 pub(crate) fn listed(text: &str) -> Result<Extracted> {
     let mut ex = Extracted::default();
     for (n, line) in text.lines().enumerate() {
@@ -143,6 +143,10 @@ pub(crate) fn listed(text: &str) -> Result<Extracted> {
         };
         if words.next().is_some() {
             bail!("stdin line {line_no}: an image's address, then the page it is on, and nothing else");
+        }
+        // An address listed again is the same image: it is looked at once, as on a page.
+        if ex.images.iter().any(|img| img.url == url) {
+            continue;
         }
         let i = ex.images.len();
         ex.images.push(Image {
@@ -691,7 +695,10 @@ mod tests {
 
     #[test]
     fn stdin_lists_images_each_with_its_page() {
-        let ex = listed("https://cdn.test/a.jpg https://shop.test/a\n\n  https://cdn.test/b.png  \n").unwrap();
+        let ex = listed(
+            "https://cdn.test/a.jpg https://shop.test/a\n\n  https://cdn.test/b.png  \nhttps://cdn.test/a.jpg\n",
+        )
+        .unwrap();
         let got: Vec<_> =
             ex.images.iter().map(|i| (i.i, i.url.as_str(), i.page.as_ref().map(|p| p.as_str()))).collect();
         assert_eq!(
