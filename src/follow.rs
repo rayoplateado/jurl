@@ -1066,6 +1066,7 @@ impl Search {
             &args.cookies,
             args.stealth.as_ref(),
             &args.fallback,
+            !args.with_pages,
         );
 
         let (loaded, index) = tokio::join!(load_start(args, cfg, start, t), site_index(start, retry));
@@ -1227,6 +1228,7 @@ impl Search {
                         &ctx.args.cookies,
                         ctx.args.stealth.as_ref(),
                         &ctx.args.fallback,
+                        !ctx.args.with_pages,
                     ),
                 )
                 .await;
@@ -1568,6 +1570,7 @@ async fn second_pass(args: &Args, start: &Url, search: &mut Search, site_ctx: &C
         &args.cookies,
         args.stealth.as_ref(),
         &args.fallback,
+        !args.with_pages,
     );
     let question = args.ask.as_deref().unwrap_or_default();
     let mut results = crate::site_search::candidates(start, question, true, retry).await;
@@ -1844,6 +1847,7 @@ mod tests {
             cookies: &crate::fetch::test_server::NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         assert!(small_text(&robots_of(&base), off).await.is_some());
         assert_eq!(served.kinds(), [Kind::Plain]);
@@ -2508,6 +2512,7 @@ mod tests {
             cookies: &crate::fetch::test_server::NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         let links = site_files(&start, &Site::new(&start), None, retry).await.links;
         let paths: Vec<&str> = links.iter().map(|l| l.url.path()).collect();

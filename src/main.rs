@@ -364,6 +364,7 @@ async fn list_pages(args: &Args, cfg: &Config, start: url::Url, ex: Extracted, t
         &args.cookies,
         args.stealth.as_ref(),
         &args.fallback,
+        !args.with_pages,
     );
     let mut robots: HashMap<String, follow::Robots> = HashMap::new();
     // Under a --recipe a page is new by its rows, and its next page may be guessed (see `paging::guessed_next`), since many
@@ -524,6 +525,7 @@ async fn load_page(
         &args.cookies,
         args.stealth.as_ref(),
         &args.fallback,
+        !args.with_pages,
     );
     let (page, served) = if args.render {
         fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;

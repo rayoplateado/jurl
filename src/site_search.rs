@@ -250,6 +250,7 @@ mod tests {
             cookies: &crate::fetch::test_server::NO_COOKIES,
             stealth: None,
             fallback: &crate::fetch::test_server::NO_FALLBACK,
+            markdown: true,
         };
         let found = candidates(&start, "pricing", true, retry).await;
         assert!(found.is_empty(), "{found:?}");
@@ -270,6 +271,7 @@ mod tests {
             cookies: &crate::fetch::test_server::NO_COOKIES,
             stealth: None,
             fallback: &crate::fetch::test_server::NO_FALLBACK,
+            markdown: true,
         };
         let found = candidates(&start, "pricing", true, public).await;
         assert!(found.is_empty(), "the public run lists no result at 127.0.0.2: {found:?}");
@@ -282,6 +284,7 @@ mod tests {
             cookies: &crate::fetch::test_server::NO_COOKIES,
             stealth: None,
             fallback: &crate::fetch::test_server::NO_FALLBACK,
+            markdown: true,
         };
         let found = candidates(&start, "pricing", true, private).await;
         assert_eq!(found.len(), 1, "{found:?}");
