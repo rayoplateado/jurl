@@ -260,6 +260,10 @@ fn command(tool: Tool, args: &Value) -> Result<Vec<String>, String> {
     // After `--`, a url starting with "-" is still a url. Its ends are trimmed, as `fits` checked it, so the page
     // read is the one the client named.
     let url = str("url").unwrap_or_default();
+    // On the command line `-` lists images on stdin, which here is the client's own stream.
+    if url.trim() == crate::STDIN {
+        return Err("`url`: a page's address, not `-`".into());
+    }
     argv.extend(["--".to_string(), url.trim().to_string()]);
     Ok(argv)
 }

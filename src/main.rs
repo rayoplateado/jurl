@@ -188,9 +188,16 @@ async fn run(mut args: Args) -> Result<()> {
     done.map(|_| ())
 }
 
+/// The page `-` stands for: the images whose addresses stdin lists (see `vision::listed`).
+pub(crate) const STDIN: &str = "-";
+
 /// The URL and flags made whole and checked: `--find` is a question for `--vision`, a bare domain gets https://.
 pub(crate) fn prepare(args: &mut Args) -> Result<()> {
-    if !args.url.contains("://") {
+    if args.url == STDIN {
+        if !(args.image || args.vision || args.find.is_some()) || args.render {
+            bail!("`-` reads images' addresses from stdin: use it with --image, --vision or --find, and without -r");
+        }
+    } else if !args.url.contains("://") {
         args.url = format!("https://{}", args.url);
     }
     if let Some(what) = args.find.take() {
@@ -289,8 +296,24 @@ async fn own_page(args: &Args, cfg: &Config, client: &Client, key: &str, t: &mut
         let c = client.clone();
         async move { join_all(hosts.into_iter().map(|h| c.head(h).send())).await }
     });
+    if args.url == STDIN {
+        let _ = warm.await;
+        return listed_images(args, cfg, client, key, t).await;
+    }
     let target: url::Url = args.url.parse().with_context(|| format!("bad url {}", args.url))?;
     read(args, cfg, client, key, target, warm, t).await
+}
+
+/// `-`: the images stdin lists, judged as one page's images are, with no page loaded.
+async fn listed_images(args: &Args, cfg: &Config, client: &Client, key: &str, t: &mut Timer) -> Result<Rendered> {
+    let mut text = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut tokio::io::stdin(), &mut text)
+        .await
+        .context("reading the images' addresses from stdin")?;
+    let ex = vision::listed(&text)?;
+    let url = url::Url::parse("stdin:").expect("a URL");
+    let ctx = Ctx::new(args, client, key, &url, &ex);
+    vision::images(&ctx, cfg, &ex, t).await
 }
 
 /// The page (or with --follow, the site) read in the mode asked for.

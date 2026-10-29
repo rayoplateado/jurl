@@ -12,7 +12,7 @@ const DEFAULT_THRESHOLD: f64 = 0.5;
 #[derive(Parser)]
 #[command(version)]
 pub(crate) struct Args {
-    /// The page to read, `init` to set up your API keys, `login`, `logout` or `status` for jurl cloud, `update` to
+    /// The page to read (`-` with --image, --vision or --find: the images stdin lists, one address per line), `init` to set up your API keys, `login`, `logout` or `status` for jurl cloud, `update` to
     /// install the latest jurl, or `mcp` to serve jurl's tools to an AI agent (MCP over stdio)
     pub(crate) url: String,
     /// Keep what helps answer this question instead of a general summary
