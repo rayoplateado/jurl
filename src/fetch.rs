@@ -1046,9 +1046,13 @@ pub(crate) async fn render_allowed(url: &Url, reach: &Reach, public_only: bool, 
     reach::check(url, reach).await
 }
 
-/// The page a body makes: its text as its Content-Type's charset says, and whether it is markdown.
+/// The page a body makes: its text as its Content-Type's charset says, and whether it is markdown. A feed (RSS, Atom) is
+/// read as the page of its entries (see `feeds`).
 fn to_page(url: Url, content_type: &str, bytes: &[u8]) -> Page {
     let body = decode(content_type, bytes);
+    if let Some(body) = crate::feeds::as_html(&body) {
+        return Page { url, body, is_markdown: false, route: Route::Direct };
+    }
     let is_markdown = served_markdown(content_type, &body);
     Page { url, body, is_markdown, route: Route::Direct }
 }

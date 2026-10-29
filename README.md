@@ -496,6 +496,7 @@ cargo build --release && ./target/release/jurl -t <url>
 | `src/links.rs` | `--links` and `--links -q` (ranked by the answer), `--follow`: which links lead to the answer |
 | `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
 | `src/extract/mod.rs` · `src/extract/html.rs` · `src/extract/markdown.rs` · `src/extract/join.rs` | HTML and markdown → blocks, links, images |
+| `src/feeds.rs` | A feed (RSS, Atom) → the page of its entries, one list item each with its link, date and summary |
 | `src/decide.rs` | Jev and Clef clients |
 | `src/fetch.rs` · `src/lightpanda.rs` | Fetching (the retry on a browser's fingerprint, the run's cookies), rendering, the browser download |
 | `src/fallback.rs` | Rung 3: the fallback proxy, per run, and what a run sends through it |
