@@ -87,7 +87,8 @@ fn root_name(body: &str) -> Option<&str> {
     Some(&tag[..end])
 }
 
-/// The elements named `tag` in `xml`, each its inner text, in document order. Entries do not nest.
+/// The elements named `tag` in `xml`, each its inner text, in document order. Entries do not nest. Markup is found by
+/// its text, not parsed: an entry's CDATA that quotes a feed's markup (`<item>`) is taken as written.
 fn elements<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
@@ -100,7 +101,10 @@ fn elements<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
             rest = after;
             continue;
         }
-        let Some(start) = after.find('>') else { break };
+        let Some(start) = tag_end(after) else {
+            rest = after;
+            continue;
+        };
         let inner = &after[start + 1..];
         let Some(end) = inner.find(&close) else { break };
         out.push(&inner[..end]);
@@ -121,7 +125,7 @@ fn field(xml: &str, tag: &str) -> Option<String> {
             rest = after;
             continue;
         }
-        let end = after.find('>')?;
+        let end = tag_end(after)?;
         if after[..end].ends_with('/') {
             return Some(String::new());
         }
@@ -171,10 +175,26 @@ fn tags<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     xml.match_indices(&open)
         .filter_map(|(at, _)| {
             let after = &xml[at + open.len()..];
-            after.starts_with(char::is_whitespace).then(|| after.split('>').next()).flatten()
+            after.starts_with(char::is_whitespace).then(|| tag_end(after).map(|end| &after[..end])).flatten()
         })
         .map(|attrs| attrs.trim_end_matches('/'))
         .collect()
+}
+
+/// Where a start tag's `>` is, past its quoted attribute values (a `title="a > b"`).
+fn tag_end(after: &str) -> Option<usize> {
+    let mut quote = None;
+    after.char_indices().find_map(|(at, c)| {
+        match (quote, c) {
+            (None, '>') => return Some(at),
+            // XML has no `<` in an attribute value: an unclosed quote ends at the next tag, not at the end of the feed.
+            (Some(_), '<') => return None,
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), _) if q == c => quote = None,
+            _ => {}
+        }
+        None
+    })
 }
 
 /// The value of attribute `name` in a start tag's attributes, its entities read.
@@ -185,9 +205,11 @@ fn attr(attrs: &str, name: &str) -> Option<String> {
         let after = rest[at + name.len()..].trim_start();
         if before_ok && let Some(value) = after.strip_prefix('=') {
             let value = value.trim_start();
-            let quote = value.chars().next().filter(|c| *c == '"' || *c == '\'')?;
-            let value = &value[1..];
-            return Some(entities(&value[..value.find(quote)?]));
+            if let Some(quote) = value.chars().next().filter(|c| *c == '"' || *c == '\'')
+                && let Some(end) = value[1..].find(quote)
+            {
+                return Some(entities(&value[1..=end]));
+            }
         }
         rest = &rest[at + name.len()..];
     }
@@ -217,8 +239,9 @@ fn entities(s: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];
-        let name_ok = |end: &usize| *end <= 10 && tail[1..*end].chars().all(|c| c.is_ascii_alphanumeric() || c == '#');
-        let Some(end) = tail.find(';').filter(name_ok) else {
+        // A reference is short: a `;` is looked for in its first bytes only, so a text of many `&` is read once.
+        let name_ok = |end: &usize| tail[1..*end].chars().all(|c| c.is_ascii_alphanumeric() || c == '#');
+        let Some(end) = tail.bytes().take(11).position(|b| b == b';').filter(name_ok) else {
             out.push('&');
             rest = &tail[1..];
             continue;
@@ -235,7 +258,9 @@ fn entities(s: &str) -> String {
                 .or_else(|| name.strip_prefix("#X"))
                 .and_then(|hex| u32::from_str_radix(hex, 16).ok())
                 .or_else(|| name.strip_prefix('#').and_then(|dec| dec.parse().ok()))
-                .and_then(char::from_u32),
+                .and_then(char::from_u32)
+                // `&#0;` or another control character is no text: the reference is kept as written.
+                .filter(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r')),
         };
         match ch {
             Some(ch) => out.push(ch),
@@ -387,5 +412,25 @@ mod tests {
     #[test]
     fn a_stray_ampersand_is_kept() {
         assert_eq!(entities("R&D &amp; más &#233; &unknown;"), "R&D & más é &unknown;");
+    }
+
+    #[test]
+    fn a_control_reference_is_no_text_and_a_long_run_of_ampersands_is_read_as_written() {
+        assert_eq!(entities("a&#0;b &#x7; c&#10;d"), "a&#0;b &#x7; c\nd");
+        let many = "&".repeat(50_000);
+        assert_eq!(entities(&many), many);
+    }
+
+    #[test]
+    fn a_quoted_angle_bracket_does_not_end_a_tag_and_a_name_inside_a_value_is_passed_over() {
+        let entry =
+            r#"<link title="a > b" data-href="x" href="https://example.org/a"/><title type="text" alt="1>0">T</title>"#;
+        assert_eq!(entry_link(entry).as_deref(), Some("https://example.org/a"));
+        assert_eq!(field(entry, "title").as_deref(), Some("T"));
+        assert_eq!(attr(r#" rel=alternate href="https://example.org/b""#, "rel"), None);
+        assert_eq!(attr(r#" xhref=1 href="https://example.org/b""#, "href").as_deref(), Some("https://example.org/b"));
+        // A quote left open loses its own entry, not the ones after it.
+        let feed = r#"<item id="1><title>A</title></item><item><title>B</title></item>"#;
+        assert_eq!(elements(feed, "item").iter().filter_map(|item| field(item, "title")).collect::<Vec<_>>(), ["B"]);
     }
 }
