@@ -237,10 +237,9 @@ pub(crate) async fn read(client: &Client, cloud: &Cloud, args: &Args, t: &mut Ti
         let s = if r.pages == 1 { "" } else { "s" };
         eprintln!("jurl: found after reading {} page{s}: {}", r.pages, follow::trail(&trail));
     }
-    // The answer can be kept up to date in a sheet: a person at a terminal gets the console link that saves it. A script reading the output
-    // doesn't see it.
-    if done.is_ok()
-        && stderr().is_terminal()
+    // The answer can be kept up to date in a sheet, a miss too (the sheet says when the page starts to say it): a person at a terminal gets the
+    // console link that saves it. A script reading the output doesn't see it.
+    if stderr().is_terminal()
         && let Some(link) = sheet_link(r.save_as_sheet.as_deref(), &cloud.base)
     {
         eprintln!("jurl: keep it up to date in a sheet: {link}");

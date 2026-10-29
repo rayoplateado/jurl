@@ -392,7 +392,7 @@ jurl cloud · Acme · 1,240 page reads used · 18 days left
 key "laptop"
 ```
 
-An answer to a question (`--precise`, or `-q`) can be kept up to date: at a terminal, jurl cloud's answer ends with a link on stderr, `jurl: keep it up to date in a sheet: https://cloud.jurl.dev/…`. It opens a console page where the person who signed this computer in saves the answer as a sheet. The sheet's first row is that answer with its proof, without reading the page again, and from there it can add sites, questions and a schedule. A script reading the output doesn't get the line.
+An answer to a question (`--precise`, or `-q`), or a miss, can be kept up to date: at a terminal, jurl cloud's answer ends with a link on stderr, `jurl: keep it up to date in a sheet: https://cloud.jurl.dev/…`. It opens a console page where the person who signed this computer in saves the answer as a sheet. The sheet's first row is that answer with its proof (or the miss), without reading the page again, and from there it can add sites, questions and a schedule. A script reading the output doesn't get the line.
 
 `jurl status` says which account reads go to, and for jurl cloud, what the period has used. `jurl logout` signs this computer out and revokes its key on jurl cloud.
 
