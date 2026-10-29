@@ -236,6 +236,11 @@ async fn set_reach_with(args: &mut crate::cli::Args, public_only: bool, proxy: b
             "JURL_PUBLIC_ONLY=1 refuses a proxy: HTTP_PROXY, HTTPS_PROXY or ALL_PROXY is set, and a proxy resolves the page's name itself, outside the address check"
         );
     }
+    // Images listed on stdin have no start: under `public_only` each must be at a public address, as any other page's are.
+    if args.url == crate::STDIN {
+        args.reach = if public_only { Reach::Public { allowed: HashSet::new() } } else { Reach::Private };
+        return Ok(());
+    }
     let Ok(start) = Url::parse(&args.url) else {
         if public_only {
             bail!("{}: not a URL, and JURL_PUBLIC_ONLY=1 allows only public addresses", args.url);

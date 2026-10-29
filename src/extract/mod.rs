@@ -119,6 +119,9 @@ pub struct Image {
     pub card: String,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// The page the image is on, when it is not the page read: an image listed on stdin (`jurl --find WHAT -`) names its own, or
+    /// is its own. What its download sends as its Referer.
+    pub page: Option<Url>,
 }
 
 #[derive(Debug, Clone)]
@@ -217,7 +220,7 @@ fn push_image(
     }
     let preview = preview.and_then(|p| base.join(p.trim()).ok()).unwrap_or_else(|| url.clone());
     let i = out.len();
-    out.push(Image { i, url, preview, alt, caption, card: String::new(), width, height });
+    out.push(Image { i, url, preview, alt, caption, card: String::new(), width, height, page: None });
     Some(i)
 }
 

@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use futures::future::join_all;
 use reqwest::Client;
@@ -125,6 +125,50 @@ pub(crate) async fn images(ctx: &Ctx<'_>, cfg: &Config, ex: &Extracted, t: &mut 
     };
     let (kept, looks) = kept_images(ctx, cfg, ex, &wanted, t).await?;
     Ok(render(ctx, ex, &kept, &looks, wanted.vision))
+}
+
+/// The images stdin lists for `-`, one per line: an image's web address, then, after a space, the page it is on, which its
+/// download sends as its Referer (an image without one is its own). They are judged as one page's images: --find looks at
+/// 80 at most, so a longer list is shortlisted by its text first, and listed images have none.
+pub(crate) fn listed(text: &str) -> Result<Extracted> {
+    let mut ex = Extracted::default();
+    for (n, line) in text.lines().enumerate() {
+        let line_no = n + 1;
+        let mut words = line.split_whitespace();
+        let Some(first) = words.next() else { continue };
+        let url = web_address(first).with_context(|| format!("stdin line {line_no}"))?;
+        let page = match words.next() {
+            Some(page) => web_address(page).with_context(|| format!("stdin line {line_no}"))?,
+            None => url.clone(),
+        };
+        if words.next().is_some() {
+            bail!("stdin line {line_no}: an image's address, then the page it is on, and nothing else");
+        }
+        let i = ex.images.len();
+        ex.images.push(Image {
+            i,
+            preview: url.clone(),
+            url,
+            alt: String::new(),
+            caption: String::new(),
+            card: String::new(),
+            width: None,
+            height: None,
+            page: Some(page),
+        });
+    }
+    if ex.images.is_empty() {
+        bail!("stdin lists no image: give one image address per line");
+    }
+    Ok(ex)
+}
+
+fn web_address(text: &str) -> Result<url::Url> {
+    let url = url::Url::parse(text).with_context(|| format!("{text}: not an address"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("{text}: not a web address");
+    }
+    Ok(url)
 }
 
 /// --with-image: `answer` with the best image of the page it comes from (`ex`), as `image` in the JSON and a markdown image
@@ -555,7 +599,7 @@ fn clef_ask(title: &str, img: &Image, query: Option<&str>) -> (Value, Value) {
 
 /// Clef's view of one image: with a query, P(it shows that); without, P(it is content, not chrome).
 async fn look(req: &LookRequest<'_>, img: &Image) -> Result<f64> {
-    let data = thumbnail(req.retry, req.page, &img.preview).await?;
+    let data = thumbnail(req.retry, img.page.as_ref().unwrap_or(req.page), &img.preview).await?;
     let (state, question) = clef_ask(req.title, img, req.query);
     let qs = Map::from_iter([("q".to_string(), question)]);
     let call =
@@ -639,7 +683,25 @@ mod tests {
             card: String::new(),
             width: None,
             height: None,
+            page: None,
         }
+    }
+
+    #[test]
+    fn stdin_lists_images_each_with_its_page() {
+        let ex = listed("https://cdn.test/a.jpg https://shop.test/a\n\n  https://cdn.test/b.png  \n").unwrap();
+        let got: Vec<_> =
+            ex.images.iter().map(|i| (i.i, i.url.as_str(), i.page.as_ref().map(|p| p.as_str()))).collect();
+        assert_eq!(
+            got,
+            [
+                (0, "https://cdn.test/a.jpg", Some("https://shop.test/a")),
+                (1, "https://cdn.test/b.png", Some("https://cdn.test/b.png"))
+            ]
+        );
+        assert!(listed("").is_err());
+        assert!(listed("file:///etc/passwd").err().expect("refused").to_string().contains("line 1"));
+        assert!(listed("https://cdn.test/a.jpg https://shop.test/a extra").is_err());
     }
 
     #[test]
@@ -806,6 +868,7 @@ mod tests {
             card: String::new(),
             width: None,
             height: None,
+            page: None,
         }
     }
 
