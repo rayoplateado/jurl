@@ -2,6 +2,7 @@
 //! answer back, which is printed the way a local run prints one.
 
 use std::{
+    io::{IsTerminal, stderr},
     sync::atomic::Ordering::Relaxed,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -236,7 +237,22 @@ pub(crate) async fn read(client: &Client, cloud: &Cloud, args: &Args, t: &mut Ti
         let s = if r.pages == 1 { "" } else { "s" };
         eprintln!("jurl: found after reading {} page{s}: {}", r.pages, follow::trail(&trail));
     }
+    // The answer can be kept up to date in a sheet: a person at a terminal gets the console link that saves it. A script reading the output
+    // doesn't see it.
+    if done.is_ok()
+        && stderr().is_terminal()
+        && let Some(link) = sheet_link(r.save_as_sheet.as_deref(), &cloud.base)
+    {
+        eprintln!("jurl: keep it up to date in a sheet: {link}");
+    }
     done
+}
+
+/// The console link that saves the read as a sheet, when the server sent one on jurl cloud's own address: any other link isn't printed.
+fn sheet_link(link: Option<&str>, base: &str) -> Option<Url> {
+    let link = Url::parse(link?).ok()?;
+    let base = Url::parse(base).ok()?;
+    (link.origin() == base.origin()).then_some(link)
 }
 
 /// What `POST /api/v1/read` answers. Fields the server doesn't send read as absent: a block without its `kind` prints as
@@ -265,6 +281,8 @@ struct ReadReply {
     p: Option<f64>,
     blocks: Option<Vec<ReplyBlock>>,
     links: Option<Vec<ReplyLink>>,
+    // The console page that keeps this answer up to date in a sheet, for a read that asked a question.
+    save_as_sheet: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -535,6 +553,17 @@ mod tests {
         assert!(!chosen(false, true, true), "own keys in the environment beat a saved login");
         assert!(chosen(false, false, true), "a saved login");
         assert!(!chosen(false, false, false), "nothing saved: your own keys");
+    }
+
+    #[test]
+    fn the_sheet_link_is_printed_only_on_the_clouds_own_address() {
+        let base = "https://cloud.jurl.dev";
+        let link = "https://cloud.jurl.dev/w/org1/sheets/from/read1";
+        assert_eq!(sheet_link(Some(link), base).map(String::from), Some(link.to_string()));
+        assert!(sheet_link(Some("https://elsewhere.test/w/org1/sheets/from/read1"), base).is_none(), "another site");
+        assert!(sheet_link(Some("http://cloud.jurl.dev/w/x"), base).is_none(), "another scheme");
+        assert!(sheet_link(Some("not a link"), base).is_none());
+        assert!(sheet_link(None, base).is_none(), "an older server sends none");
     }
 
     #[test]
