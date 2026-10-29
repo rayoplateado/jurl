@@ -156,9 +156,18 @@ pub(crate) struct Retry<'a> {
     pub(crate) stealth: Option<&'a Sidecar>,
     /// The run's fallback proxy (see `fallback.rs`): the hosts on it, and the client that goes through it.
     pub(crate) fallback: &'a Fallback,
+    /// Whether a page is asked for as markdown first. A site that serves agents markdown (`Accept: text/markdown`) gives a page
+    /// without what a `--with-pages` run lists of it: the address each card links to, its photo, and the things its JSON-LD
+    /// holds (a listing of 69 homes became 12 lines of text with no link). Such a run asks for the HTML.
+    pub(crate) markdown: bool,
 }
 
 static MEMO: LazyLock<Memo> = LazyLock::new(Memo::default);
+
+/// The `Accept` of a page's GET: markdown first, or HTML and no markdown (see `Retry::markdown`).
+fn page_accept(markdown: bool) -> &'static str {
+    if markdown { "text/markdown, text/html;q=0.9, */*;q=0.5" } else { "text/html, application/xhtml+xml, */*;q=0.5" }
+}
 
 impl<'a> Retry<'a> {
     /// The retry for a run: on unless the run opts out with `--no-browser-retry` or `JURL_NO_BROWSER_RETRY`. The reach, the
@@ -170,9 +179,19 @@ impl<'a> Retry<'a> {
         cookies: &'a Jar,
         stealth: Option<&'a Sidecar>,
         fallback: &'a Fallback,
+        markdown: bool,
     ) -> Self {
         let env_set = std::env::var_os("JURL_NO_BROWSER_RETRY").is_some();
-        Retry { on: browser_retry_allowed(flag, env_set), memo: &MEMO, timing, reach, cookies, stealth, fallback }
+        Retry {
+            on: browser_retry_allowed(flag, env_set),
+            memo: &MEMO,
+            timing,
+            reach,
+            cookies,
+            stealth,
+            fallback,
+            markdown,
+        }
     }
 }
 
@@ -653,9 +672,7 @@ fn retry_after_text(value: &header::HeaderValue) -> String {
 /// One GET of `url` with the plain `client`, or through the fallback proxy where its host is on it (see `send_get`): the page,
 /// or the refusal.
 async fn get(client: &Client, url: &str, max: usize, retry: Retry<'_>) -> Result<Reply> {
-    let sent =
-        send_get(client, url, retry, &[("accept", "text/markdown, text/html;q=0.9, */*;q=0.5".to_string())], None)
-            .await;
+    let sent = send_get(client, url, retry, &[("accept", page_accept(retry.markdown).to_string())], None).await;
     let (mut res, via_proxy) = match sent {
         Ok(sent) => sent,
         Err(e) => match e.downcast_ref::<ServerReset>() {
@@ -1854,6 +1871,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         let err = fetch_capped(&url, PAGE_MAX, retry, now).await.err().expect("refused");
         assert!(format!("{err:#}").ends_with("returned HTTP 403 Forbidden"), "{err:#}");
@@ -1967,6 +1985,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         assert_eq!(fetch_small(&file_at(&base, "/robots.txt"), PAGE_MAX, WAIT, off, now).await, None);
         assert_eq!(served.kinds(), [Kind::Plain]);
@@ -2182,6 +2201,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         for url in ["http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/", "http://[::ffff:127.0.0.2]/"] {
             let err = fetch_capped(url, PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
@@ -2209,6 +2229,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         let page = fetch_capped(&format!("{base}/page"), PAGE_MAX, retry, Instant::now())
             .await
@@ -2217,6 +2238,26 @@ mod tests {
         let err = fetch_capped(&format!("{base}/start"), PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
         assert_eq!(format!("{err:#}"), "not a public address", "{err:#}");
         assert_eq!(served.count(), 2, "the redirect's target is never asked");
+    }
+
+    #[tokio::test]
+    async fn a_run_that_lists_its_pages_asks_for_their_html_not_markdown() {
+        // A site that serves agents markdown answers by the Accept it is sent.
+        let (base, served) = serve_routed(|head| {
+            Some(if head.to_ascii_lowercase().contains("accept: text/markdown") {
+                reply("200 OK", "Content-Type: text/markdown\r\n", b"# Homes\n")
+            } else {
+                reply("200 OK", "Content-Type: text/html\r\n", b"<h1>Homes</h1>")
+            })
+        });
+        let url = format!("{base}/homes");
+        let page = fetch(&url, retry_off()).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(page.is_markdown);
+        let page = fetch(&url, Retry { markdown: false, ..retry_off() }).await.unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(!page.is_markdown);
+        let accept = served.heads().remove(1).to_ascii_lowercase();
+        let accept = accept.lines().find(|l| l.starts_with("accept:")).expect("an accept line").to_string();
+        assert!(accept.starts_with("accept: text/html") && !accept.contains("markdown"), "{accept}");
     }
 
     #[tokio::test]
@@ -2260,6 +2301,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         let bytes = image_bytes(&image, &image, retry, PAGE_MAX).await.unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(bytes, b"PNG");
@@ -2287,6 +2329,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         // What the browser's 202 makes of the image is not the point here: the host is not taught by it.
         let _ = image_bytes(&image, &image, retry, PAGE_MAX).await;
@@ -2332,6 +2375,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         let err = fetch_capped(&format!("{named}/x"), PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
         assert_eq!(format!("{err:#}"), "not a public address", "{err:#}");
@@ -2359,6 +2403,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         let err = fetch_capped(&format!("{base}/start"), PAGE_MAX, retry, Instant::now()).await.err().expect("refused");
         assert_eq!(format!("{err:#}"), "not a public address", "{err:#}");
@@ -2377,6 +2422,7 @@ mod tests {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         let private = Url::parse("http://127.0.0.2:1/robots.txt").unwrap();
         assert_eq!(fetch_small(&private, PAGE_MAX, WAIT, retry, Instant::now()).await, None);
@@ -2457,7 +2503,7 @@ mod tests {
 
     /// The retry of a run with `fallback` as its proxy, and the reach given.
     fn proxied<'a>(memo: &'a Memo, reach: &'a Reach, fallback: &'a Fallback) -> Retry<'a> {
-        Retry { on: true, memo, timing: false, reach, cookies: &NO_COOKIES, stealth: None, fallback }
+        Retry { on: true, memo, timing: false, reach, cookies: &NO_COOKIES, stealth: None, fallback, markdown: true }
     }
 
     /// The memo name of a test server's base address (its host and port).
@@ -3601,8 +3647,16 @@ mod tests {
     /// Reads `url` with `reach`, the run's cookies being `jar`.
     async fn read_with(url: &str, reach: &Reach, jar: &Jar) -> Result<Page> {
         let memo = Memo::default();
-        let retry =
-            Retry { on: false, memo: &memo, timing: false, reach, cookies: jar, stealth: None, fallback: &NO_FALLBACK };
+        let retry = Retry {
+            on: false,
+            memo: &memo,
+            timing: false,
+            reach,
+            cookies: jar,
+            stealth: None,
+            fallback: &NO_FALLBACK,
+            markdown: true,
+        };
         fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
     }
 
@@ -3662,6 +3716,7 @@ mod tests {
             cookies: &jar,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         fetch(&format!("{base}/set"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
         match get_browser(&format!("{base}/browser"), PAGE_MAX, retry).await.unwrap_or_else(|e| panic!("{e:#}")) {
@@ -3702,6 +3757,7 @@ mod tests {
             cookies: &jar,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         };
         fetch(&format!("{base}/set"), retry).await.unwrap_or_else(|e| panic!("{e:#}"));
         for (url, expected) in [
@@ -3873,6 +3929,7 @@ pub(crate) mod test_server {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         }
     }
 
@@ -3887,6 +3944,7 @@ pub(crate) mod test_server {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         }
     }
 
@@ -3901,6 +3959,7 @@ pub(crate) mod test_server {
             cookies: &NO_COOKIES,
             stealth: None,
             fallback: &NO_FALLBACK,
+            markdown: true,
         }
     }
 

@@ -251,6 +251,7 @@ async fn kept_images<'e>(
         &ctx.args.cookies,
         ctx.args.stealth.as_ref(),
         &ctx.args.fallback,
+        !ctx.args.with_pages,
     );
     let req = clef_keys.as_ref().map(|keys| LookRequest {
         retry,
