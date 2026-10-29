@@ -184,6 +184,8 @@ pub(crate) async fn with_image(
 ) -> Result<Rendered> {
     let Some(find) = &ctx.args.with_image else { return Ok(answer) };
     let wanted = Wanted { ask: find.as_deref(), vision: find.is_some(), limit: 1, threshold: DEFAULT_IMAGE_THRESHOLD };
+    // How many images the page has, so a miss tells "none of them shows it" from "the page has none".
+    answer.json["page_images"] = json!(ex.images.len());
     match kept_images(ctx, cfg, ex, &wanted, t).await {
         Ok((kept, looks)) => {
             let (img, p) = kept[0];
@@ -1050,7 +1052,7 @@ mod tests {
         let (client, url, ex) = (Client::new(), url::Url::parse("https://x.com/").unwrap(), Extracted::default());
         let ctx = Ctx::new(&args, &client, "", &url, &ex);
         let got = with_image(&ctx, &Config::default(), &ex, answered(), &mut Timer::new()).await.unwrap();
-        assert_eq!(got.json, json!({ "answer": "8:00 to 18:00", "image": null }));
+        assert_eq!(got.json, json!({ "answer": "8:00 to 18:00", "image": null, "page_images": 0 }));
         assert_eq!(got.text, answered().text, "no image line");
     }
 
