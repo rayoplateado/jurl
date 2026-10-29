@@ -113,28 +113,63 @@ const PAGE_IMAGES_MAX: usize = 40;
 /// The side under which an image of known size is a thumbnail, a logo or a badge rather than one of the page's photos.
 const PAGE_IMAGE_MIN_SIDE: u32 = 120;
 
-/// The page's photos, in page order: its images (noise already left out, see `extract`) less the ones known to be small, logos and
-/// GIFs (maps, animations), each once, up to [`PAGE_IMAGES_MAX`]. A long file name is the photo whatever folder it is in: a site
-/// that serves one photo at several sizes names them alike (`xl/1018_1.jpg`, `thumb/1018_1.jpg`), so only the first is kept.
+/// The page's photos, in the order jurl found them (its `og:image` and JSON-LD images, then its `<img>`s, then its `<picture>`s): its
+/// images (noise already left out, see `extract`) less the ones known to be small, logos and GIFs (maps, animations), each photo once, up
+/// to [`PAGE_IMAGES_MAX`]. One photo served at several sizes or formats (`xl/1018_1.jpg`, `thumb/1018_1.webp`, `1018.jpg?w=200`) is
+/// told by [`photo_key`] and listed once, at its first place, as its largest known variant.
 pub(crate) fn page_images(images: &[crate::extract::Image]) -> Vec<PageImage> {
-    let mut seen = HashSet::new();
-    images
-        .iter()
-        .filter(|i| {
-            !i.width.is_some_and(|w| w < PAGE_IMAGE_MIN_SIDE) && !i.height.is_some_and(|h| h < PAGE_IMAGE_MIN_SIDE)
-        })
-        .filter(|i| {
-            let name = i.url.path_segments().and_then(|mut s| s.next_back()).unwrap_or("").to_ascii_lowercase();
-            !name.contains("logo") && !name.ends_with(".gif")
-        })
-        .filter(|i| {
-            let name = i.url.path_segments().and_then(|mut s| s.next_back()).unwrap_or("");
-            let key = if name.len() >= 16 { name.to_string() } else { i.url.to_string() };
-            seen.insert(key)
-        })
+    let mut kept: Vec<(String, &crate::extract::Image)> = Vec::new();
+    for image in images.iter().filter(|i| photo_like(i)) {
+        let key = photo_key(&image.url);
+        match kept.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, first)) if side(image) > side(first) => *first = image,
+            Some(_) => {}
+            None => kept.push((key, image)),
+        }
+    }
+    kept.into_iter()
         .take(PAGE_IMAGES_MAX)
-        .map(|i| PageImage { url: i.url.to_string(), alt: i.alt.clone() })
+        .map(|(_, i)| PageImage { url: i.url.to_string(), alt: i.alt.clone() })
         .collect()
+}
+
+/// Whether an image can be one of the page's photos: not known to be small, not a GIF, and with no `logo` word in its file name.
+fn photo_like(image: &crate::extract::Image) -> bool {
+    let small = |side: Option<u32>| side.is_some_and(|s| s < PAGE_IMAGE_MIN_SIDE);
+    let name = file_name(&image.url).to_ascii_lowercase();
+    let logo = name.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "logo" || word == "logos");
+    !small(image.width) && !small(image.height) && !name.ends_with(".gif") && !logo
+}
+
+/// What one photo's variants share: its file name without its extension and a `-300x225` size, when that holds a number of 4 digits or
+/// more (a photo's own id), whatever its folder and query; else its address without the query, so photos named alike in folders of their
+/// own (`/123/original.jpg`, `/124/original.jpg`) stay apart.
+fn photo_key(url: &url::Url) -> String {
+    let name = file_name(url);
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let stem = match stem.rsplit_once('-') {
+        Some((head, size)) if size.split_once('x').is_some_and(|(w, h)| is_number(w) && is_number(h)) => head,
+        _ => stem,
+    };
+    let mut run = 0;
+    let has_id = stem.chars().any(|c| {
+        run = if c.is_ascii_digit() { run + 1 } else { 0 };
+        run >= 4
+    });
+    if has_id { stem.to_string() } else { format!("{}{}", url.origin().ascii_serialization(), url.path()) }
+}
+
+fn file_name(url: &url::Url) -> &str {
+    url.path_segments().and_then(|mut s| s.next_back()).unwrap_or("")
+}
+
+fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_ascii_digit())
+}
+
+/// An image's longest known side in pixels, 0 when its page gave neither.
+fn side(image: &crate::extract::Image) -> u32 {
+    image.width.unwrap_or(0).max(image.height.unwrap_or(0))
 }
 
 impl PagesLog {
@@ -527,18 +562,30 @@ mod tests {
             image(2, "https://x.com/balcon.jpg", Some(1200)),
             image(3, "https://x.com/salon.jpg", None),
             image(4, "https://x.com/map/area.gif", None),
-            image(5, "https://x.com/xl/1018_107932376_1.jpg", None),
-            image(6, "https://x.com/thumb/1018_107932376_1.jpg", None),
+            image(5, "https://x.com/thumb/1018_107932376_1.jpg", Some(200)),
+            image(6, "https://x.com/xl/1018_107932376_1.webp", Some(1600)),
+            image(7, "https://x.com/123/original.jpg", None),
+            image(8, "https://x.com/124/original.jpg", None),
+            image(9, "https://x.com/catalogo-2024.jpg", None),
+            image(10, "https://x.com/site-logo.jpg", None),
+            image(11, "https://x.com/piso-5521-1024x768.jpg", None),
+            image(12, "https://x.com/piso-5521-300x225.jpg", None),
         ];
         let got = page_images(&images);
+        let urls: Vec<_> = got.iter().map(|i| i.url.as_str()).collect();
         assert_eq!(
-            got,
+            urls,
             [
-                PageImage { url: "https://x.com/salon.jpg".into(), alt: "photo 0".into() },
-                PageImage { url: "https://x.com/balcon.jpg".into(), alt: "photo 2".into() },
-                PageImage { url: "https://x.com/xl/1018_107932376_1.jpg".into(), alt: "photo 5".into() },
+                "https://x.com/salon.jpg",
+                "https://x.com/balcon.jpg",
+                "https://x.com/xl/1018_107932376_1.webp",
+                "https://x.com/123/original.jpg",
+                "https://x.com/124/original.jpg",
+                "https://x.com/catalogo-2024.jpg",
+                "https://x.com/piso-5521-1024x768.jpg",
             ]
         );
+        assert_eq!(got[1], PageImage { url: "https://x.com/balcon.jpg".into(), alt: "photo 2".into() });
         let many: Vec<_> = (0..50).map(|i| image(i, &format!("https://x.com/{i}.jpg"), None)).collect();
         assert_eq!(page_images(&many).len(), PAGE_IMAGES_MAX);
         let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "x?", "https://x.com/"]);
