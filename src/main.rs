@@ -590,7 +590,7 @@ async fn load_page(
             platform_listing(&page, &ex, args.ask.as_deref().unwrap_or_default(), retry, args.timing).await;
     }
     if args.with_pages {
-        let mut data = output::PageData::default();
+        let mut data = output::PageData { images: output::page_images(&ex.images), ..output::PageData::default() };
         if let Some((things, _)) = &platform {
             data.items = extract::data_next::items(things, &page.url, 0);
         } else if let Some(own) = own.as_ref().filter(|_| is_document) {

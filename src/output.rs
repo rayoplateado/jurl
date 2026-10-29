@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::Result;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
@@ -91,12 +92,49 @@ struct Loaded {
 }
 
 /// What `pages` says of a page's own data, apart from its blocks: the things its JSON-LD lists (`items`), the lists its data
-/// holds (`sources`, under --with-sources) and the rows a --recipe took from it.
+/// holds (`sources`, under --with-sources), the rows a --recipe took from it and its photos (`images`).
 #[derive(Default)]
 pub(crate) struct PageData {
     pub(crate) items: Vec<Block>,
     pub(crate) sources: Vec<Source>,
     pub(crate) recipe: Option<Applied>,
+    pub(crate) images: Vec<PageImage>,
+}
+
+/// A photo of a page, as `pages` lists it: its address and its alt text, what a later `jurl --find WHAT -` looks at.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct PageImage {
+    pub(crate) url: String,
+    pub(crate) alt: String,
+}
+
+/// The most photos `pages` lists for one page: a flat's or a product's whole gallery.
+const PAGE_IMAGES_MAX: usize = 40;
+/// The side under which an image of known size is a thumbnail, a logo or a badge rather than one of the page's photos.
+const PAGE_IMAGE_MIN_SIDE: u32 = 120;
+
+/// The page's photos, in page order: its images (noise already left out, see `extract`) less the ones known to be small, logos and
+/// GIFs (maps, animations), each once, up to [`PAGE_IMAGES_MAX`]. A long file name is the photo whatever folder it is in: a site
+/// that serves one photo at several sizes names them alike (`xl/1018_1.jpg`, `thumb/1018_1.jpg`), so only the first is kept.
+pub(crate) fn page_images(images: &[crate::extract::Image]) -> Vec<PageImage> {
+    let mut seen = HashSet::new();
+    images
+        .iter()
+        .filter(|i| {
+            !i.width.is_some_and(|w| w < PAGE_IMAGE_MIN_SIDE) && !i.height.is_some_and(|h| h < PAGE_IMAGE_MIN_SIDE)
+        })
+        .filter(|i| {
+            let name = i.url.path_segments().and_then(|mut s| s.next_back()).unwrap_or("").to_ascii_lowercase();
+            !name.contains("logo") && !name.ends_with(".gif")
+        })
+        .filter(|i| {
+            let name = i.url.path_segments().and_then(|mut s| s.next_back()).unwrap_or("");
+            let key = if name.len() >= 16 { name.to_string() } else { i.url.to_string() };
+            seen.insert(key)
+        })
+        .take(PAGE_IMAGES_MAX)
+        .map(|i| PageImage { url: i.url.to_string(), alt: i.alt.clone() })
+        .collect()
 }
 
 impl PagesLog {
@@ -131,7 +169,7 @@ impl PagesLog {
     }
 
     /// The `pages` of the JSON: in load order, once per final URL (its first load, by `links::key`), each with its route,
-    /// whether it was rendered, its blocks, `items` when its JSON-LD lists things, `sources` when its data holds lists, and
+    /// whether it was rendered, its blocks, `images` when it has photos, `items` when its JSON-LD lists things, `sources` when its data holds lists, and
     /// `rows` (or `recipe_error`) when a recipe was given, with `rows_truncated` when the list had more than it gives.
     pub(crate) fn json(&self) -> Result<Value> {
         let loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
@@ -151,6 +189,9 @@ impl PagesLog {
             }
             if !p.data.sources.is_empty() {
                 page["sources"] = serde_json::to_value(&p.data.sources)?;
+            }
+            if !p.data.images.is_empty() {
+                page["images"] = serde_json::to_value(&p.data.images)?;
             }
             match &p.data.recipe {
                 Some(Applied::Rows { rows, truncated }) => {
@@ -465,6 +506,57 @@ mod tests {
         assert_eq!((&v["answer"], &v["closest"]), (&Value::Null, &Value::Null));
         assert_eq!(v["error"], "nothing in https://jurl.dev/ answers that");
         assert_eq!(v["pages"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn with_pages_a_pages_photos_are_its_images_less_the_small_ones_each_once() {
+        let image = |i: usize, url: &str, width: Option<u32>| crate::extract::Image {
+            i,
+            url: Url::parse(url).unwrap(),
+            preview: Url::parse(url).unwrap(),
+            alt: format!("photo {i}"),
+            caption: String::new(),
+            card: String::new(),
+            width,
+            height: None,
+            page: None,
+        };
+        let images = [
+            image(0, "https://x.com/salon.jpg", None),
+            image(1, "https://x.com/logo.png", Some(90)),
+            image(2, "https://x.com/balcon.jpg", Some(1200)),
+            image(3, "https://x.com/salon.jpg", None),
+            image(4, "https://x.com/map/area.gif", None),
+            image(5, "https://x.com/xl/1018_107932376_1.jpg", None),
+            image(6, "https://x.com/thumb/1018_107932376_1.jpg", None),
+        ];
+        let got = page_images(&images);
+        assert_eq!(
+            got,
+            [
+                PageImage { url: "https://x.com/salon.jpg".into(), alt: "photo 0".into() },
+                PageImage { url: "https://x.com/balcon.jpg".into(), alt: "photo 2".into() },
+                PageImage { url: "https://x.com/xl/1018_107932376_1.jpg".into(), alt: "photo 5".into() },
+            ]
+        );
+        let many: Vec<_> = (0..50).map(|i| image(i, &format!("https://x.com/{i}.jpg"), None)).collect();
+        assert_eq!(page_images(&many).len(), PAGE_IMAGES_MAX);
+        let mut args = Args::parse_from(["jurl", "--json", "--with-pages", "-q", "x?", "https://x.com/"]);
+        prepare(&mut args).unwrap();
+        let url = Url::parse("https://x.com/").unwrap();
+        args.pages_log.record(0, &url, served(), &a_page_of("one"), PageData { images: got, ..PageData::default() });
+        args.pages_log.record(
+            1,
+            &Url::parse("https://x.com/2").unwrap(),
+            served(),
+            &a_page_of("two"),
+            PageData::default(),
+        );
+        let read = Ok(Rendered { text: String::new(), json: json!({ "answer": null }) });
+        let v: Value =
+            serde_json::from_str(&stdout_for(&args, &read, &decide::Usage::new()).unwrap().unwrap()).unwrap();
+        assert_eq!(v["pages"][0]["images"][1], json!({ "url": "https://x.com/balcon.jpg", "alt": "photo 2" }));
+        assert!(v["pages"][1].get("images").is_none());
     }
 
     #[test]

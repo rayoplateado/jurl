@@ -115,7 +115,7 @@ pub(crate) struct Args {
     #[arg(long)]
     pub(crate) json: bool,
     /// With --json: the text of every page the run loaded, as `pages`, in load order (also the ones the answer doesn't come
-    /// from), and the things each page's JSON-LD lists. A miss or an error prints the JSON too, with `error`
+    /// from), the things each page's JSON-LD lists and its photos. A miss or an error prints the JSON too, with `error`
     #[arg(long)]
     pub(crate) with_pages: bool,
     /// With --with-pages: also the lists of things each page's own data holds (its JSON-LD, its JSON scripts such as
