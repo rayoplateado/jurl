@@ -55,7 +55,7 @@ use crate::{
     config::Config,
     extract::{Extracted, Kind},
     judge::Ctx,
-    output::{Rendered, exit_code, stdout_for, write_out},
+    output::{Rendered, exit_code, not_found, stdout_for, write_out},
     setup::{Access, NoArgs},
     timing::Timer,
 };
@@ -251,6 +251,9 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.with_pages && !args.json {
         bail!("--with-pages puts the pages in the JSON: add --json");
     }
+    if args.pages_only && (args.follow.is_some() || args.with_image.is_some() || args.with_link.is_some()) {
+        bail!("--pages-only reads nothing on the pages: not with --follow, --with-image or --with-link");
+    }
     Ok(())
 }
 
@@ -340,6 +343,9 @@ async fn read(
 
     let ex = if args.pages > 1 { list_pages(args, cfg, url.clone(), ex, t).await } else { ex };
     let ctx = Ctx::new(args, client, key, &url, &ex);
+    if args.pages_only {
+        return Err(not_found(format!("{url} loaded, not read (--pages-only)")));
+    }
     if args.image || args.vision {
         vision::images(&ctx, cfg, &ex, t).await
     } else if args.links {
@@ -841,6 +847,26 @@ mod tests {
         assert!(
             check(&["jurl", "-q", "x?", "--pages", "2", "--with-image", "x.com"]).is_err(),
             "one page: the answer's"
+        );
+    }
+
+    #[test]
+    fn pages_only_goes_with_the_pages_and_not_with_a_search_or_an_answers_extras() {
+        let check = |argv: &[&str]| prepare(&mut Args::try_parse_from(argv).map_err(anyhow::Error::from)?);
+        assert!(check(&["jurl", "--json", "--with-pages", "--pages-only", "-p", "-q", "x?", "x.com"]).is_ok());
+        assert!(check(&["jurl", "--json", "--with-pages", "--pages-only", "--pages", "3", "x.com"]).is_ok());
+        assert!(check(&["jurl", "--json", "--pages-only", "x.com"]).is_err(), "nothing to print without the pages");
+        assert!(
+            check(&["jurl", "--json", "--with-pages", "--pages-only", "-p", "-q", "x?", "--follow", "5", "x.com"])
+                .is_err()
+        );
+        assert!(
+            check(&["jurl", "--json", "--with-pages", "--pages-only", "-p", "-q", "x?", "--with-image", "x.com"])
+                .is_err()
+        );
+        assert!(
+            check(&["jurl", "--json", "--with-pages", "--pages-only", "-p", "-q", "x?", "--with-link=buy", "x.com"])
+                .is_err()
         );
     }
 
