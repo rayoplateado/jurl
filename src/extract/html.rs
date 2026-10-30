@@ -1572,6 +1572,24 @@ mod tests {
     }
 
     #[test]
+    fn one_photo_in_two_formats_is_one_image() {
+        let page = r#"<head><meta property="og:image" content="https://cdn.example.com/p/cover.jpg"></head><body><article>
+            <img src="https://cdn.example.com/p/cover.webp" alt="Living room" width="800" height="600">
+            <img src="https://cdn.example.com/p/kitchen.webp"><img src="https://cdn.example.com/q/cover.webp"></article></body>"#;
+        let ex = html(page, &base());
+        let urls: Vec<&str> = ex.images.iter().map(|i| i.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            [
+                "https://cdn.example.com/p/cover.jpg",
+                "https://cdn.example.com/p/kitchen.webp",
+                "https://cdn.example.com/q/cover.webp"
+            ]
+        );
+        assert_eq!(ex.images[0].alt, "Living room");
+    }
+
+    #[test]
     fn an_image_outside_any_link_takes_its_title_and_its_cards_heading() {
         // A theatre's listing: the card's link covers it from beside the picture, and its heading names the show. The
         // second card's link wraps the picture alone.

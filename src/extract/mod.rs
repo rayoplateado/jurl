@@ -209,7 +209,7 @@ fn push_image(
     if bare(&url) == bare(page) {
         return None;
     }
-    if let Some(existing) = out.iter_mut().find(|i| i.url == url) {
+    if let Some(existing) = out.iter_mut().find(|i| same_picture(&i.url, &url)) {
         if existing.alt.is_empty() {
             existing.alt = alt;
         }
@@ -225,6 +225,21 @@ fn push_image(
     let i = out.len();
     out.push(Image { i, url, preview, alt, caption, card: String::new(), width, height, page: None });
     Some(i)
+}
+
+/// Whether two addresses are one picture: the same address, or the same file served in another format
+/// (`photo.jpg` and `photo.webp`, as a page lists its cover in its data and again in its `<img>`).
+fn same_picture(a: &Url, b: &Url) -> bool {
+    if a == b {
+        return true;
+    }
+    const FORMATS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif", "gif"];
+    let stem = |u: &Url| -> Option<String> {
+        let path = u.path();
+        let (stem, ext) = path.rsplit_once('.')?;
+        FORMATS.contains(&ext.to_ascii_lowercase().as_str()).then(|| stem.to_string())
+    };
+    a.host_str() == b.host_str() && a.query() == b.query() && stem(a).is_some_and(|s| Some(s) == stem(b))
 }
 
 /// Cheap pre-filter: things that are never content, so no model needs to see them.
