@@ -233,7 +233,7 @@ fn same_picture(a: &Url, b: &Url) -> bool {
     if a == b {
         return true;
     }
-    const FORMATS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif", "gif"];
+    const FORMATS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif"];
     let stem = |u: &Url| -> Option<String> {
         let path = u.path();
         let (stem, ext) = path.rsplit_once('.')?;
