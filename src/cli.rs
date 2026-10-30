@@ -128,6 +128,10 @@ pub(crate) struct Args {
     /// A step ending in `*` is the one key that starts with it. Each value is the page's own, as written
     #[arg(long, value_name = "JSON", requires = "with_pages", value_parser = crate::extract::sources::parse_recipe)]
     pub(crate) recipe: Option<crate::extract::sources::Recipe>,
+    /// With --with-pages: load the pages and print them, with no model: no block is scored and nothing is answered, so the
+    /// run is a miss whose JSON holds the pages, for a caller that reads them itself
+    #[arg(long, requires = "with_pages")]
+    pub(crate) pages_only: bool,
     /// Per-phase timings on stderr
     #[arg(short, long)]
     pub(crate) timing: bool,
