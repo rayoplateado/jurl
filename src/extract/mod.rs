@@ -216,6 +216,9 @@ fn push_image(
         if existing.caption.is_empty() {
             existing.caption = caption;
         }
+        // A photo listed first by the page's data takes its size from the page's own `<img>`.
+        existing.width = existing.width.or(width);
+        existing.height = existing.height.or(height);
         return Some(existing.i);
     }
     let preview = preview.and_then(|p| base.join(p.trim()).ok()).unwrap_or_else(|| url.clone());
