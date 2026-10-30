@@ -1,7 +1,7 @@
 //! The values a page gives in its JSON-LD (schema.org): an event's dates, an offer's price, a course's duration. A precise
 //! answer may be one of them, when the page's text gives none (see `structured_or` in blocks.rs). Each is a block of its own
 //! that names its source, so the quote shows the field: "Event VivaTech 2027 (JSON-LD): startDate 2027-06-16, endDate 2027-06-19."
-//! A product's photos are not text: `product_images` gives them to the image candidates instead.
+//! The photos of what a page offers are not text: `product_images` gives them to the image candidates instead.
 
 use scraper::{Html, Selector};
 use serde_json::{Map, Value};
@@ -307,11 +307,50 @@ fn flatten(path: &str, value: &Value, out: &mut Vec<(String, String)>) {
     }
 }
 
-/// The most product photos one page gives from its JSON-LD: a listing of many products stays short.
-const MAX_IMAGES: usize = 8;
+/// The most photos one page gives from its JSON-LD: a flat's or a product's whole gallery, as `pages` lists at most.
+const MAX_IMAGES: usize = 40;
 
-/// The photos a page's JSON-LD gives its products: the `image` of each Product or Offer, as a URL, a list of URLs, or an
-/// ImageObject. They are image candidates, not text: `html` reads them after og:image.
+/// The types whose `image` is a photo of the thing the page offers: a product or an offer, a home or a place to stay, a vehicle,
+/// an event (any type named `…Event`), a place to visit, a recipe. Not a person, an organization or a page, whose image is a
+/// portrait, a logo or a banner.
+const PHOTO_TYPES: &[&str] = &[
+    "Product",
+    "Offer",
+    "IndividualProduct",
+    "ProductModel",
+    "RealEstateListing",
+    "Accommodation",
+    "Apartment",
+    "House",
+    "SingleFamilyResidence",
+    "Residence",
+    "ApartmentComplex",
+    "Room",
+    "HotelRoom",
+    "Suite",
+    "LodgingBusiness",
+    "Hotel",
+    "Hostel",
+    "Resort",
+    "BedAndBreakfast",
+    "VacationRental",
+    "Campground",
+    "Vehicle",
+    "Car",
+    "Motorcycle",
+    "Event",
+    "TouristAttraction",
+    "LandmarksOrHistoricalBuildings",
+    "Museum",
+    "Recipe",
+];
+
+fn photo_type(t: &str) -> bool {
+    PHOTO_TYPES.contains(&t) || t.ends_with("Event")
+}
+
+/// The photos a page's JSON-LD gives the things it offers: the `image` of each node of a [`PHOTO_TYPES`] type, as a URL, a list
+/// of URLs, or an ImageObject. They are image candidates, not text: `html` reads them after og:image.
 pub fn product_images(doc: &Html) -> Vec<String> {
     let script = Selector::parse(r#"script[type="application/ld+json"]"#).expect("static selector");
     let mut out: Vec<String> = Vec::new();
@@ -328,14 +367,14 @@ pub fn product_images(doc: &Html) -> Vec<String> {
     out
 }
 
-/// Walks a JSON-LD value depth first, and takes the `image` of each Product or Offer it finds. An image counts where it is
+/// Walks a JSON-LD value depth first, and takes the `image` of each node of a photo type it finds. An image counts where it is
 /// written: nothing is inherited from a product downwards, since a product's review has an author with an avatar of their
 /// own, and that is not a photo of the product.
 fn visit_images(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Array(items) => items.iter().for_each(|v| visit_images(v, out)),
         Value::Object(map) => {
-            if types(map).iter().any(|t| matches!(t.as_str(), "Product" | "Offer"))
+            if types(map).iter().any(|t| photo_type(t))
                 && let Some(image) = map.get("image")
             {
                 image_values(image, out);
@@ -454,9 +493,36 @@ mod tests {
     }
 
     #[test]
-    fn the_image_of_anything_but_a_product_or_an_offer_is_not_a_product_photo() {
-        let html = r#"<script type="application/ld+json">{"@type":"Article","image":"https://cdn.example.test/news.jpg"}</script>"#;
+    fn the_image_of_a_page_a_person_or_an_organization_is_not_a_photo_of_what_it_offers() {
+        let html = r#"<script type="application/ld+json">{"@graph":[{"@type":"Article","image":"https://cdn.example.test/news.jpg"},
+            {"@type":"Organization","image":"https://cdn.example.test/logo.png"},{"@type":"WebPage","image":"https://cdn.example.test/hero.jpg"},
+            {"@type":"Person","image":"https://cdn.example.test/face.jpg"}]}</script>"#;
         assert!(photos(html).is_empty());
+    }
+
+    #[test]
+    fn a_listings_whole_gallery_is_a_candidate_whatever_kind_of_thing_it_offers() {
+        // A flat's listing gives its eleven photos only here; an event's type is any `…Event`.
+        let gallery: Vec<String> = (0..11).map(|n| format!("https://cdn.example.test/flat/{n}.jpg")).collect();
+        let html = format!(
+            r#"<script type="application/ld+json">{{"@graph":[{{"@type":"Organization","logo":"https://cdn.example.test/logo.png"}},
+            {{"@type":"RealEstateListing","name":"Piso en venta","image":{}}}]}}</script>
+            <script type="application/ld+json">{{"@type":"MusicEvent","image":"https://cdn.example.test/gig.jpg"}}</script>"#,
+            serde_json::to_string(&gallery).unwrap()
+        );
+        let mut expected = gallery.clone();
+        expected.push("https://cdn.example.test/gig.jpg".to_string());
+        assert_eq!(photos(&html), expected);
+    }
+
+    #[test]
+    fn a_page_gives_at_most_max_images_photos() {
+        let gallery: Vec<String> = (0..MAX_IMAGES + 5).map(|n| format!("https://cdn.example.test/{n}.jpg")).collect();
+        let html = format!(
+            r#"<script type="application/ld+json">{{"@type":"Product","image":{}}}</script>"#,
+            serde_json::to_string(&gallery).unwrap()
+        );
+        assert_eq!(photos(&html).len(), MAX_IMAGES);
     }
 
     fn item_texts(html: &str) -> Vec<String> {
