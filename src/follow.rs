@@ -837,7 +837,11 @@ fn market_offer(site: &Site, page: &Url, alternates: &[Alternate]) -> Option<Lin
 /// hundred languages), by [`links::key`]. They are not leads: opened, each would be skipped (see [`visit`]) and still take a
 /// step of the budget.
 fn other_language_links(site: &Site, ex: &Extracted) -> HashSet<String> {
-    ex.link_languages.iter().filter(|l| site.refuses(Some(&l.hreflang)).is_some()).map(|l| links::key(&l.url)).collect()
+    ex.link_languages
+        .iter()
+        .filter(|l| langtag::declared(&l.hreflang).is_some_and(|tag| site.refuses(Some(&tag)).is_some()))
+        .map(|l| links::key(&l.url))
+        .collect()
 }
 
 /// Is the answer on a page that is loaded, and which of its links lead on? Both questions go to Jev at once. `known` holds
@@ -2839,6 +2843,8 @@ mod tests {
                 Alternate { hreflang: "ia".into(), url: u("https://ia.wikipedia.org/wiki/Tennis") },
                 Alternate { hreflang: "en-GB".into(), url: u("https://en.wikipedia.org/wiki/Tennis_ball") },
                 Alternate { hreflang: "es".into(), url: u("https://es.wikipedia.org/wiki/Tenis#Historia") },
+                // `x-default` names no language: its link stays a lead.
+                Alternate { hreflang: "x-default".into(), url: u("https://en.wikipedia.org/wiki/Racket") },
             ],
             ..Extracted::default()
         };
