@@ -115,8 +115,9 @@ pub(crate) async fn run() -> Result<()> {
         if install == Install::Cargo {
             let (program, args) = Install::Installer.command(&latest);
             bail!(
-                "the update didn't finish ({status}). Building jurl needs cmake and an up-to-date C++ compiler. To \
-                 install the ready-built jurl instead, run `cargo uninstall jurl`, then `{}`",
+                "the update didn't finish ({status}). Building jurl from source needs cmake and an up-to-date C++ \
+                 compiler, which is usually what's missing. To install the ready-built jurl instead, run `cargo \
+                 uninstall jurl` (so the old copy doesn't stay first in your PATH), then `{}`",
                 shown(program, &args)
             );
         }

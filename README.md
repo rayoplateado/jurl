@@ -54,7 +54,7 @@ brew install rayoplateado/tap/jurl                                              
 curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.sh | sh   # no Homebrew
 ```
 
-<sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source (needs Rust 1.98, cmake and libclang: see [CONTRIBUTING](CONTRIBUTING.md#develop)): `cargo install --git https://github.com/rayoplateado/jurl`</sub>
+<sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source (needs Rust 1.98, cmake and libclang: see [CONTRIBUTING](CONTRIBUTING.md#develop)): `cargo install --git https://github.com/rayoplateado/jurl --tag v0.2.0 --locked`</sub>
 
 Then run `jurl`. With nothing set up, it asks how you want to read pages: with your own [TypeSafe API key](https://console.typesafe.ai), which it checks and saves, or with a [jurl cloud](#jurl-cloud) account. Reading a page first asks the same question. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
 
