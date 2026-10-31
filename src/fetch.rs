@@ -41,7 +41,7 @@ impl Page {
     }
 }
 
-/// The rung of the read ladder a page was read on (see the README): the plain client, the browser client's retry, the fallback
+/// The rung of the read ladder a page was read on (see docs/reference.md): the plain client, the browser client's retry, the fallback
 /// proxy, or the stealth sidecar. The usage's `route` names it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Route {
@@ -1048,7 +1048,7 @@ async fn browser_image(res: wreq::Response, url: &Url, max: usize, via: &str, re
     Ok(bytes)
 }
 
-/// Whether `url` may be rendered under `reach`, checked before the browser starts (see the README). A private run renders as
+/// Whether `url` may be rendered under `reach`, checked before the browser starts (see docs/reference.md). A private run renders as
 /// before, and a public run renders a page only if its own address passes the check. Under `JURL_PUBLIC_ONLY=1` the browser's
 /// own requests (its redirects, the page's scripts) are not checked, so it does not render at all, unless the network outside
 /// jurl confines it (`sandboxed`, from `JURL_RENDER_SANDBOXED=1`): then the page's address is checked, as it always is, and
@@ -1280,7 +1280,7 @@ async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url
 /// Waits for the network to settle, for real visible text to appear and for the page to be scrolled to its end, capped at 8s:
 /// SPAs keep background traffic going and often paint content after the network calms down.
 /// A host on the fallback proxy is rendered through it: Lightpanda is given the render's meter (see `meter.rs`) in place of the
-/// proxy, and every request of the render goes through it, the page's scripts and images included (see the README). Its bytes are
+/// proxy, and every request of the render goes through it, the page's scripts and images included (see docs/reference.md). Its bytes are
 /// counted on the wire when its process has ended. An error of such a render is scrubbed of the proxy, except a [`RenderRefused`],
 /// whose message names no proxy (see `Fallback::scrubbed`).
 pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> {

@@ -9,25 +9,44 @@ Tell it what you want. It picks it out of the page.</p>
 
 ---
 
-````console
-$ jurl -q "how do I install it on macOS?" github.com/BurntSushi/ripgrep
+```console
+$ jurl --precise -q "what is the primary rate limit for authenticated users?" docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+5,000 requests per hour
+
+All of these requests count towards your personal rate limit of 5,000 requests per hour. …
+
+<https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#:~:text=rate%20limit%20of-,5%2C000%20requests%20per%20hour>
+```
+
+The answer, in the page's own words, then the block it came from and a link that opens the page with it highlighted. If the page doesn't say it, jurl says so and exits 1 instead of guessing.
+
+## Why jurl
+
+- **It picks. It doesn't write.** jurl uses *decision models*, not a chatbot: [Jev](https://docs.typesafe.ai/introduction) reads the text and [Clef](https://developers.cloudflare.com/workers-ai/models/clef-flash/) looks at the images. They only say how likely each paragraph, link or image is to be what you want, and jurl prints the winners **exactly as they appear on the page**. No summary that drifts, no URL that doesn't exist.
+- **It's fast.** Most pages take under a second.
+- **It's cheap.** About a thousand pages per dollar.
+
+## Install
+
+```sh
+brew install rayoplateado/tap/jurl                                                                # macOS, Linux
+curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.sh | sh   # no Homebrew
+```
+
+<sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source (Rust 1.98, cmake and libclang, see [CONTRIBUTING](CONTRIBUTING.md#develop)): `cargo install --git https://github.com/rayoplateado/jurl`</sub>
+
+Then run `jurl`. The first time, it asks how you want to read pages: with a free [jurl cloud](#jurl-cloud) account, or with your own [TypeSafe API key](https://console.typesafe.ai). It checks the key before saving it. That's the whole setup. Pages that need JavaScript just work: jurl fetches a headless browser the first time one shows up. `--vision` and `--find` always use your own Cloudflare Workers AI token (jurl cloud doesn't take them): add it with `jurl init`.
+
+`jurl update` gets a newer jurl the same way you installed it. To uninstall: `brew uninstall jurl` or delete `~/.local/bin/jurl`, then `~/.config/jurl` (keys) and `~/Library/Caches/jurl` or `~/.cache/jurl` (the browser); run `jurl logout` first if you use jurl cloud.
+
+## What it does
+
+```console
+$ jurl --precise --follow -q "What is the monthly price of the cheapest paid plan?" linear.app
+$10 per user/month
 …
-### Installation
-
-…
-
-If you're a macOS Homebrew or a Linuxbrew user, then you can install ripgrep from homebrew-core:
-
+jurl: found after reading 4 pages: linear.app/ → linear.app/pricing
 ```
-$ brew install ripgrep
-```
-
-If you're a MacPorts user, then you can install ripgrep from the official ports:
-
-```
-$ sudo port install ripgrep
-```
-````
 
 ```console
 $ jurl --find "a cathedral" en.wikipedia.org/wiki/Cologne
@@ -41,298 +60,50 @@ https://www.da.vidbuchanan.co.uk/blog/hacking-time.html
 https://gamehistory.org/5k-magazines/
 ```
 
-## Why jurl
+- `jurl <url>`: the gist of a page, without menus, banners or footers.
+- `-q "…"`: only what answers your question. Add `--precise` for just the answer, and `--follow` to look for it across the site.
+- `--links`, `--code`, `--image`: the links worth following, the code blocks, the real images.
+- `--find "…"`: the photo that shows what you describe (Clef looks at the pixels).
 
-- **It picks. It doesn't write.** jurl doesn't use a chatbot. It uses *decision models*: [Jev](https://docs.typesafe.ai/introduction) reads the text and [Clef](https://developers.cloudflare.com/workers-ai/models/clef-flash/) looks at the images. Neither writes a word. They only say how likely each paragraph, link or image is to be what you want, and jurl prints the winners **exactly as they appear on the page**. You never get a summary that drifts or a URL that doesn't exist.
-- **It's fast.** Most pages take under a second, end to end.
-- **It's cheap.** About a thousand pages per dollar of API usage.
+Everything prints plain text or plain URLs, so it fits in a pipe: `jurl -f "a bridge over a river" en.wikipedia.org/wiki/Cologne | xargs curl -sO`.
 
-## Install
+## jurl cloud
 
-```sh
-brew install rayoplateado/tap/jurl                                                   # macOS, Linux
-curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.sh | sh   # no Homebrew
-```
-
-<sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source (needs Rust 1.98, cmake and libclang: see [CONTRIBUTING](CONTRIBUTING.md#develop)): `cargo install --git https://github.com/rayoplateado/jurl`</sub>
-
-Then run `jurl`. With nothing set up, it asks how you want to read pages: with your own [TypeSafe API key](https://console.typesafe.ai), which it checks and saves, or with a [jurl cloud](#jurl-cloud) account. Reading a page first asks the same question. That's the whole setup. Pages that need JavaScript just work too: jurl fetches a headless browser the first time one shows up.
-
-To use `--vision` and `--find`, run `jurl init` and add a Cloudflare Workers AI token. To get a newer jurl, run `jurl update`: it updates the same way you installed it (Homebrew, the installer or cargo).
-
-## What you can do
-
-### Get the gist
+Don't want to manage API keys? `jurl login` signs this computer in to [jurl cloud](https://cloud.jurl.dev), and jurl's servers do the reading. Signing up is free, with a monthly allowance of page reads; paid plans have more. Same flags and exit codes, except the image modes (`--image`, `--vision`, `--find`) and a few others, which need your own keys.
 
 ```console
-$ jurl -n 3 blog.cloudflare.com/markdown-for-agents/
-# Introducing Markdown for Agents
+$ jurl login
+To sign in to jurl cloud, open https://cloud.jurl.dev/device and enter this code:
 
-<https://blog.cloudflare.com/markdown-for-agents/> · article (1.00)
-
-The way content and businesses are discovered online is changing rapidly. In the past, traffic originated from traditional search engines, and SEO determined who got found first. …
-
-## Convert HTML to markdown, automatically
-
-Cloudflare's network now supports real-time content conversion at the source, …
-
-Here’s how it works. To fetch the markdown version of any page from a zone with Markdown for Agents enabled, the client needs to add the **Accept** negotiation header …
+    ABCD-EFGH
 ```
 
-You get the title, what kind of page it is, and the blocks that carry it, in reading order. Navigation, cookie banners, sign-up prompts, author bios and footers are left out.
+**Keep an answer up to date.** At a terminal, a jurl cloud answer ends with a link: `jurl: keep it up to date in a sheet: https://cloud.jurl.dev/…`. Open it and save the answer as a sheet: its first row is that answer with its proof. From there you add sites, questions and a schedule, and jurl cloud keeps it fresh. Scripts reading the output don't get the line.
 
-### Ask one question
-
-```console
-$ jurl -q "What is the Jevons paradox?" -n 2 en.wikipedia.org/wiki/William_Stanley_Jevons
-…
-Jevons received public recognition for his work on The Coal Question (1865), in which he called attention to the gradual exhaustion of Britain's coal supplies and also put forth the view that increases in energy production efficiency leads to more, not less, consumption. …
-
-## Practical economics
-
-In The Coal Question, Jevons covered a breadth of concepts on energy depletion …
-```
-
-Out of a page with about 240 blocks, you get the two paragraphs that answer it.
-
-### Just the answer
-
-```console
-$ jurl --precise -q "what is the primary rate limit for authenticated users?" docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
-5,000 requests per hour
-
-All of these requests count towards your personal rate limit of 5,000 requests per hour. …
-
-<https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#:~:text=rate%20limit%20of-,5%2C000%20requests%20per%20hour>
-```
-
-The first line is the answer, still in the page's own words: jurl splits the best blocks into candidates (values, names, clauses, sentences, lines of code) and Jev picks the one that is exactly the answer, then, among the shorter ones inside it, the one with nothing extra ("2009", not "2009; 17 years ago"). Then the block it came from, and a link that opens the page with the answer highlighted. If no part of the page is the answer, jurl says so and exits with an error instead of guessing, so a script gets an empty cell, not a wrong one. It never computes: if the page says "$8 a month", it won't tell you the yearly price. On 30 SaaS pricing pages ("What is the monthly price of the cheapest paid plan?") it answered 15, all of them right (Notion's as `Plus*€9.50`, with the plan's name stuck to it on the page), and left the rest empty.
-
-### Not on this page? Follow the site
-
-```console
-$ jurl --precise --follow -q "What is the monthly price of the cheapest paid plan?" linear.app
-$10 per user/month
-…
-jurl: found after reading 4 pages: linear.app/ → linear.app/pricing
-```
-
-With `--follow`, a page that doesn't answer isn't the end. It is `--precise` and `--links -q` in a loop: each page is asked for the answer, and its links are scored by how likely they lead to it. jurl reads the site's own map (`llms.txt`, `sitemap.xml`, and the sitemaps its `robots.txt` names (a `.xml.gz` sitemap is read as the XML it holds): copies of a page in other languages are skipped, but the copies in the languages the run asks for are kept (`JURL_ACCEPT_LANGUAGE`, below); a sitemap index's sitemaps for the run's country come first, in the run's language before the others (`JURL_COUNTRY`, below), then those in the start page's language, then the newest; and when there are more than 300 listed pages, those in the start page's language and in the run's languages take turns first) and the `llms.txt` of the three hosts the page links most, on its own registrable domain (`docs.stripe.com` from `stripe.com`), while it reads the first page, then compares the best ten links side by side and opens the two it likes most, keeping on from whichever page looks closest, the way people play the Wikipedia game. On a long search (`--follow 10` and up) Jev also asks of each link whether its page is in the answer's field of knowledge: far from the answer, "leads to the answer" is noise (from Tennis: Birmingham, Philadelphia), while the field points the way (vulcanized rubber, polyester: chemistry, then the elements, then mercury). It plays hot and cold: a link counts for as much as its page is close to the question (a docs index with a link straight to the answer counts as close), so a wrong turn is dropped and the search goes back to the page that was getting warmer. A page that answers is ranked by how sure Jev is of the answer and of the page, and jurl stops only when no page left could beat it by much: the pricing page beats both a home-page FAQ line and an old blog post quoting last year's price. Started from a site's front door (`linear.app`), the question is asked about that site: "the company", "they", "we" or "it" is whoever runs it, not a customer in one of its stories. It follows the links a page gives, to another site too when the page names one (a link or a URL in its text, never one it makes up), scored like any other link; each host's `robots.txt` is checked, and it stops after 5 pages (`--follow 10` for more; longer searches open three pages per step). A page that declares another language than the start page (its `<html lang>`, compared by primary subtag, so `es-ES` is Spanish) is not read, and `-t` says so, unless that is the language the run asks for (`JURL_ACCEPT_LANGUAGE`, below): a start page in Spanish, searched for an English question, also reads its English pages. A page that declares none is read as before. The path comes last, on stderr, or as `path` in `--json`; `-t` shows how warm each page was.
-
-With `--precise`, a page whose text gives no answer is read for its JSON-LD values (schema.org): an event's `startDate` and `endDate`, an offer's `price` and `priceCurrency`, a course's `duration`. The best of them answers when Jev is sure of it, and its quote names the type, the field and the source ("Event VivaTech 2027 (JSON-LD): startDate 2027-06-16, endDate 2027-06-19."). Such an answer is marked as the page's structured data, and its link is the page itself, since its words are not on the page. A search that finds no answer also asks the site's own search, when the site declares one (an OpenSearch description, a schema.org `SearchAction`, or the WordPress REST search): its results join the search as leads, and it may open three pages more.
-
-On [28 searches](bench/follow.json), run once each on 2026-10-08: 27 right, against 25 for the build before (7e68b67). The eight pricing pages are found from the bare domain, 8/8 (about 3 pages, median ~2.6 s, ~$0.0035 each). Answers in docs from the docs' root: 3/3. Short Wikipedia games (Medicine → Aspirin: `C9H8O4`): 3/3. Questions the site doesn't answer, left empty: 3/3. Long games with `--follow 15`, 3 to 5 clicks apart: 10/11, the one miss being Bicycle → the Titanic. Five were tuned on (Paris → Aspirin, Tennis → the boiling point of mercury, Jazz → the moons of Mars, among them) and six never were (Volcano → Mona Lisa, Chess → the speed of sound, among them). Median ~5 s; ~$0.031 each on average (before: ~$0.035). Three runs of each, on earlier builds, are in [bench/README.md](bench/README.md).
-
-### Just the code
-
-````console
-$ jurl --code -n 2 github.com/BurntSushi/ripgrep
-### Installation
-
-```
-$ brew install ripgrep
-```
-
-```
-$ cargo install ripgrep
-```
-````
-
-### Links worth following
-
-```console
-$ jurl --links -n 3 github.com/BurntSushi/ripgrep
-https://beyondgrep.com/feature-comparison/
-https://docs.rs/regex/1/regex/
-https://dandavison.github.io/delta/grep.html
-```
-
-The ranking puts content first, ahead of `login`, `share` or `privacy policy`.
-
-```console
-$ jurl --links -n 2 -q "What is the monthly price of the cheapest paid plan?" linear.app
-https://linear.app/pricing
-https://linear.app/plan
-```
-
-With `-q`, each link is scored by how likely following it leads to the answer. Menus and footers count too: a nav bar's `Pricing` is often the way to a price. These are the links `--follow` opens.
-
-### The real images
-
-`--image` picks the content images by their file name, alt text and caption, with no logos, icons or tracking pixels. With `-q`, it also reads the words around an image that name it (its `title`, the link it sits in, or its card's heading) and the page's title. `--vision` also has Clef look at the pixels, which matters when the alt text says nothing:
-
-| Image on a Cloudflare blog post | Alt text | `--image` | `--vision` |
-| --- | --- | --- | --- |
-| Stacked area chart | `BLOG-3162 4` | 0.64 | **0.82** |
-| Diagram | `BLOG-3162 3` | 0.63 | **0.82** |
-| Author avatar | `Will Allen` | 0.38 | **0.21** |
-| Company logo | `Cloudflare` | 0.09 | **0.08** |
-
-jurl asks for each image the way a browser's `<img>` does: with the page as its Referer, and an Accept without AVIF, which jurl can't decode. A 401, 403 or 429 is asked once more with the browser client, and a host that such a retry showed needs it is asked there first, as a page is. A host that refuses an image gets one or two requests in a run, not one per image: the rest of its images are skipped.
-
-With `--vision` each image in the JSON has a `pixels` field: `looked` when Clef looked at its pixels, `refused` when its host refused the download, and `skipped` when it was not looked at (past the look cap, or after its host refused an earlier image). `--image` has no `pixels`, since it looks at nothing.
-
-### Find a photo by description
-
-```console
-$ jurl --find "a cathedral" -n 3 en.wikipedia.org/wiki/Cologne
-```
-
-The page has 73 images, and Clef looks at every one of them in parallel. It took 2.3 seconds:
-
-| | Image | Why it matched | p |
-| --- | --- | --- | --- |
-| 1 | `Kdom.jpg` | Cologne Cathedral | 0.96 |
-| 2 | `Köln_um_1890.jpg` | The 1890 skyline, the cathedral towering over it | 0.95 |
-| 3 | `Kranhäuser_Cologne_April_2018.jpg` | The Rhine at dusk, the lit cathedral on the right. **No alt text, no caption:** only the pixels could find it | 0.95 |
-
-If nothing matches, jurl tells you so instead of handing you the least-bad photo:
-
-```console
-$ jurl --find "a carnival parade" en.wikipedia.org/wiki/Cologne
-jurl: no image in https://en.wikipedia.org/wiki/Cologne looks like "a carnival parade" (closest: …, p=0.02)
-```
-
-The same goes for every mode: an HTTP error, a rate-limit or bot-check page served in place of the real one, or nothing above `--threshold` ends with a message on stderr and a non-zero exit code, never an empty answer: 1 when the page has nothing that answers, 2 when something failed (see [Exit codes](#exit-codes)). With `--precise --json` (with or without `--follow`) a miss still prints its JSON, `"answer": null` plus what came `closest` (`null` too when no block came close), and exits 1 all the same: a script that wants the closest passage reads stdout before checking the exit code. Without `--precise`, a miss prints nothing on stdout, `--json` or not. `-t` prints its timings and tokens on a miss too, so a miss can be costed.
-
-Photos you already have, from many pages, are looked at the same way: give `-` as the page and list their addresses on stdin, one per line, each optionally followed by a space and the page it is on (sent as its Referer, as a browser would). They are judged as one page's images, with no page loaded, so `-a --threshold 0 --json` gives every photo with its `p`:
-
-```console
-$ jurl --find "a terrace" -a --threshold 0 --json - < photos.txt
-```
-
-`--find` looks at 80 images at most, as on a page: a longer list is shortlisted by its text first, and listed photos have none, so give it 80 or fewer at a time (`--vision` without a description looks at the first 12). An address listed twice is looked at once, and the JSON's `url` is `stdin:`.
-
-Images are picked from `<img>` tags (`src`, `srcset` and the usual lazy-loading attributes) and the page's `og:image`. SVG images aren't candidates: they're mostly icons and logos, and Clef only reads raster images, so a post whose diagrams are all SVG (Stripe's engineering blog) has nothing to find.
-
-### JavaScript apps
-
-Some pages arrive empty because their content is built by JavaScript, or with template placeholders in their text (`!{freePlanStorage}`) that the script would have filled in. jurl spots those and renders them in [Lightpanda](https://lightpanda.io), a fast headless browser:
-
-```console
-$ jurl -n 2 hn.algolia.com
-jurl: no text without JavaScript, rendering with Lightpanda…
-# HN Search powered by Algolia
-
-<https://hn.algolia.com/> · listing (1.00)
-
-Stephen Hawking has died(http://www.bbc.com/news/uk-43396008)
-
-6015 points|Cogito|9 years ago|436 comments
-```
-
-Use `-r` to force it.
-
-## Recipes
-
-Everything prints plain text or plain URLs, so jurl fits in a pipe:
-
-```sh
-# Read the top 3 Hacker News stories, one key paragraph each
-jurl -l -n 3 news.ycombinator.com | xargs -n1 jurl -n 1
-
-# Download the photo that matches
-jurl -f "a bridge over a river" en.wikipedia.org/wiki/Cologne | xargs curl -sO
-
-# Every chart in a post
-jurl -f "a chart or graph" -n 10 blog.cloudflare.com/markdown-for-agents/ | xargs -n1 curl -sO
-
-# Only the confident answers, for scripts
-jurl --json -q "installation" github.com/BurntSushi/ripgrep | jq -r '.blocks[] | select(.p > 0.8) | .text'
-```
+`jurl status` shows the account and what the period has used; `jurl logout` signs out.
 
 ## Use it from an agent (MCP)
 
-`jurl mcp` gives any MCP client (Claude Code, Claude Desktop, Cursor…) jurl as a set of web tools, over stdio. The agent gets the page's own words with their links, and a plain "Not found" when the page doesn't say it.
+`jurl mcp` gives any MCP client (Claude Code, Claude Desktop, Cursor…) jurl as a set of web tools: the page's own words with their links, and a plain "Not found" when the page doesn't say it.
 
 ```sh
 claude mcp add jurl -- jurl mcp
 ```
 
-Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`) take the same entry. If the app can't find `jurl`, use the full path that `which jurl` prints:
-
-```json
-{
-  "mcpServers": {
-    "jurl": { "command": "jurl", "args": ["mcp"] }
-  }
-}
-```
-
-| Tool | Like | Returns |
-| --- | --- | --- |
-| `answer` | `--precise -q` (`follow`: `--follow`) | The exact answer, the block it's in and a link that highlights it |
-| `read_page` | `jurl`, `-q` | The blocks that carry the page, or that answer `question` |
-| `find_links` | `--links` | The links worth following, or most likely to lead to the answer |
-| `find_code` | `--code` | Code blocks, as written |
-| `find_image` | `--find`, `--image`, `--vision` | Image URLs: the one that shows `description`, or the content images |
-
-Ask your agent for the cheapest paid plan on linear.app and it calls `answer` with `{"url": "linear.app", "question": "What is the monthly price of the cheapest paid plan?", "follow": true}`. It gets back `$10 per user/month`, the block, the link, and `Found by following https://linear.app/ → https://linear.app/pricing`.
-
-The tools run the same code as the CLI, with the same keys or jurl cloud sign-in (`jurl init`, `jurl login`, or the environment variables). A miss is a normal result that starts with `Not found:`, as exit code 1 is. A failure (a page that can't be read, a bad key, no credits) is a tool error, as exit code 2 is.
+Other clients take `{"mcpServers": {"jurl": {"command": "jurl", "args": ["mcp"]}}}`. The tools: [docs/usage.md](docs/usage.md#use-it-from-an-agent-mcp).
 
 ## Reference
 
 | Flag | |
 | --- | --- |
-| `-q, --ask "…"` | Keep what answers the question. Works with every mode |
-| `--follow [N]` | With `-q`: when the page doesn't answer, follow the links the pages give, most promising first, reading up to N pages (default 5) |
-| `-p, --precise` | With `-q`: just the answer, in the page's words (a JSON-LD value is marked as such), then its block and a link to it. A table's answer is quoted with the table's header and its row; `--json` also gives the whole table or list it is in, as `context`. Exits 1 when no part of the page is the answer |
-| `-c, --code` | Code blocks only |
-| `-l, --links` | Content links, best first. With `-q`, the links most likely to lead to the answer, menus included |
-| `-i, --image` | Content images, judged by file name, alt text and caption |
-| `--vision` | Like `--image`, plus Clef looks at the pixels |
-| `--pages N` | A list's next pages too: up to N pages (50 at most), each the page's own next page (`rel="next"`, or the `?page=2` or `/page/2/` link one on, or, on a list that counts its items instead, the link one step on: `?offset=24` when the page links offsets 24 and 48, as with `start`, `skip`, `from` or a number at the end of the path; the step must be between half the number of records the page holds and that number when it numbers any, and one "next" link exactly that many on is enough; otherwise one such link alone does not count; numbers that go up by 1, numbers of 10,000,000 and up (dates), and names of filters, sorts and page sizes such as `id`, `price`, `year`, `sort`, `limit` or `items` never count), judged as one list, with each page's address where its blocks start. A page that links no next page but whose own data names its next batch (its app state, its JSON-LD or the JSON it is, holding a link under a key such as `next`, `next_url`, `nextPage` or `links.next.href` to an address on its site) is followed there: many shops load their next things as JSON, and the batch is read as that page's data, so a `--recipe` gives its rows (its list is found by the recipe's fields when the batch keeps it at another path), and it names the batch after it the same way. A link counts only in the data that holds the page's largest list, nearest that list first (three at most are tried), and a batch counts only when its data holds things with half the list's keys or more, so a link to another feed's next page is passed over (it was loaded, so `--with-pages` lists it, as it lists every page loaded); the list ends at a batch whose data names no next. Only text written as an address counts (a path, a query or an `http(s)` address on the page's host and scheme): a label such as "Next", a cursor or a page number does not. A page that links its next page is read on from that link, and its data is not looked into. With `--recipe`, a page that links no next page is followed to its page number one on (`?page=3` from `?page=2`, `/page/3/` from `/page/2/`, and `page=2` added to an address with none), since many lists reach their pages only by script; such a list ends at the first page that gives no row the pages before it didn't (rows compared by the recipe's fields, `-t` says where it ended), so a site that ignores the number usually costs one page more. An address that counts its pages from 0 (`?page=0`) is not guessed. The default block count grows with the pages read. When all N pages were read and the last one links a next page or its data names one (not a guessed one; a data link given this way is not yet checked to hold the list's things) that its robots.txt allows, `--json` gives that page as `next_page` (not after a failure), so a later read can start there instead of reading the first pages again; not with `--follow`, `--links` or `--image` |
-| `-f, --find "…"` | The image that best matches the description. With `-` as the page, among the images stdin lists (one address per line, then optionally the page it is on) |
-| `--with-image[=WHAT]` | With `-q`: also the best content image of the page the answer comes from, in the same read: no page is loaded again. Judged as `--image` judges one without `-q` (is it content?), not by the question, or with `=WHAT` found as `--find` finds one (Clef, so it needs its keys). Only the answer's page is looked at, never the other pages a `--follow` reads, and a miss looks at none. The text prints it as a markdown image after the answer; `--json` gives it as `image` (`url`, `alt`, `caption`, `p`, and `pixels` with `=WHAT`), `null` when the page has none, with `image_error` when the image step failed, and `page_images`, how many images the answer's page has, so a miss with `=WHAT` tells "none of them shows it" (a number) from "the page has no image" (0). The answer stands either way. Not with `--pages` |
-| `--with-link=WHAT` | With `-q`: also the link of the answer's page that WHAT names ("buy tickets", "booking"), in the same read: no page is loaded again. Only web links of the answer's page count, never the page itself or the other pages a `--follow` reads. The text prints it as `Link: <url>` after the answer; `--json` gives it as `page_link` (`url`, `text`, `context`, `p`), `null` when no link of the page is it, with `page_link_error` when the scoring failed. The answer stands either way. Not with `--pages`, `--image` or `--links` |
-| `-r, --render` | Run the page's JavaScript first (automatic for empty JavaScript apps and unfilled template placeholders) |
-| `--no-browser-retry` | Don't ask a page that answers 202, 403 or 503, or whose server resets its stream, again with a browser's TLS fingerprint (see below) |
-| `-n, --max N` | How many results (12 blocks, 5 with `--ask`, 8 code blocks, 20 links, 1 with `--find`) |
-| `-a, --all` | No limit: everything above the threshold |
-| `--threshold P` | Minimum probability (default 0.5; 0.4 for the `--precise` answer) |
-| `--json` | Machine-readable output, with every probability and the run's `usage`. A `--precise` answer also gives its block's `kind` (`heading`, `para`, `code`, `quote`, `item`, `table`, `structured`), and the `level` or `lang` when the block has one. Its `context` is the whole table or list the answer is in, as the page has it: a table's header and rows, or a list's items one per line. Past 60 rows (a table's header included) or 6,000 characters, `context` keeps a table's header, the answer's row and the rows nearest it that fit, and `context_truncated` is `true`. `context` is left out for other blocks, and a `jurl login` answer doesn't carry it yet. A block that is a record of a repeated list (a concert calendar's card, a row of a card grid) has `record`, its number in the run, and its pieces are one block with a line each (the text prints the same record under a `[record N]` line). An answer that is a headline linking to its own page (a play's name in a theatre's agenda) has `href`, that page's address. A list read over `--pages` gives each block its `page` and the run its `pages` |
-| `--with-pages` | With `--json`: the text of every page the run loaded, as `pages`, in load order. Such a run asks for each page's HTML, not the markdown some sites serve agents, which leaves out each card's link, its photo and the JSON-LD. Each entry has its `url` (the final address), its `route` (`direct`, `browser`, `proxy` or `stealth`), whether it was `rendered`, and its `blocks`: every block of the page as the run read it, not only the ones it kept. A block that holds links has `links`: the web addresses they go to, in page order, up to 20 (a list's item often names its own site only as a link). An `href` written `www.…` with no `https://` is taken as that site, here and in `--links`. A block a page shows a picture beside, as a shop's product card shows its photo above its name, has `image`: the picture whose card's title (its card's one heading, else the first line of its link's text that isn't a price or a measure) is the block's first line; two cards of one name take theirs in page order. A card that shows its price before its name gets the photo whose title, or else whose alt text when that is a name of two words or more, is one of its lines, when no other block has that line; headings take none this way. Every block in `--json` carries `links` and `image` the same way. A page with photos has `images`: each photo's `url` and `alt`, in the order jurl found them (its `og:image` and JSON-LD images first, then the page's own), up to 40, less GIFs (maps, animations), file names with the word `logo`, and the ones its size marks as a thumbnail or a badge (under 120 pixels a side). A photo served at several sizes or formats is listed once, as its largest known variant, when its file name holds its own number of 4 digits or more (`1018_1.jpg`, `thumb/1018_1.webp` and `1018_1-300x225.jpg` are one photo): a flat's or a product's whole gallery, for a later `jurl --find WHAT -`. When the page's JSON-LD holds things (events, products, anything with a type), the entry also has `items`: one `structured` block for each, with every value it holds under its path (`name: …; startDate: …; offers.price: …`), each value once. A list of things inside a thing (a list's elements, a venue's events) gives each of them its own block. A page that is JSON (a batch a page's data named as its next one) gives the things of its list with the most keys as `items` the same way, each as `Thing (data): …`, with an address the site writes from its root (`/products/1-l`) given whole. Pages the answer doesn't come from are in it too. It replaces the list of URLs a `--pages` read gives under `pages`, since each entry has its URL. A miss or a failure still prints the JSON, with `error` and the pages |
-| `--with-sources` | With `--with-pages`: each entry also has `sources`, the lists of things the page's own data holds: its JSON-LD, its JSON scripts (an app's state, such as `__NEXT_DATA__`), the objects its scripts assign (`window.__SERVER_DATA__ = {…}`) and, on a page jurl ran with JavaScript, the JSON it fetched from its own site (`json:fetch:/api/products/`: the first response for each path, whatever its query, up to 8 responses and 1 MB in all). A list is any array of 3 or more objects. Each gives its `source` (`ld:0`, `json:__NEXT_DATA__`, `var:__SERVER_DATA__`, `json:fetch:/api/products/`), its `path` (one key or index per step), its `count`, and its first 2 elements as `path: value` lines: what a `--recipe` is written from. Up to 8 lists, the largest first |
-| `--recipe JSON` | With `--with-pages`: each entry also has `rows`, taken from the page's own data with no model: `{"source": "json:__NEXT_DATA__", "path": ["props", "events"], "fields": {"title": ["name"], "date": ["dates", "start"]}}` gives a row per element of that list, each field the value at its path inside the element, as text (a text, a number or a yes/no, as written). A field with no value is left out of its row. A list gives up to 1,000 rows; a longer one has `rows_truncated`. A step ending in `*` is the one key that starts with it (a key that carries the page number); when two keys do, it gives nothing. When the list is not there, the entry has `recipe_error` instead |
-| `--pages-only` | With `--with-pages`: the pages are loaded and printed, and nothing is read on them: no model call, so `usage.jev` stays at zero. The run is a miss (exit 1) whose JSON has the pages, for a program that reads them itself. Not with `--follow`, `--with-image` or `--with-link` |
+| `-q, --ask "…"` | Keep what answers the question |
+| `-p, --precise` | With `-q`: just the answer, its block and a link to it |
+| `--follow [N]` | With `-q`: follow the site's links until it answers (5 pages, or N) |
+| `-l, --links` · `-c, --code` · `-i, --image` | Links, code blocks or content images |
+| `-f, --find "…"` | The image that best matches the description |
+| `-n, --max N` · `-a, --all` | How many results, or all of them |
+| `--json` | Machine-readable output, with every probability and the run's usage |
 | `-t, --timing` | Where the time went, on stderr |
-| `jurl init` | Set or replace your API keys, or sign in to jurl cloud |
-| `jurl login` | Sign this computer in to [jurl cloud](#jurl-cloud) |
-| `jurl logout` | Sign out of jurl cloud, and revoke the key there |
-| `jurl status` | Which account reads go to, and jurl cloud's usage |
-| `jurl update` | Install the latest jurl, the same way this one was installed |
-| `jurl mcp` | Serve jurl's tools to an AI agent over MCP (see [above](#use-it-from-an-agent-mcp)) |
-
-Keys live in `~/.config/jurl/env`. Environment variables take precedence over that file: `TYPESAFE_API_KEY`, and for images `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_AI_TOKEN`. A `.env` in the current directory is read too, for those API keys only. A jurl cloud sign-in is saved there as `JURL_CLOUD_KEY` (and `JURL_CLOUD_URL` when it isn't the default); it never comes from a `.env`.
-
-`--vision` and `--find` give Clef 2.5 s per image; an image slower than that keeps its text-only score. If Clef looks at none of the images, jurl says so on stderr and the result is from text alone. Images over 15 MB aren't read. For batch use, where a slow host matters more than a second of waiting, raise it with `JURL_VISION_TIMEOUT_MS` (e.g. `10000`).
-
-`JURL_JEV_URL` sends Jev's requests to another server with the same contract (`POST {state, model, questions}` → `{answers, usage}`), e.g. a self-hosted model: `JURL_JEV_URL=http://127.0.0.1:8000/v1/systemone`. The TypeSafe key is never sent there: the bearer is `JURL_JEV_KEY` (environment or `~/.config/jurl/env`), or none, and only over https or to localhost: plain http to another host is refused. [bench/models](bench/models) compares such a server's answers with Jev's.
-
-`JURL_ACCEPT_LANGUAGE` sets the `Accept-Language` every page request sends. Unset, jurl sends none; the browser-fingerprint retry below keeps the line its browser profile sends. jurl doesn't detect the language of a question, and a site may answer in the language asked for or by where the request comes from, so the caller sets it: `JURL_ACCEPT_LANGUAGE=es` for a question in Spanish. It may list several, as a browser's does (`en,es;q=0.8`), and a tag weighted `q=0` is not asked for. Under `--follow` it also says which of a site's pages are read beside a start page in another language: the pages in the run's languages are read as well as the start page's, and a page in a third language is not (see `--follow`). [bench/front-doors](bench/front-doors/RESULTS.md) has the measurements: a Spanish question about Stripe's rate limits gets an English answer with `en` and a Spanish one with `es`.
-
-`JURL_JEV_MAX_TOKENS=1000000` caps the Jev input tokens a `--follow` search spends. Once the search has spent that many, it opens no more pages and answers from what it has read, as when `--follow N` runs out; the pages it is already reading finish, so it can go over by one step. A precise search past its cap gets no second pass. Unset, there is no cap. The tokens are counted from the search's start, so under `jurl mcp` the calls that run beside it count too. `-t` says when a search stops on it, and `--json` has `"capped": true` in `usage.jev` when the cap stopped a search. The cloud runner sets it.
-
-`JURL_COUNTRY=ES` (two capital letters, ISO 3166-1) is the country a run reads as, for a site that answers by where the request comes from. Under `--follow` the pages in the start page's language and in the country's region come first, then the language's other regions: a site's `/es-ar/` comes after its `/es-es/`. A page's region is its sitemap's `hreflang` when the sitemap gives one, else the region its path names: `/at/de/` is Austria in German, `/es-ar/` Spanish in Argentina. A path of two segments that reads either way (`/ar/es/` is Arabic in Spain, or Spanish in Argentina) names no region, and only its `hreflang` can say. Under `--follow`, a page that declares its own version for that country (a `<link rel="alternate" hreflang>`) offers that version as one of its links, in the run's language when the site has one, and a sitemap index reads its sitemaps for the country first, in the run's language before the others. The start page is read again through the fallback proxy in that country when the site sends it to another country's page (below). `JURL_STEALTH_COUNTRY` is the same setting for the stealth sidecar and still works; when both are set, `JURL_COUNTRY` is the one used. A value that is not two capital letters is not used, and `-t` says so.
-
-Some bot protection refuses a request by its TLS and HTTP/2 fingerprint, whatever the user agent says. So when a page answers 202, 403, or 503 without a `Retry-After`, or its server resets the request's HTTP/2 stream before any reply, jurl asks for the same URL once more, with a client that has Chrome's fingerprint and headers, and reads that answer if it is a page. A 202 Accepted is not a page, whatever its body: it means the request was accepted for processing, not served (RFC 9110 §15.3.3), so it climbs the ladder as a 403 does. A reset is the same kind of refusal (bot protection sends an RST_STREAM to a client it turns away), and climbs as a 403 does; a reset that jurl's own client causes is an error, not a refusal. A 503 with a `Retry-After` is maintenance or backoff and is not retried, and a 429 is a rate limit and is never retried: both are respected.
-
-A host that a retry showed needs that client is asked there first for the next 10 minutes (`STICKY_TTL` in `src/fetch.rs`), with no plain request before it. That covers its later pages (`--follow` hops and `--links`) and its `robots.txt` and sitemaps. If the browser client refuses too, that refusal is the answer. Other hosts are asked plain first, as before. `jurl mcp` is one long-lived process, so the same 10 minutes apply there, and a host is tried plain again after them. A site's `robots.txt`, `llms.txt` and sitemaps follow the same rule, the start page's included: one that the plain client refuses is asked once more of the browser client, and that success teaches the host, so the first search of a blocked site gets its sitemap too.
-
-`--no-browser-retry`, or `JURL_NO_BROWSER_RETRY` set to anything, turns all of this off. `-t` says on stderr once per host when it switches (`jurl: example.com: using the browser client`), and `--json` has `"browser_retry": true` in `usage` when a page was read with the browser client, `"plain_refusals"` for the plain requests that got a refusal, and `"browser_requests"` for the requests sent with the browser client. [bench/browser-retry.md](bench/browser-retry.md) has the numbers.
-
-**Public addresses.** A run that starts at a public address reads only public addresses. Each page it fetches, each redirect it follows and each file it reads (`robots.txt`, sitemaps, `llms.txt`) must be at a public address: jurl checks the address before each request, and a direct connection only goes to a public address, so a name that points at a private one is refused. A link to a loopback, private or link-local address is skipped, and `-t` says so. A run that starts at a private address, such as a local page you ask for, reads as before. `JURL_PUBLIC_ONLY=1` refuses a private start, an environment proxy (`HTTP(S)_PROXY`) and rendering; the cloud runner sets it. The fallback proxy below is allowed under it. `JURL_RENDER_SANDBOXED=1` allows rendering under it, for a host whose network outside jurl confines the browser, as the cloud runner's firewall does (it drops the container's connections to private ranges). The page's own address is still checked first. Known limits: (1) A page rendered in a public run (`--render`, or the browser for a page that is only JavaScript) has its own address checked first, and nothing more: the page's scripts and the requests the browser makes itself are not checked, as they were not for single URLs before this. Under `JURL_RENDER_SANDBOXED=1` the network outside jurl checks them instead. (2) With `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` set, a public run uses the proxy, and the proxy resolves each name itself: jurl resolves each host and checks it before each request, redirects included, but a name that changes its answer between that check and the proxy's own lookup can still reach a private address.
-
-**A bare domain's `www.`.** A start URL whose host is a registrable domain itself, such as `klm.es`, is tried once more at `www.` and that host, with the same scheme, port, path and query, when its own host gives no answer at all: the DNS lookup fails, the connection is refused, the TLS handshake fails, or the server sends no reply before the request times out (20 seconds). That is what a browser does with a bare domain whose apex does not answer. An address that answers, with a status or a reset, is not retried on `www.`; nor is a body that stops after its headers, a redirect's target host, a followed link or a site's file. The run then continues from the `www.` address, under `--follow` too, so the site's `robots.txt`, `llms.txt` and sitemaps are read from there. `-t` says so (`jurl: klm.es could not be reached; trying www.klm.es`), and if `www.` fails as well, the error names both. The `www.` address goes through the same checks as any start address, under `JURL_PUBLIC_ONLY=1` too. A request through the fallback proxy is not tried this way, since a failure there is the proxy's, and `--render` does not try it, because Lightpanda fetches the address itself.
-
-**Fallback proxy (rung 3).** `JURL_FALLBACK_PROXY=http://user:pass@host:port` names a residential proxy, used for a host only after the direct clients refuse it. A page that a host refuses with 202, 401, 403 or 429, or whose stream it resets, after the direct clients and the browser retry where it applies, puts that host on the proxy, and the page is read again through it. A render that the host refuses with 401, 403 or 429 climbs the same rungs, as a refused fetch does. A refusal through the proxy goes to the stealth sidecar, when one is set, and else stands. Once a host is on the proxy, every request to it in the run goes through the proxy: its pages, `robots.txt`, sitemaps and images, and a Lightpanda render of its page, which is given the proxy and so sends its own requests through it as well. A redirect that a request through the proxy follows also goes through the proxy, to whichever host it names. A redirect from a direct request goes through the proxy from its hop into a host on it. Other hosts stay direct, and `HTTP(S)_PROXY` keeps its usual behaviour. A page read through the proxy uses jurl's plain client, not the browser's TLS fingerprint. A refused `robots.txt` or image does not put its host on the proxy: only a page does. `JURL_PROXY_FIRST=1` starts every host on the proxy from its first request, for a cell that already knows it needs it. Under `--follow` the start page and the site's `robots.txt` are read at the same time, so on the run that learns the proxy the `robots.txt` may already have been asked direct; `JURL_PROXY_FIRST=1` avoids that. Under `JURL_PUBLIC_ONLY=1` the proxy is allowed, unlike `HTTP(S)_PROXY`: each target is checked public before its request, redirects included, but the proxy resolves the name itself, so that check is not proof against DNS rebinding. Lightpanda is given a loopback URL on jurl's own forwarder, with the proxy's credential included (see `src/meter.rs`): the forwarder relays every byte to the proxy unchanged and counts it, so the usage's `bytes.proxy_wire` is what crosses the proxy. Another process on the machine can read that URL, credential included, in `ps` or `/proc`. The forwarder adds no credential of its own: a connection that sends none gets the proxy's 407, so the forwarder is not an open proxy, and the exposure is the credential's, as before. The cloud runner is a single-purpose container, where that is accepted. The proxy must be an `http://` address (the forwarder speaks plain TCP to it): an `https://` one is refused, rather than read uncounted. `-t` says the switch once per host (`jurl: example.com: using the proxy (403 from direct and browser)`). Errors from requests through the proxy have its URL and credential taken out, and say `proxy` in their place. An invalid `JURL_FALLBACK_PROXY` (not an http or https address) stops the run, with a message that does not show it.
-
-**The start page in the run's country.** When the run names a country (`JURL_COUNTRY`, see above) and has a fallback proxy, the start page is read again through the proxy if its direct read (plain or with the browser's fingerprint) ended on a path the URL did not ask for, and that path declares another country. A path declares a country when it names a region other than the country's (`/at/de/`, `/es-ar/`, `/at/`), or when it is a language alone that is not the run's `JURL_ACCEPT_LANGUAGE` language and whose likely region (CLDR's, for a language in its common locales) is not the country's (`/de/`, read as Germany). With no `JURL_ACCEPT_LANGUAGE`, every language alone is another, so a run that names a country but no language re-reads a site's `/de/` too. The proxy's read is the start page the run goes on from, and its host is on the proxy for the rest of the run, as a host put there is. A proxy read that fails keeps the direct page. `-t` says `jurl: example.com sent us to /at/de; reading it as from ES`. Only the start page is read this way, not the pages of a `--follow` search, and not a page rendered with `--render`. A subdomain's locale (`de.example.com`) is not read as a country. A URL that names another country's page is read as it is. Under `--follow`, the site's `robots.txt`, `llms.txt` and sitemap files are read direct beside the start page, as the rung-3 note above says. The usage counts the re-read as the proxy's (`route` `proxy`, `proxied_hosts`, `bytes.proxy`), and the direct read's bytes stay in `bytes.direct`.
-
-`--json` has `"bytes"` in `usage`. `"direct"` and `"proxy"` are the decoded sizes of the bodies jurl read, directly and through the proxy (a render's DOM is in `"proxy"`): not the wire size. `"proxy_wire": {"up": n, "down": n}` is the measured wire size of everything the run sent through the proxy: `up` is written to the proxy and `down` is read from it, counted by the forwarder as the bytes pass. It includes the compressed bodies, the headers, the CONNECT and TLS handshakes, and every request a render's browser makes. A stealth sidecar measures its own load and reports it, so its load is in it too. `"proxy_render_wire"` is the part the renders and the sidecar loads carried. Both directions are counted: Evomi bills per GB, and its docs do not say which direction it bills, so the two are kept apart. Evomi's 512-byte minimum per request is not applied: it is per request inside a tunnel, which a relay does not see, and a TLS handshake alone is larger. `"proxied_renders"` counts the renders Lightpanda started through the proxy, and a sidecar call through the proxy counts as one proxied render, whatever comes back. `"proxied_hosts"` lists the hosts on it in this run. `"route"` is `proxy` for a page read through the proxy, with `+render` when it was rendered.
-
-`JURL_STEALTH_URL` and `JURL_STEALTH_TOKEN` turn the stealth sidecar on. The URL is the sidecar's base, such as `http://127.0.0.1:8091`, and the token is its bearer. jurl needs both, and says on stderr under `-t` when the token is missing. `JURL_STEALTH_COUNTRY` (two capital letters, such as `ES`; or `JURL_COUNTRY`, see above) asks the sidecar to read the page from that country. `JURL_STEALTH_MAX_PAGES` caps the calls a run makes to the sidecar, at 3 by default. The sidecar also gets the first language of `JURL_ACCEPT_LANGUAGE`. `--json` has a `"route"` in `usage`: `direct`, `browser`, `proxy` or `stealth` for the page that answered (or the start page, on a miss), with `+render` when Lightpanda ran its JavaScript.
 
 ### Exit codes
 
@@ -340,180 +111,18 @@ As with grep, a script can tell "not there" from "something broke":
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Something was printed: an answer, blocks, links or images |
-| 1 | The page (or the site, with `--follow`) was read and has nothing that answers: no exact answer, no image that looks like that, nothing above `--threshold`. With `--precise --json`, the JSON is still printed (`"answer": null` and what came `closest`); without `--precise`, nothing is printed |
-| 2 | An error: the page couldn't be read (HTTP error, timeout, a block page, no readable text, or over 8 MB), the API couldn't be asked (a bad key, no credits), or the arguments are wrong |
+| 0 | Something was printed |
+| 1 | The page (or the site, with `--follow`) was read and has nothing that answers |
+| 2 | An error: the page couldn't be read, the API couldn't be asked, or the arguments are wrong |
 
-With `--with-pages --json`, the JSON is printed on exit 1 and 2 as well: `error` says why there is no answer, and `pages` has the pages the run loaded.
+## More
 
-Before 0.1.11 every failure exited 1, and a `--json` miss exited 0.
-
-## Speed and cost
-
-| Command | Typical time | Typical cost |
-| --- | --- | --- |
-| `jurl <url>` | 0.6–1 s | $0.0004–0.0013 |
-| `jurl -i <url>` | 0.5–0.7 s | $0.00004 |
-| `jurl --vision <url>` | 1.3–1.9 s | $0.0002 |
-| `jurl --find "…" <url>` (73 images) | 2.2–2.9 s | $0.002 |
-| JavaScript apps | +3–6 s | same |
-
-Measured on 2026-10-04. Run any command with `-t` to see your own numbers.
-
-## How it compares
-
-Ten documentation pages, one question each ([bench/](bench) has the tasks, the scripts and every answer):
-
-| | jurl | Claude Code WebFetch | Exa | Tavily |
-| --- | --- | --- | --- | --- |
-| Exact answer | **10/10** | **10/10** | 8/10 | 5/10 |
-| Code lines not on the page | **0 of 96** | 33 of 63 | **0 of 59** | 8 of 36 |
-| Cost per 10,000 pages | **$4** | ~$150 | $10 | $16 |
-| Tokens the agent reads | 300 | **148** | 351 | 524 |
-| Time per page | 0.7 s | — | **0.3 s** | 0.5 s |
-| Finds an image by what it shows | **yes** | no | no | no |
-| Picks the links worth following | **yes** | no | no | no |
-| Just the code | **yes** | no | no | no |
-| Open source, in your terminal | **yes** | no | no | no |
-
-Best in each row in bold. WebFetch hands the agent the fewest tokens because it rewrites what it reads: half the code it hands back isn't on the page, and each call has a small model ($1 per million tokens) read the whole page. Exa is the fastest, but missed both answers that were code. Tavily cut the code out of its extracts. Measured on 2026-10-07; jurl again on 2026-10-08.
-
-## jurl cloud
-
-Don't want to manage API keys? `jurl login` signs this computer in to jurl cloud, and jurl's servers do the reading. Signing up is free: [cloud.jurl.dev](https://cloud.jurl.dev) has a free plan with a monthly allowance of page reads, and paid plans with more. The flags and the exit codes stay the same, and the text matches a local run's except for the page's kind line (`· docs (0.84)`), which the server doesn't send, so it isn't printed. A `--precise` answer's block prints with the kind, heading level and code language the server sends, as a local run prints it, and `--json` carries them too. A block whose kind the server doesn't send prints as plain text.
-
-```console
-$ jurl login
-To sign in to jurl cloud, open https://cloud.jurl.dev/device and enter this code:
-
-    ABCD-EFGH
-
-Waiting for it to be entered (it expires in 15 minutes). Ctrl-C cancels.
-Saved the key "laptop" to ~/.config/jurl/env
-Signed in as ray@acme.com to Acme. Console: https://cloud.jurl.dev
-```
-
-It opens that page in your browser when it can, and the sign-in finishes once the code is entered there.
-
-```console
-$ jurl status
-jurl cloud · Acme · 1,240 page reads used · 18 days left
-key "laptop"
-```
-
-When the period's page reads run out, a read stops with exit code 2 and prints jurl cloud's message, which says how to go on (extra page reads or a bigger plan).
-
-An answer to a question (`--precise`, or `-q`), or a miss, can be kept up to date: at a terminal, jurl cloud's answer ends with a link on stderr, `jurl: keep it up to date in a sheet: https://cloud.jurl.dev/…`. It opens a console page where the person who signed this computer in saves the answer as a sheet. The sheet's first row is that answer with its proof (or the miss), without reading the page again, and from there it can add sites, questions and a schedule. A script reading the output doesn't get the line.
-
-`jurl status` says which account reads go to, and for jurl cloud, what the period has used. `jurl logout` signs this computer out and revokes its key on jurl cloud.
-
-A run reads with jurl cloud or with your own keys, by the first of these that applies:
-
-1. `JURL_CLOUD_KEY` in the environment: jurl cloud.
-2. `TYPESAFE_API_KEY` or `JURL_JEV_URL` in the environment: your own keys. Set one for a single run to read with your own keys while you're signed in.
-3. A sign-in saved by `jurl login`: jurl cloud.
-4. Otherwise: your own keys.
-
-jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `--with-image`, `--with-link`, `-r`, `--code` with `--precise`, and `--with-pages` (so `--pages-only` too). `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
-
-`JURL_CLOUD_URL` points jurl at another jurl cloud, such as a self-hosted one: `JURL_CLOUD_URL=http://127.0.0.1:3211 jurl login` saves it. A key only goes over https, or to this computer.
-
-## Your keys, your data
-
-With your own keys, jurl has no server and no account of its own. It talks to the model APIs directly with **your** keys:
-
-- **Who you pay:** usage is billed by TypeSafe (Jev, $0.042 per million input tokens) and Cloudflare (Clef-flash, $0.09 per million). Output is free on both. Every `--json` result says what its run used, a `--precise` miss included: `"usage": {"pages": 3, "browser_retry": false, "plain_refusals": 0, "browser_requests": 0, "route": "direct", "bytes": {"direct": 420000, "proxy": 0, "proxy_wire": {"up": 0, "down": 0}, "proxy_render_wire": {"up": 0, "down": 0}}, "proxied_renders": 0, "proxied_hosts": [], "jev": {"requests": 6, "input_tokens": 41250, "capped": false}, "clef": {"requests": 0, "input_tokens": 0, "images": 0}}`. `pages` counts the pages read (with `--follow`, the whole search); `browser_retry` is true when one of them was read with the browser client (after a retry, or because its host needed it); `plain_refusals` and `browser_requests` count the requests sent with each client, a refusal being any non-success status; a request counts once it has answered. `bytes`, `proxied_renders` and `proxied_hosts` are described under the fallback proxy above. `jev.capped` is true when `JURL_JEV_MAX_TOKENS` stopped the run's search (see there).
-- **What leaves your machine:** the text of the page goes to TypeSafe. With `--vision` or `--find`, the images go to Cloudflare too. Keep that in mind for internal or private pages.
-- **What jurl can't read:** pages behind a login. jurl keeps the cookies a site sets for the length of one run, in memory, and sends each one back only to the host and path that set it (RFC 6265). It never reads your browser's cookies and never saves any to disk, so a page that needs your login stays out of reach.
-
-With [jurl cloud](#jurl-cloud), the URL and your question go to jurl cloud, which reads the page on its servers with the same models. It keeps a private log of each read for your organization, with the retention your organization sets. It also keeps an anonymous, de-identified record of reads of public pages (no account, user or key), used to improve jurl. Your organization can opt out of that record.
-
-## Update and uninstall
-
-- **Update:** `brew upgrade jurl`, or run the install script again.
-- **Uninstall:** `brew uninstall jurl`, or delete `~/.local/bin/jurl`. To remove everything, run `jurl logout` first if you use jurl cloud (it revokes the key), then delete `~/.config/jurl` (keys) and `~/Library/Caches/jurl` or `~/.cache/jurl` (the browser).
-
-<details>
-<summary><b>How it works</b></summary>
-
-```text
-url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · images
-          └─ empty JavaScript app or unfilled template? ─▶ render in Lightpanda
-          └─ refused (202, 401, 403 or 429, or a stream reset) by the direct clients, or (401, 403 or 429) by its render, and JURL_FALLBACK_PROXY set? ─▶ read again through the proxy
-          └─ still refused (202, 401, 403 or 429, or a stream reset), and JURL_STEALTH_URL set? ─▶ stealth sidecar
-                          │
-            one yes/no question per candidate
-              ┌───────────┴───────────┐
-              ▼                       ▼
-       Jev reads text          Clef looks at images
-   "is block 12 the point?"   "does this show a cathedral?"
-          p = 0.97                  p = 0.96
-              └───────────┬───────────┘
-                          ▼
-        rank · threshold · page order · print verbatim
-```
-
-- **Fetch.** jurl asks for `text/markdown` first (a `--with-pages` run asks for the HTML); sites using Cloudflare's *Markdown for Agents* send it already converted (react.dev answers with markdown too, as `text/plain`: jurl reads that as markdown, so code keeps its lines). Otherwise jurl's own extractor drops navigation, footers, asides and scripts, and splits the rest into headings, paragraphs, list items, code, quotes and tables. A list item too short to judge alone ("1 teaspoon baking soda") is printed when an item next to it in the same list is kept.
-- **Ask.** Every candidate becomes one yes/no question, and they all go to Jev in a single request. Asking 100 questions takes about as long as asking one.
-- **Look.** Clef-flash checks the pixels of each image (downscaled to 384 px) while Jev reads the text, not after.
-- **Print.** jurl keeps what clears the threshold, in page order. A heading comes back only when something in its section does.
-
-</details>
-
-<details>
-<summary><b>Design notes</b></summary>
-
-- **Models choose, they don't write.** That's why the output is safe to pipe into `xargs curl`.
-- **Clef is better at "what is this?" than at "does this matter?"** Asked whether a chart was "meaningful content", Clef said 0.12. Asked *what it shows* (photo, chart, logo, avatar…), it was right. `--vision` adds up the content classes and averages them with Jev's judgement of the page context: a portrait is content on Wikipedia and noise in an author box.
-- **For `--find`, Clef decides alone.** It sees the pixels *and* the alt text and caption.
-- **Rendering waits for text, not silence.** Single-page apps never stop talking to the network, so Lightpanda waits for the network to calm down *and* for 1,500 characters of visible text, up to 8 s. A page that adds its cards or images as you scroll (an `IntersectionObserver` on them, or a scroll listener) is scrolled to its end first: every element the page watches is told it is in view, and the window scrolls, every quarter second, until the page stops growing with none of its requests in flight (a request open for over 2 s, a stream, is not waited for), or after 12 tries (about 3 s). Those are requests the page makes itself, as it would for a person scrolling, and a render through the fallback proxy counts them in `proxy_render_wire`. A page that loads nothing more costs about 1 s more to render, the time it takes to see that it has stopped. A list that both loads more as it scrolls and links its next pages by offset may hold more records after scrolling than one page's step, so jurl may not follow those links: what the scrolling loaded is read instead.
-- **Several tricks keep `--vision` fast:**
-  - Clef runs at the same time as Jev.
-  - Each image gets its own HTTP/1 connection: sharing one HTTP/2 connection made the slowest calls about twice as slow.
-  - A call that takes longer than 700 ms is sent again, and whichever copy answers first wins.
-  - An image still pending at 2.5 s keeps its text-only score.
-- **Lightpanda isn't bundled.** It's AGPL-3.0 and about 90 MB. jurl downloads a pinned 1.0.0 from Lightpanda's official release, checks its SHA-256 and caches it. If one is already on your `PATH`, jurl uses that. `JURL_LIGHTPANDA` points to a specific binary, and `JURL_NO_DOWNLOAD` stops the download. With both set, as on a host that has Lightpanda preinstalled, that binary must be the pinned 1.0.0 release for this platform: jurl checks its SHA-256 and refuses any other. Lightpanda has no Windows build, so on Windows rendering is unavailable.
-- **Stealth is a sidecar, for a page a host still refuses.** When a page is still refused with 202, 401, 403 or 429, or its stream is reset, after the browser retry and, if one is set, the fallback proxy, and `JURL_STEALTH_URL` names a local service, jurl asks that service once for the page. The sidecar loads it in Camoufox (MPL-2.0) and returns the rendered HTML, which jurl reads like any page. The sidecar says what it found: content, a CAPTCHA, a block or a challenge. jurl never solves a CAPTCHA. That page is an error and goes to human review. A host whose call fails is not asked again in the same run, and a run makes at most `JURL_STEALTH_MAX_PAGES` calls (3 by default). Under `JURL_PUBLIC_ONLY=1` the sidecar is asked only with `JURL_RENDER_SANDBOXED=1`, because it runs the page's JavaScript. It resolves the host again, so that check is not proof against DNS rebinding.
-
-</details>
-
-<details>
-<summary><b>Development</b></summary>
-
-```sh
-cargo test        # extraction: layout tables, lazy images, markdown, links, app-shell detection
-cargo build --release && ./target/release/jurl -t <url>
-```
-
-| File | What's in it |
-| --- | --- |
-| `src/main.rs` | Entry point: flags checked, the page loaded, the mode picked |
-| `src/cli.rs` | The flags, as clap parses them and `--help` shows them |
-| `src/judge.rs` | Jev's requests: items and questions, chunks that fit the budget, block pages |
-| `src/blocks.rs` | The default mode and `-q`/`--code`: the best blocks, in page order |
-| `src/answer.rs` | `--precise`: the answer as a span of the best blocks |
-| `src/vision.rs` | `--image`, `--vision`, `--find`: content images, and Clef's look at the pixels |
-| `src/output.rs` | What a run prints (text or `--json`), exit codes, misses |
-| `src/timing.rs` | `-t`: per-phase timings on stderr |
-| `src/precise.rs` | `--precise`: candidate spans and the link to them |
-| `src/links.rs` | `--links` and `--links -q` (ranked by the answer), `--follow`: which links lead to the answer |
-| `src/follow.rs` | `--follow`: site map, best-first search, hot and cold |
-| `src/extract/mod.rs` · `src/extract/html.rs` · `src/extract/markdown.rs` · `src/extract/join.rs` | HTML and markdown → blocks, links, images |
-| `src/feeds.rs` | A feed (RSS, Atom) → the page of its entries, one list item each with its link, date, summary and image |
-| `src/decide.rs` | Jev and Clef clients |
-| `src/fetch.rs` · `src/lightpanda.rs` | Fetching (the retry on a browser's fingerprint, the run's cookies), rendering, the browser download |
-| `src/fallback.rs` | Rung 3: the fallback proxy, per run, and what a run sends through it |
-| `src/meter.rs` | The loopback forwarder that counts, on the wire, the bytes a run sends through the proxy |
-| `src/setup.rs` · `src/config.rs` | First-run setup (own keys or jurl cloud), `jurl init`, key storage |
-| `src/cloud.rs` | jurl cloud: which account a run reads with, the read, the usage |
-| `src/account.rs` | `jurl login`, `logout` and `status`: the sign-in in the browser, and signing out |
-| `src/mock.rs` | Tests only: a local server that answers as jurl cloud does |
-| `src/update.rs` | `jurl update` |
-| `src/mcp.rs` | `jurl mcp`: the tools, their schemas, JSON-RPC over stdio |
-
-Releases are built by [cargo-dist](https://opensource.axo.dev/cargo-dist/) when a `v*` tag is pushed.
-
-</details>
+- [docs/usage.md](docs/usage.md): every mode with real output, recipes, MCP tools.
+- [docs/reference.md](docs/reference.md): all flags, keys, settings, how jurl reaches pages that refuse it.
+- [docs/cloud.md](docs/cloud.md): jurl cloud, your keys and your data.
+- [docs/how-it-works.md](docs/how-it-works.md): speed, cost, how it compares, design notes.
+- [bench/](bench): the measurements behind every number here.
+- [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 
