@@ -273,7 +273,9 @@ pub(crate) async fn page(
             Some(why) => {
                 let key = setup::saved_key(cfg)
                     .map_err(|_| anyhow!("{why}. For that, set up your own keys with `jurl init`"))?;
-                eprintln!("jurl: {why}, so this read uses your own keys");
+                eprintln!(
+                    "jurl: {why}, so this read runs on this computer with your own TypeSafe key, not through jurl cloud"
+                );
                 own_page(args, cfg, client, &key, t).await
             }
         },

@@ -153,6 +153,8 @@ pub struct Extracted {
     pub lang: Option<String>,
     /// The other versions of the page that it declares, in the order it lists them. Empty for markdown.
     pub alternates: Vec<Alternate>,
+    /// The page's links that say which language their page is in (`<a hreflang>`), in page order. Empty for markdown.
+    pub link_languages: Vec<Alternate>,
     pub blocks: Vec<Block>,
     /// The page's JSON-LD values (see [`json_ld`]): --precise answers from them only when its text gives no answer.
     pub structured: Vec<Block>,

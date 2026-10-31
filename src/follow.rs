@@ -833,6 +833,17 @@ fn market_offer(site: &Site, page: &Url, alternates: &[Alternate]) -> Option<Lin
     })
 }
 
+/// The page's links that say their page is in a language the search doesn't read (`<a hreflang>`: a wiki's same article in a
+/// hundred languages), by [`links::key`]. They are not leads: opened, each would be skipped (see [`visit`]) and still take a
+/// step of the budget.
+fn other_language_links(site: &Site, ex: &Extracted) -> HashSet<String> {
+    ex.link_languages
+        .iter()
+        .filter(|l| langtag::declared(&l.hreflang).is_some_and(|tag| site.refuses(Some(&tag)).is_some()))
+        .map(|l| links::key(&l.url))
+        .collect()
+}
+
 /// Is the answer on a page that is loaded, and which of its links lead on? Both questions go to Jev at once. `known` holds
 /// the menu links of the pages read before, and `field_scores` the field scores the search has so far.
 #[allow(clippy::too_many_arguments)]
@@ -854,6 +865,7 @@ async fn judge(
     }
     let menus = menus(&ex);
     let bare = bare_links(&ex);
+    let other_language = other_language_links(site, &ex);
     let (found, score, warmth, links, new_field_scores, json_block) = {
         let ctx = site.ctx(args, client, api_key, &url, &ex);
         // The links `--links -q` would score, menus and footers included, and the URLs the text writes out. Any host:
@@ -862,7 +874,7 @@ async fn judge(
         // site's "Main page" and "Search" would outscore everything in its text.
         let mut candidates = links::candidates(&ctx, &ex, &bare, |u| {
             let k = links::key(u);
-            Site::reachable(u) && !(menus.contains(&k) && known.contains(&k))
+            Site::reachable(u) && !(menus.contains(&k) && known.contains(&k)) && !other_language.contains(&k)
         });
         // The page's version for the run's market, when it declares one (see [`market_offer`]): added after the cap on the page's
         // own links, so it is scored whatever the page's length.
@@ -2822,6 +2834,33 @@ mod tests {
         let links = linked_llms(&start, std::slice::from_ref(&linked), retry_off()).await;
         let urls: Vec<String> = links.iter().map(|l| l.url.path().to_string()).collect();
         assert_eq!(urls, ["/rate-limits"]);
+    }
+
+    #[test]
+    fn a_link_to_a_page_in_another_language_is_not_a_lead() {
+        let ex = Extracted {
+            link_languages: vec![
+                Alternate { hreflang: "ia".into(), url: u("https://ia.wikipedia.org/wiki/Tennis") },
+                Alternate { hreflang: "en-GB".into(), url: u("https://en.wikipedia.org/wiki/Tennis_ball") },
+                Alternate { hreflang: "es".into(), url: u("https://es.wikipedia.org/wiki/Tenis#Historia") },
+                // `x-default` names no language: its link stays a lead.
+                Alternate { hreflang: "x-default".into(), url: u("https://en.wikipedia.org/wiki/Racket") },
+            ],
+            ..Extracted::default()
+        };
+        let site = Site { language: Some("en".into()), ..Site::new(&u("https://en.wikipedia.org/wiki/Tennis")) };
+        let keys = other_language_links(&site, &ex);
+        let mut keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+        keys.sort();
+        // The start page's language, a regional variant included, stays a lead.
+        assert_eq!(keys, ["https://es.wikipedia.org/wiki/Tenis", "https://ia.wikipedia.org/wiki/Tennis"]);
+        // The language the run asks for is read (see `Site::run`), so its links stay leads.
+        let asking = Site { run: vec!["es".into()], ..site };
+        let keys = other_language_links(&asking, &ex);
+        assert_eq!(keys.into_iter().collect::<Vec<_>>(), ["https://ia.wikipedia.org/wiki/Tennis"]);
+        // A start page that declares no language reads every language.
+        let undeclared = Site::new(&u("https://en.wikipedia.org/wiki/Tennis"));
+        assert!(other_language_links(&undeclared, &ex).is_empty());
     }
 
     #[test]

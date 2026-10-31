@@ -53,7 +53,8 @@ fn extract_doc(doc: &Html, body: &str, page: &Url) -> Extracted {
     Extracted {
         title: collapse(&page_title(doc)),
         lang: declared_lang(doc),
-        alternates: alternates(doc, base),
+        alternates: alternates(doc, "link[rel~=alternate][hreflang][href]", base),
+        link_languages: alternates(doc, "a[hreflang][href]", base),
         blocks,
         structured: Vec::new(),
         images,
@@ -92,11 +93,12 @@ fn next_page(doc: &Html, site_links: &[Link], page: &Url, base: &Url, records: O
     standard.or_else(|| paging::numbered_next(page, site_links.iter().map(|l| &l.url), records))
 }
 
-/// The other versions of the page the page declares: each `<link rel="alternate" hreflang="…" href="…">`, its `href` on the page's
-/// base and without its fragment, when it is an http or https address (Google's localized versions). A link without an
-/// `hreflang` is not one. `x-default` is kept here; the follower reads its tag.
-fn alternates(doc: &Html, base: &Url) -> Vec<Alternate> {
-    doc.select(&sel("link[rel~=alternate][hreflang][href]"))
+/// The elements `selector` picks that name a page's language: each one's `hreflang`, with its `href` on the page's base and
+/// without its fragment, when it is an http or https address. For `<link rel="alternate" hreflang>`, the other versions of
+/// the page it declares (Google's localized versions); for `<a hreflang>`, the links that say which language their page is in
+/// (a wiki's links to the same article in other languages). `x-default` is kept here; the follower reads its tag.
+fn alternates(doc: &Html, selector: &str, base: &Url) -> Vec<Alternate> {
+    doc.select(&sel(selector))
         .filter_map(|e| {
             let hreflang = e.value().attr("hreflang")?.trim();
             let mut url = base.join(e.value().attr("href")?.trim()).ok()?;
@@ -1187,6 +1189,21 @@ mod tests {
             ]
         );
         assert!(html("<p>no alternates</p>", &base).alternates.is_empty());
+    }
+
+    #[test]
+    fn a_page_s_links_say_which_language_their_page_is_in_by_hreflang() {
+        let page = r#"<html lang="en"><body><p>Tennis</p><nav>
+            <a href="https://ia.wikipedia.org/wiki/Tennis#top" hreflang="ia" lang="ia">Interlingua</a>
+            <a href="/wiki/Tennis_ball">Tennis ball</a>
+            <a href="/wiki/Racket" hreflang="">Racket</a>
+            </nav></body></html>"#;
+        let base = Url::parse("https://en.wikipedia.org/wiki/Tennis").unwrap();
+        let ex = html(page, &base);
+        let languages: Vec<(String, String)> =
+            ex.link_languages.into_iter().map(|a| (a.hreflang, a.url.to_string())).collect();
+        assert_eq!(languages, [("ia".to_string(), "https://ia.wikipedia.org/wiki/Tennis".to_string())]);
+        assert!(ex.alternates.is_empty(), "a link is not one of the page's own versions");
     }
 
     #[test]
