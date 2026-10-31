@@ -33,10 +33,17 @@ impl Install {
         }
     }
 
-    fn command(&self) -> (&'static str, Vec<String>) {
+    /// The command that installs release `latest` this way. A cargo install builds that release's tag with its
+    /// Cargo.lock, not whatever is on main.
+    fn command(&self, latest: &str) -> (&'static str, Vec<String>) {
         match self {
             Install::Homebrew => ("brew", vec!["upgrade".into(), "rayoplateado/tap/jurl".into()]),
-            Install::Cargo => ("cargo", vec!["install".into(), "--git".into(), REPO.into(), "--force".into()]),
+            Install::Cargo => (
+                "cargo",
+                ["install", "--git", REPO, "--tag", &format!("v{latest}"), "--locked", "--force"]
+                    .map(String::from)
+                    .into(),
+            ),
             Install::Installer if cfg!(windows) => (
                 "powershell",
                 vec![
@@ -85,6 +92,12 @@ pub(crate) async fn hint() -> Option<String> {
         .then(|| format!("you have jurl {CURRENT} and {latest} is out, which may have it: run `jurl update`"))
 }
 
+/// A command as it is typed: an argument with a space is quoted.
+fn shown(program: &str, args: &[String]) -> String {
+    let args = args.iter().map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a.clone() });
+    std::iter::once(program.to_string()).chain(args).collect::<Vec<_>>().join(" ")
+}
+
 pub(crate) async fn run() -> Result<()> {
     let latest = latest(CHECK_TIMEOUT).await.context("couldn't reach GitHub to check the latest release")?;
     if !newer(&latest, CURRENT) {
@@ -94,14 +107,19 @@ pub(crate) async fn run() -> Result<()> {
     let exe =
         std::env::current_exe().and_then(|p| p.canonicalize()).context("couldn't find where jurl is installed")?;
     let install = Install::detect(&exe);
-    let (program, args) = install.command();
+    let (program, args) = install.command(&latest);
     eprintln!("jurl {CURRENT} → {latest}");
-    eprintln!(
-        "$ {program} {}",
-        args.iter().map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a.clone() }).collect::<Vec<_>>().join(" ")
-    );
+    eprintln!("$ {}", shown(program, &args));
     let status = Command::new(program).args(&args).status().with_context(|| format!("couldn't run {program}"))?;
     if !status.success() {
+        if install == Install::Cargo {
+            let (program, args) = Install::Installer.command(&latest);
+            bail!(
+                "the update didn't finish ({status}). Building jurl needs cmake and an up-to-date C++ compiler. To \
+                 install the ready-built jurl instead, run `cargo uninstall jurl`, then `{}`",
+                shown(program, &args)
+            );
+        }
         bail!("the update didn't finish ({status})");
     }
     Ok(())
@@ -130,5 +148,11 @@ mod tests {
         assert_eq!(Install::detect(Path::new("/Users/me/.cargo/bin/jurl")), Install::Cargo);
         assert_eq!(Install::detect(Path::new("/Users/me/.local/bin/jurl")), Install::Installer);
         assert_eq!(Install::detect(Path::new(r"C:\Users\me\.cargo\bin\jurl.exe")), Install::Cargo);
+    }
+
+    #[test]
+    fn a_cargo_install_builds_the_release_tag_with_its_lockfile() {
+        let (program, args) = Install::Cargo.command("0.2.0");
+        assert_eq!(shown(program, &args), format!("cargo install --git {REPO} --tag v0.2.0 --locked --force"));
     }
 }
