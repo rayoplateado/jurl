@@ -25,8 +25,12 @@ publish-jobs = ["homebrew"]
 pr-run-mode = "upload"
 # release.yml has a hand-added paths filter so landing-only PRs don't build jurl
 allow-dirty = ["ci"]
-# Runs before `dist build` on every runner: wreq (the browser-fingerprint retry) needs Rust 1.98, and the macOS 14 image has 1.96
+# Runs before `dist build` on every runner: wreq (the browser-fingerprint retry) needs Rust 1.98, newer than some runner images have
 github-build-setup = "../build-setup.yml"
+
+# dist picks macos-14 for Apple silicon; GitHub retires that image on 2026-11-02 and its brownouts already cancel the job
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
 
 # The browser-fingerprint retry links BoringSSL (btls-sys), which is built with cmake and bindgen (libclang). The Linux and
 # macOS runner images have both; the Windows image has no NASM, which BoringSSL's build needs on x86_64
