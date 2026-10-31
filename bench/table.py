@@ -1,4 +1,4 @@
-# Scores the saved results and prints the table in README.md.
+# Scores the saved results and prints the table in docs/how-it-works.md.
 #
 #   uv run --with tiktoken --with requests bench/table.py
 #

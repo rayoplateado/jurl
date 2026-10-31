@@ -7,7 +7,7 @@
 //! every byte to the proxy unchanged and counts it, so the usage's `bytes.proxy_wire` is what crosses the proxy. The URL
 //! Lightpanda is given keeps the credential in its arguments (see [`Fallback::render_meter`]). Under
 //! `JURL_PUBLIC_ONLY=1` the proxy is allowed, unlike `HTTP(S)_PROXY`: each target is checked public before its request (see
-//! `reach::check`), but the proxy resolves the name itself, so that check is not rebinding-proof (see the README).
+//! `reach::check`), but the proxy resolves the name itself, so that check is not rebinding-proof (see docs/reference.md).
 
 use std::{
     collections::BTreeSet,

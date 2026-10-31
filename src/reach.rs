@@ -9,7 +9,7 @@
 //! address a connection goes to is the one checked, and a name that rebinds to a private address after the start is refused
 //! too. A literal address never reaches a resolver, so it is checked before each request ([`check`]), and so is each redirect's
 //! target: the guarded clients follow no redirects of their own (see `fetch::send_get`). Under a proxy the proxy connects, so
-//! the check before each request is what covers it; the README says what that does not cover.
+//! the check before each request is what covers it; docs/reference.md says what that does not cover.
 
 use std::{
     collections::HashSet,
@@ -179,7 +179,7 @@ pub(crate) fn proxy_hosts(get: impl Fn(&str) -> Option<String>) -> Vec<String> {
 
 /// Checks the address `url` will be read from, before a request for it, under `reach`. A literal must be admitted (see
 /// [`admit`]); a name must resolve to public addresses only, since the request may connect to any of them. A private run
-/// checks nothing. Under a proxy the proxy resolves the name itself, so this check is what covers the request (see README).
+/// checks nothing. Under a proxy the proxy resolves the name itself, so this check is what covers the request (see docs/reference.md).
 pub(crate) async fn check(url: &Url, reach: &Reach) -> Result<()> {
     if matches!(reach, Reach::Private) {
         return Ok(());
