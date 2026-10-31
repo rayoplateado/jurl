@@ -34,7 +34,7 @@ A run reads with jurl cloud or with your own keys, by the first of these that ap
 3. A sign-in saved by `jurl login`: jurl cloud.
 4. Otherwise: your own keys.
 
-jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `--with-image`, `--with-link`, `-r`, `--code` with `--precise`, and `--with-pages` (so `--pages-only` too). `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages, with `--precise`. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
+jurl cloud takes the same reads as your own keys, except `--image`, `--vision`, `--find`, `--with-image`, `--with-link`, `-r`, `--code` with `--precise`, and `--with-pages` (so `--pages-only` too). `-n` takes 1 to 50 and `--threshold` 0 to 1; `-a` keeps every result above the threshold. `--follow` takes 5, 10 or 15 pages. A read it doesn't take uses your own keys when they're set up, and says so on stderr; otherwise it stops and says why. With `--json`, `usage` counts the pages read for you, and its `jev` and `clef` counts stay at zero.
 
 `JURL_CLOUD_URL` points jurl at another jurl cloud, such as a self-hosted one: `JURL_CLOUD_URL=http://127.0.0.1:3211 jurl login` saves it. A key only goes over https, or to this computer.
 

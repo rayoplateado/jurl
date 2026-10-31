@@ -199,16 +199,10 @@ pub(crate) fn unsupported(args: &Args) -> Option<String> {
         Some("jurl cloud doesn't read the next pages of a list yet (--pages)".into())
     } else if args.with_pages {
         Some("jurl cloud doesn't return the pages a read loaded yet (--with-pages)".into())
-    } else if let Some(pages) = args.follow {
-        if !args.precise {
-            Some("jurl cloud follows links only with --precise".into())
-        } else if !FOLLOW_PAGES.contains(&pages) {
-            Some(format!("jurl cloud follows 5, 10 or 15 pages, not {pages}"))
-        } else {
-            None
-        }
     } else {
-        None
+        args.follow
+            .filter(|pages| !FOLLOW_PAGES.contains(pages))
+            .map(|pages| format!("jurl cloud follows 5, 10 or 15 pages, not {pages}"))
     }
 }
 
@@ -616,7 +610,7 @@ mod tests {
         assert!(unsupported(&args(&["jurl", "-i", "x.com"])).unwrap().contains("images"));
         assert!(unsupported(&args(&["jurl", "--find", "a cathedral", "x.com"])).unwrap().contains("images"));
         assert!(unsupported(&args(&["jurl", "-r", "x.com"])).unwrap().contains("render"));
-        assert!(unsupported(&args(&["jurl", "-q", "x?", "x.com", "--follow"])).unwrap().contains("--precise"));
+        assert!(unsupported(&args(&["jurl", "-q", "x?", "x.com", "--follow"])).is_none(), "-q follows links too");
         assert!(unsupported(&args(&["jurl", "-p", "-q", "x?", "--follow", "7", "x.com"])).unwrap().contains("not 7"));
         assert!(unsupported(&args(&["jurl", "-p", "-c", "-q", "x?", "x.com"])).unwrap().contains("--code"));
         assert!(unsupported(&args(&["jurl", "-q", "x?", "--pages", "3", "x.com"])).unwrap().contains("--pages"));
