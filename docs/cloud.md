@@ -1,6 +1,4 @@
-# jurl cloud, your keys and your data
-
-## jurl cloud
+# jurl cloud
 
 Don't want to manage API keys? `jurl login` signs this computer in to jurl cloud, and jurl's servers do the reading. Signing up is free: [cloud.jurl.dev](https://cloud.jurl.dev) has a free plan with a monthly allowance of page reads, and paid plans with more. The flags and the exit codes stay the same, and the text matches a local run's except for the page's kind line (`· docs (0.84)`), which the server doesn't send, so it isn't printed. A `--precise` answer's block prints with the kind, heading level and code language the server sends, as a local run prints it, and `--json` carries them too. A block whose kind the server doesn't send prints as plain text.
 

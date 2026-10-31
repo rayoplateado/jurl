@@ -31,6 +31,7 @@ Ten documentation pages, one question each ([bench/](../bench) has the tasks, th
 Best in each row in bold. WebFetch hands the agent the fewest tokens because it rewrites what it reads: half the code it hands back isn't on the page, and each call has a small model ($1 per million tokens) read the whole page. Exa is the fastest, but missed both answers that were code. Tavily cut the code out of its extracts. Measured on 2026-10-07; jurl again on 2026-10-08.
 
 ## The pipeline
+
 ```text
 url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · images
           └─ empty JavaScript app or unfilled template? ─▶ render in Lightpanda
@@ -55,6 +56,7 @@ url ─▶ fetch (asks for markdown first) ─▶ split into blocks · links · 
 
 
 ## Design notes
+
 - **Models choose, they don't write.** That's why the output is safe to pipe into `xargs curl`.
 - **Clef is better at "what is this?" than at "does this matter?"** Asked whether a chart was "meaningful content", Clef said 0.12. Asked *what it shows* (photo, chart, logo, avatar…), it was right. `--vision` adds up the content classes and averages them with Jev's judgement of the page context: a portrait is content on Wikipedia and noise in an author box.
 - **For `--find`, Clef decides alone.** It sees the pixels *and* the alt text and caption.

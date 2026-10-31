@@ -35,7 +35,7 @@ curl -LsSf https://github.com/rayoplateado/jurl/releases/latest/download/jurl-in
 
 <sub>Windows: `powershell -ExecutionPolicy Bypass -c "irm https://github.com/rayoplateado/jurl/releases/latest/download/jurl-installer.ps1 | iex"` · From source (Rust 1.98, cmake and libclang, see [CONTRIBUTING](CONTRIBUTING.md#develop)): `cargo install --git https://github.com/rayoplateado/jurl`</sub>
 
-Then run `jurl`. The first time, it asks how you want to read pages: with a free [jurl cloud](#jurl-cloud) account, or with your own [TypeSafe API key](https://console.typesafe.ai). That's the whole setup. Pages that need JavaScript just work: jurl fetches a headless browser the first time one shows up. With your own keys, `--vision` and `--find` also need a Cloudflare Workers AI token: add it with `jurl init`.
+Then run `jurl`. The first time, it asks how you want to read pages: with a free [jurl cloud](#jurl-cloud) account, or with your own [TypeSafe API key](https://console.typesafe.ai). It checks the key before saving it. That's the whole setup. Pages that need JavaScript just work: jurl fetches a headless browser the first time one shows up. `--vision` and `--find` always use your own Cloudflare Workers AI token (jurl cloud doesn't take them): add it with `jurl init`.
 
 `jurl update` gets a newer jurl the same way you installed it. To uninstall: `brew uninstall jurl` or delete `~/.local/bin/jurl`, then `~/.config/jurl` (keys) and `~/Library/Caches/jurl` or `~/.cache/jurl` (the browser); run `jurl logout` first if you use jurl cloud.
 
@@ -65,11 +65,11 @@ https://gamehistory.org/5k-magazines/
 - `--links`, `--code`, `--image`: the links worth following, the code blocks, the real images.
 - `--find "…"`: the photo that shows what you describe (Clef looks at the pixels).
 
-Everything prints plain text or plain URLs, so it fits in a pipe: `jurl -f "a bridge over a river" en.wikipedia.org/wiki/Cologne | xargs curl -sO`. Every mode, with real output: [docs/usage.md](docs/usage.md).
+Everything prints plain text or plain URLs, so it fits in a pipe: `jurl -f "a bridge over a river" en.wikipedia.org/wiki/Cologne | xargs curl -sO`.
 
 ## jurl cloud
 
-Don't want to manage API keys? `jurl login` signs this computer in to [jurl cloud](https://cloud.jurl.dev), and jurl's servers do the reading. Signing up is free, with a monthly allowance of page reads; paid plans have more. Same flags, same exit codes, and the same text, less the page's kind line.
+Don't want to manage API keys? `jurl login` signs this computer in to [jurl cloud](https://cloud.jurl.dev), and jurl's servers do the reading. Signing up is free, with a monthly allowance of page reads; paid plans have more. Same flags and exit codes, except the image modes (`--image`, `--vision`, `--find`) and a few others, which need your own keys.
 
 ```console
 $ jurl login
@@ -78,9 +78,9 @@ To sign in to jurl cloud, open https://cloud.jurl.dev/device and enter this code
     ABCD-EFGH
 ```
 
-**Keep an answer up to date.** At a terminal, a jurl cloud answer ends with a link: `jurl: keep it up to date in a sheet: https://cloud.jurl.dev/…`. Open it and the answer becomes the first row of a sheet, with its proof. From there you add sites, questions and a schedule, and jurl cloud keeps it fresh.
+**Keep an answer up to date.** At a terminal, a jurl cloud answer ends with a link: `jurl: keep it up to date in a sheet: https://cloud.jurl.dev/…`. Open it and save the answer as a sheet: its first row is that answer with its proof. From there you add sites, questions and a schedule, and jurl cloud keeps it fresh. Scripts reading the output don't get the line.
 
-`jurl status` shows the account and what the period has used; `jurl logout` signs out. Which reads jurl cloud takes, and what it keeps: [docs/cloud.md](docs/cloud.md).
+`jurl status` shows the account and what the period has used; `jurl logout` signs out.
 
 ## Use it from an agent (MCP)
 
@@ -104,8 +104,6 @@ Other clients take `{"mcpServers": {"jurl": {"command": "jurl", "args": ["mcp"]}
 | `-n, --max N` · `-a, --all` | How many results, or all of them |
 | `--json` | Machine-readable output, with every probability and the run's usage |
 | `-t, --timing` | Where the time went, on stderr |
-
-Every flag, setting and environment variable: [docs/reference.md](docs/reference.md).
 
 ### Exit codes
 
