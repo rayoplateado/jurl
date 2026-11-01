@@ -185,6 +185,8 @@ pub(crate) fn unsupported(args: &Args) -> Option<String> {
         Some("jurl cloud doesn't read images yet (--image, --vision, --find)".into())
     } else if args.with_image.is_some() {
         Some("jurl cloud doesn't return the answer's image yet (--with-image)".into())
+    } else if args.with_line {
+        Some("jurl cloud doesn't return the answer's line yet (--with-line)".into())
     } else if args.with_link.is_some() {
         Some("jurl cloud doesn't return a link of the answer's page yet (--with-link)".into())
     } else if args.render {

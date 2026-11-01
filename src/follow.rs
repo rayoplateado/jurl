@@ -1394,7 +1394,8 @@ impl Search {
             eprintln!("jurl: found after reading {pages} page{}: {}", if pages == 1 { "" } else { "s" }, trail(&path));
         }
         let rendered = crate::vision::with_image(&ctx, cfg, &v.ex, rendered, t).await?;
-        crate::links::with_link(&ctx, &v.ex, rendered, t).await
+        let rendered = crate::links::with_link(&ctx, &v.ex, rendered, t).await?;
+        crate::lines::with_line(&ctx, &v.ex, rendered, t).await
     }
 }
 
