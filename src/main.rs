@@ -249,6 +249,9 @@ pub(crate) fn prepare(args: &mut Args) -> Result<()> {
     if args.with_link.is_some() && args.pages > 1 {
         bail!("--with-link looks at one page, the answer's: not with --pages");
     }
+    if args.with_line && (args.ask.is_none() || !args.precise || args.pages > 1) {
+        bail!("--with-line adds the line of the answer's page: use it with --precise -q, not --pages");
+    }
     if args.with_pages && !args.json {
         bail!("--with-pages puts the pages in the JSON: add --json");
     }
@@ -356,7 +359,8 @@ async fn read(
     } else {
         let answer = blocks::blocks(&ctx, &ex, t).await?;
         let answer = vision::with_image(&ctx, cfg, &ex, answer, t).await?;
-        links::with_link(&ctx, &ex, answer, t).await
+        let answer = links::with_link(&ctx, &ex, answer, t).await?;
+        crate::lines::with_line(&ctx, &ex, answer, t).await
     }
 }
 

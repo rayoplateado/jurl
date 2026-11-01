@@ -4,6 +4,7 @@
 
 - **A `-q --follow` read through jurl cloud links the page that answers**, as a local run does, not the page the search started on.
 - **`jurl update` on a copy installed with cargo builds the release it announces** (`--tag vX.Y.Z --locked`), not main; when the build fails, it says what is usually missing and gives the ready-built installer command.
+- **`--with-line`** (with `--precise -q`): the line of the answer's page a second reading points at, as `line` in `--json`, so a program can check the answer against it.
 
 ## 0.2.1
 

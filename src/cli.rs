@@ -48,6 +48,11 @@ pub(crate) struct Args {
     /// that page's links are scored, never those of the other pages a --follow reads. No answer, no link
     #[arg(long, value_name = "WHAT", require_equals = true)]
     pub(crate) with_link: Option<String>,
+    /// With --precise -q: also the line of the answer's page that a second reading points at, under `line` (its text, its
+    /// share of the choice and how sure Jev is the page answers at all): one choice over the page's numbered lines, in the
+    /// same read. A caller can check the answer against it. No answer, no line
+    #[arg(long)]
+    pub(crate) with_line: bool,
     /// With -q: when the page doesn't answer, follow its links within the same site, most promising first,
     /// reading up to this many pages in all [default: 5]. A search from a public address reads only public addresses
     #[arg(long, value_name = "PAGES", num_args = 0..=1, default_missing_value = "5")]

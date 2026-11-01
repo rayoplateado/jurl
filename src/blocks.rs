@@ -121,11 +121,6 @@ pub(crate) async fn score_blocks(
         bail!("no readable content in {} (if it needs JavaScript, try --render)", ctx.url);
     }
 
-    // --precise with a question: which lines hold the answer, weighed against each other (see `lines.rs`).
-    if args.precise && args.ask.is_some() && !args.code {
-        let scores = crate::lines::score(ctx, ex, |b| crate::lines::may_answer(b, is_candidate(false, b)), t).await?;
-        return Ok((scores, None));
-    }
     let default = if args.code {
         "is a useful code example, command or snippet for this page's topic, not boilerplate."
     } else {

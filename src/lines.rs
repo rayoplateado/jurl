@@ -1,7 +1,7 @@
-//! `--precise`, first step: which lines of the page hold the answer. The page's lines are numbered and Jev is asked, in
-//! one request per window of lines, one choice ("which line contains the answer?") and one yes/no ("does any line answer
-//! it?"). A block's score is its lines' share of the choice times the yes/no: the same scale as one yes/no per block (the
-//! block holds the answer), at about half the tokens, and lines weighed against each other instead of each block alone.
+//! `--with-line`: a second reading of the answer's page, one line at a time. The page's lines are numbered and Jev is asked,
+//! in one request per window of lines, one choice ("which line contains the answer?") and one yes/no ("does any line
+//! answer it?"). The line it points at comes back beside the answer, for a caller that checks the answer against it: on
+//! sheet cells the two disagree where the answer is most often wrong.
 
 use std::ops::Range;
 
@@ -11,8 +11,9 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     decide::{Answers, choice},
-    extract::{Block, Extracted, Kind},
+    extract::{Block, Extracted},
     judge::{Ctx, Item, STATE_TEXT_CHARS},
+    output::Rendered,
     timing::Timer,
 };
 
@@ -21,20 +22,12 @@ const MAX_LINES: usize = 255;
 /// The most characters of lines in one request, well under Jev's token budget.
 const MAX_WINDOW_CHARS: usize = 50_000;
 
-/// One line of a block's text, as Jev is shown it.
-struct Line<'a> {
-    block: usize,
-    text: &'a str,
-}
-
-/// The lines Jev is asked about: every non-empty line of the blocks that may hold an answer (`keep`), each cut to
-/// `STATE_TEXT_CHARS` characters.
-fn lines_of<'a>(blocks: &'a [Block], keep: impl Fn(&Block) -> bool) -> Vec<Line<'a>> {
+/// Every non-empty line of the page's blocks, trimmed and cut to `STATE_TEXT_CHARS` characters.
+fn lines_of(blocks: &[Block]) -> Vec<&str> {
     blocks
         .iter()
-        .filter(|b| keep(b))
-        .flat_map(|b| b.text.lines().map(str::trim).filter(|l| !l.is_empty()).map(move |text| Line { block: b.i, text }))
-        .map(|l| Line { text: cut(l.text, STATE_TEXT_CHARS), ..l })
+        .flat_map(|b| b.text.lines().map(str::trim).filter(|l| !l.is_empty()))
+        .map(|l| cut(l, STATE_TEXT_CHARS))
         .collect()
 }
 
@@ -42,13 +35,12 @@ fn cut(s: &str, max: usize) -> &str {
     s.char_indices().nth(max).map_or(s, |(i, _)| &s[..i])
 }
 
-/// Consecutive runs of lines, each at most `MAX_LINES` lines and `MAX_WINDOW_CHARS` characters (a longer line is a
-/// window of its own).
-fn windows(lines: &[Line]) -> Vec<Range<usize>> {
+/// Consecutive runs of lines, each at most `MAX_LINES` lines and `MAX_WINDOW_CHARS` characters.
+fn windows(lines: &[&str]) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let (mut start, mut chars) = (0, 0);
     for (i, l) in lines.iter().enumerate() {
-        let len = l.text.len() + 6;
+        let len = l.len() + 6;
         if i > start && (i - start == MAX_LINES || chars + len > MAX_WINDOW_CHARS) {
             out.push(start..i);
             (start, chars) = (i, 0);
@@ -87,52 +79,51 @@ fn questions(q: &str, n: usize) -> Map<String, Value> {
     ])
 }
 
-/// Each block's score from the windows' answers: the share of the choice its lines got, times that window's yes/no.
-/// A block without lines asked about has none.
-fn block_scores(blocks: usize, lines: &[Line], wins: &[Range<usize>], answers: &[Answers]) -> Vec<Option<f64>> {
-    let mut scores = vec![None; blocks];
-    for (w, a) in wins.iter().zip(answers) {
-        let exists = a.noul("exists").unwrap_or(0.0);
-        let probs = a.probabilities("where").unwrap_or_default();
-        for (k, l) in lines[w.clone()].iter().enumerate() {
-            let p = probs.get(&line_id(k)).copied().unwrap_or(0.0) * exists;
-            if let Some(s) = scores.get_mut(l.block) {
-                *s = Some(s.unwrap_or(0.0) + p);
-            }
-        }
-    }
-    scores.into_iter().map(|s| s.map(|p: f64| p.min(1.0))).collect()
+/// The line Jev points at: in the window it is surest answers, that window's most likely line. Its index, its share of
+/// the choice, and the window's yes/no. None when no window has an answer.
+fn best(wins: &[Range<usize>], answers: &[Answers]) -> Option<(usize, f64, f64)> {
+    let (w, a) = wins
+        .iter()
+        .zip(answers)
+        .max_by(|x, y| x.1.noul("exists").unwrap_or(0.0).total_cmp(&y.1.noul("exists").unwrap_or(0.0)))?;
+    let probs = a.probabilities("where")?;
+    let (k, p) = (0..w.len())
+        .filter_map(|k| probs.get(&line_id(k)).map(|&p| (k, p)))
+        .max_by(|x, y| x.1.total_cmp(&y.1).then(y.0.cmp(&x.0)))?;
+    Some((w.start + k, p, a.noul("exists").unwrap_or(0.0)))
 }
 
-/// Jev's score for each block as the place of the answer to `--ask`, from its lines (see the module's note).
-pub(crate) async fn score(
-    ctx: &Ctx<'_>,
-    ex: &Extracted,
-    keep: impl Fn(&Block) -> bool,
-    t: &mut Timer,
-) -> Result<Vec<Option<f64>>> {
-    let lines = lines_of(&ex.blocks, keep);
+/// `--with-line`: the answer, with the line of its page Jev points at under `line` (`text`, `p`, `exists`), or null when
+/// the page has no lines. A failed reading keeps the answer, with the reason under `line_error`, as --with-link does.
+pub(crate) async fn with_line(ctx: &Ctx<'_>, ex: &Extracted, mut answer: Rendered, t: &mut Timer) -> Result<Rendered> {
+    if !ctx.args.with_line {
+        return Ok(answer);
+    }
+    let lines = lines_of(&ex.blocks);
     let wins = windows(&lines);
     let q = ctx.ask();
     let asks = wins.iter().map(|w| {
-        let doc: Vec<String> = lines[w.clone()].iter().enumerate().map(|(k, l)| format!("{}| {}", line_id(k), l.text)).collect();
+        let doc: Vec<String> =
+            lines[w.clone()].iter().enumerate().map(|(k, l)| format!("{}| {l}", line_id(k))).collect();
         // The window's lines are the state's one entry, numbered as the choice names them.
         let item = Item { state: json!(doc.join("\n")), questions: Vec::new() };
         ctx.judge("blocks", vec![item], questions(&q, w.len()))
     });
-    let answers = try_join_all(asks).await?;
-    let label = format!(
-        "jev({} req, {} tok)",
-        answers.iter().map(|a| a.requests).sum::<usize>(),
-        answers.iter().map(|a| a.input_tokens).sum::<u64>()
-    );
-    t.lap(label);
-    Ok(block_scores(ex.blocks.len(), &lines, &wins, &answers))
-}
-
-/// Section titles hold no answer of their own, unless they are an item's linked headline.
-pub(crate) fn may_answer(b: &Block, candidate: bool) -> bool {
-    b.kind != Kind::Heading || candidate
+    match try_join_all(asks).await {
+        Ok(answers) => {
+            t.lap(format!("{} lines for --with-line", lines.len()));
+            answer.json["line"] = match best(&wins, &answers) {
+                Some((i, p, exists)) => json!({ "text": lines[i], "p": p, "exists": exists }),
+                None => Value::Null,
+            };
+        }
+        Err(e) => {
+            eprintln!("jurl: no line: {e:#}");
+            answer.json["line"] = Value::Null;
+            answer.json["line_error"] = json!(format!("{e:#}"));
+        }
+    }
+    Ok(answer)
 }
 
 #[cfg(test)]
@@ -140,6 +131,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::extract::Kind;
 
     fn block(i: usize, text: &str) -> Block {
         Block::new(i, Kind::Para, text.to_string())
@@ -148,18 +140,13 @@ mod tests {
     #[test]
     fn a_block_gives_its_non_empty_lines_trimmed() {
         let blocks = [block(0, "Urgencias 24h\n\n  944 424 040 "), block(1, "Calle Mayor 3")];
-        let lines = lines_of(&blocks, |_| true);
-        let got: Vec<(usize, &str)> = lines.iter().map(|l| (l.block, l.text)).collect();
-        assert_eq!(got, [(0, "Urgencias 24h"), (0, "944 424 040"), (1, "Calle Mayor 3")]);
+        assert_eq!(lines_of(&blocks), ["Urgencias 24h", "944 424 040", "Calle Mayor 3"]);
     }
 
     #[test]
     fn windows_hold_at_most_the_choice_s_options_and_cover_every_line() {
-        let text = "x".repeat(10);
-        let blocks: Vec<Block> = (0..600).map(|i| block(i, &text)).collect();
-        let lines = lines_of(&blocks, |_| true);
-        let wins = windows(&lines);
-        assert_eq!(wins, [0..255, 255..510, 510..600]);
+        let lines = vec!["xxxxxxxxxx"; 600];
+        assert_eq!(windows(&lines), [0..255, 255..510, 510..600]);
     }
 
     #[test]
@@ -167,8 +154,7 @@ mod tests {
         // Each line is cut to STATE_TEXT_CHARS (1,200), so 1,206 characters a line with its number: 41 fit in a window.
         let text = "y".repeat(20_000);
         let blocks: Vec<Block> = (0..100).map(|i| block(i, &text)).collect();
-        let wins = windows(&lines_of(&blocks, |_| true));
-        assert_eq!(wins, [0..41, 41..82, 82..100]);
+        assert_eq!(windows(&lines_of(&blocks)), [0..41, 41..82, 82..100]);
     }
 
     fn answers(exists: f64, probs: &[(&str, f64)]) -> Answers {
@@ -184,15 +170,10 @@ mod tests {
     }
 
     #[test]
-    fn a_block_scores_its_lines_share_times_whether_the_page_answers() {
-        let blocks = [block(0, "a\nb"), block(1, "c"), Block::new(2, Kind::Heading, "Title".into())];
-        let lines = lines_of(&blocks, |b| may_answer(b, false));
-        let wins = windows(&lines);
-        let a = answers(0.5, &[("L000", 0.2), ("L001", 0.6), ("L002", 0.2)]);
-        let scores = block_scores(blocks.len(), &lines, &wins, &[a]);
-        assert_eq!(scores.len(), 3);
-        assert!((scores[0].unwrap() - 0.4).abs() < 1e-9);
-        assert!((scores[1].unwrap() - 0.1).abs() < 1e-9);
-        assert_eq!(scores[2], None);
+    fn the_line_is_the_likeliest_of_the_window_surest_to_answer() {
+        let wins = [0..2, 2..4];
+        let a = [answers(0.2, &[("L000", 0.9), ("L001", 0.1)]), answers(0.8, &[("L000", 0.3), ("L001", 0.7)])];
+        assert_eq!(best(&wins, &a), Some((3, 0.7, 0.8)));
+        assert_eq!(best(&[], &[]), None);
     }
 }
