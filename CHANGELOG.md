@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
+
+Fixes for `--follow`, with your own keys and with jurl cloud.
 
 - **`--follow` no longer spends its pages on other languages.** A link that says its page is in another language (`<a hreflang>`, as a wiki's links to the same article in a hundred languages) is no longer opened: such a page was skipped anyway, but each one took a step of the `--follow` budget, so a search could end after reading three pages.
 - **jurl cloud follows links with `-q` too**, not only with `--precise`. A read jurl cloud doesn't take says it runs on this computer with your own TypeSafe key.
