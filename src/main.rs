@@ -19,6 +19,7 @@ mod hosts;
 mod judge;
 mod langtag;
 mod lightpanda;
+mod lines;
 mod links;
 mod mcp;
 mod meter;
