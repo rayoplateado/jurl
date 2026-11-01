@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **A `-q --follow` read through jurl cloud links the page that answers**, as a local run does, not the page the search started on.
+- **`jurl update` on a copy installed with cargo builds the release it announces** (`--tag vX.Y.Z --locked`), not main; when the build fails, it says what is usually missing and gives the ready-built installer command.
+
 ## 0.2.1
 
 Fixes for `--follow`, with your own keys and with jurl cloud.

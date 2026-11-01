@@ -278,6 +278,13 @@ struct ReadReply {
     save_as_sheet: Option<String>,
 }
 
+impl ReadReply {
+    /// The page the answer is on: with `--follow`, the last page of its path, as a local run names it; else the page asked.
+    fn page(&self) -> &str {
+        self.path.last().map_or(&self.url, String::as_str)
+    }
+}
+
 #[derive(Deserialize)]
 struct ReplyBlock {
     text: String,
@@ -332,7 +339,7 @@ fn rendered(args: &Args, r: &ReadReply) -> Result<Rendered> {
 fn precise_answer(args: &Args, r: &ReadReply, path: Option<&Value>) -> Result<Rendered> {
     let doc = |answer: Option<&str>, closest: Option<&str>| {
         let mut doc = json!({
-            "url": r.url,
+            "url": r.page(),
             "title": r.title,
             "ask": args.ask,
             "answer": answer,
@@ -420,7 +427,7 @@ fn block_list(args: &Args, r: &ReadReply, path: Option<&Value>) -> Result<Render
     if let Some(title) = r.title.as_deref().filter(|t| !t.is_empty()) {
         text += &format!("# {title}\n\n");
     }
-    text += &format!("<{}>\n\n", r.url);
+    text += &format!("<{}>\n\n", r.page());
     let mut v = Vec::new();
     for (i, b) in blocks.iter().enumerate() {
         let kind = b.kind.as_deref().and_then(kind_of);
@@ -436,7 +443,7 @@ fn block_list(args: &Args, r: &ReadReply, path: Option<&Value>) -> Result<Render
         }
         v.push(item);
     }
-    let mut doc = json!({ "url": r.url, "title": r.title, "ask": args.ask, "kind": null, "blocks": v });
+    let mut doc = json!({ "url": r.page(), "title": r.title, "ask": args.ask, "kind": null, "blocks": v });
     if let Some(path) = path {
         doc["path"] = path.clone();
     }
@@ -643,6 +650,16 @@ mod tests {
         assert_eq!(header("x-jurl-source").as_deref(), Some("cli"));
         assert!(header("x-jurl-client").unwrap().starts_with("jurl/"));
         assert!(req.body.contains("\"mode\":\"precise\"") && req.body.contains("\"question\":\"rate limit?\""));
+    }
+
+    #[tokio::test]
+    async fn a_followed_answer_links_the_page_it_is_on_not_the_start_page() {
+        let reply = r#"{"answered":true,"url":"https://x.com/","path":["https://x.com/","https://x.com/limits"],"title":"Limits","blocks":[{"text":"5,000 requests per hour","p":0.9}],"pages":3}"#;
+        let (base, _) = mock::serve(vec![(200, "", reply)]);
+        let a = args(&["jurl", "-q", "rate limit?", "--follow", "5", "x.com"]);
+        let r = read(&Client::new(), &cloud_at(base), &a, &mut Timer::new()).await.unwrap();
+        assert!(r.text.starts_with("# Limits\n\n<https://x.com/limits>\n\n"), "{}", r.text);
+        assert_eq!(r.json["url"], "https://x.com/limits");
     }
 
     #[tokio::test]
