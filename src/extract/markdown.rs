@@ -85,6 +85,7 @@ pub fn markdown(body: &str, base: &Url) -> Extracted {
         data_next: None,
         data_shapes: Vec::new(),
         platform_next: None,
+        chosen: Vec::new(),
         app_shell: false,
     }
 }

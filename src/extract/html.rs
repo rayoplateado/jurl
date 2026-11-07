@@ -8,6 +8,7 @@ use url::Url;
 
 use super::block_images;
 use super::cards::{self, Member};
+use super::chosen;
 use super::join::join_short;
 use super::{
     Alternate, BREAK, Block, Extracted, Image, Kind, Link, add_links, collapse, link_url, push_image, push_link,
@@ -65,6 +66,7 @@ fn extract_doc(doc: &Html, body: &str, page: &Url) -> Extracted {
         data_next: None,
         data_shapes: Vec::new(),
         platform_next: None,
+        chosen: chosen::chosen(doc, unseen),
         app_shell: is_app_shell(doc, body),
     }
 }
@@ -972,12 +974,79 @@ fn chrome(el: ElementRef) -> bool {
         || v.id().is_some_and(|id| CHROME_NAMES.contains(&id))
 }
 
-/// Whether a reader can't see the element itself: its `hidden` attribute, or an inline style that hides it. An ancestor's
-/// are checked where the walk reaches the ancestor. `aria-hidden` is not one of them: it hides the element from assistive
-/// technology, and the page still shows it.
+/// Whether a reader never sees the element: it or an ancestor is page chrome, a part of the page that is not content
+/// (`nav`, `footer`, `aside`, a dialog) or hidden.
+fn unseen(el: ElementRef) -> bool {
+    std::iter::once(el).chain(el.ancestors().filter_map(ElementRef::wrap)).any(|a| {
+        chrome(a)
+            || hidden(a)
+            || matches!(a.value().name(), "nav" | "footer" | "aside" | "dialog" | "template" | "noscript")
+    })
+}
+
+/// Whether a reader can't see the element itself: its `hidden` attribute, an inline style that hides it, or a state of
+/// it the page does not show (`unshown_state`). An ancestor's are checked where the walk reaches the ancestor.
+/// `aria-hidden` is not one of them: it hides the element from assistive technology, and the page still shows it.
 fn hidden(el: ElementRef) -> bool {
     let v = el.value();
-    (v.attr("hidden").is_some() && !segment(el)) || v.attr("style").is_some_and(style_hides)
+    (v.attr("hidden").is_some() && !segment(el)) || v.attr("style").is_some_and(style_hides) || unshown_state(el)
+}
+
+/// Whether the element is a state of something the page shows in another state, drawn in the same place and
+/// transparent until a toggle flips it: a pricing page's monthly price beside its yearly one
+/// (`€<span class="opacity-0">39</span><span class="opacity-100">31</span>`), which read together make "€3931". Only
+/// one with a sibling of its tag that is set opaque, as a toggle sets the state it shows: a page that fades its content
+/// in starts every part of it transparent, and a closed accordion's answer sits transparent beside its question, which
+/// sets no opacity, and that content is the page's. A fading carousel's other slides are its content too.
+fn unshown_state(el: ElementRef) -> bool {
+    let name = el.value().name();
+    // Only the nearest element on each side: a toggle draws its states side by side, and a long list of fading cards
+    // is not scanned once per card.
+    let opaque_sibling = |s: Option<ElementRef>| s.is_some_and(|s| s.value().name() == name && opaque(s));
+    transparent(el)
+        && (opaque_sibling(el.prev_siblings().find_map(ElementRef::wrap))
+            || opaque_sibling(el.next_siblings().find_map(ElementRef::wrap)))
+        // The element and its seven nearest ancestors, as `image_skipped` looks for a carousel.
+        && !std::iter::once(el)
+            .chain(el.ancestors().filter_map(ElementRef::wrap))
+            .take(8)
+            .any(|a| a.value().attr("class").is_some_and(is_carousel))
+}
+
+/// Whether the element is drawn fully transparent: Tailwind's `opacity-0`, or an inline `opacity: 0`.
+fn transparent(el: ElementRef) -> bool {
+    let v = el.value();
+    v.classes().any(|c| c == "opacity-0")
+        || v.attr("style").is_some_and(|s| style_value(s, "opacity").is_some_and(zero))
+}
+
+/// Whether the element is set fully opaque: Tailwind's `opacity-100`, or an inline `opacity: 1` (or 100%).
+fn opaque(el: ElementRef) -> bool {
+    let v = el.value();
+    let full = |value: &str| match value.strip_suffix('%') {
+        Some(percent) => percent.trim().parse::<f64>().is_ok_and(|n| n == 100.0),
+        None => value.parse::<f64>().is_ok_and(|n| n == 1.0),
+    };
+    v.classes().any(|c| c == "opacity-100")
+        || v.attr("style").is_some_and(|s| style_value(s, "opacity").is_some_and(full))
+}
+
+/// Whether a CSS number or percentage is zero ("0", "0.0", "0%").
+fn zero(value: &str) -> bool {
+    value.trim_end_matches('%').parse::<f64>().is_ok_and(|n| n == 0.0)
+}
+
+/// The value an inline style gives a property, the last one when it gives several (as CSS reads it), without
+/// `!important`. Names are read without case.
+fn style_value<'a>(style: &'a str, property: &str) -> Option<&'a str> {
+    let (_, value) = style
+        .rsplit(';')
+        .filter_map(|decl| decl.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case(property))?;
+    Some(match value.rsplit_once('!') {
+        Some((v, flag)) if flag.trim().eq_ignore_ascii_case("important") => v.trim(),
+        _ => value.trim(),
+    })
 }
 
 /// Whether an inline style hides its element: `display: none`, or `visibility: hidden`. `visibility: collapse` hides a
@@ -1743,6 +1812,42 @@ mod tests {
         let ex = html(page, &base());
         assert!(ex.blocks.iter().all(|b| !b.text.contains("Hidden promotion")), "{:?}", ex.blocks);
         assert!(ex.images.is_empty(), "{:?}", ex.images);
+    }
+
+    #[test]
+    fn a_transparent_state_beside_a_shown_one_is_not_read() {
+        // A pricing toggle draws both states in one place and shows one: read together they would make "€3931".
+        let page = r#"<body><main><h2>Plus</h2><p>€<span class="inline-grid"><span class="opacity-0">39</span><span class="opacity-100">31</span></span>
+            per user/month, billed <span><span style="opacity: 0">monthly</span><span style="opacity:1">annually</span></span></p></main></body>"#;
+        let ex = html(page, &base());
+        let text: Vec<&str> = ex.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert!(text.iter().any(|t| t.contains("€31 per user/month, billed annually")), "{text:?}");
+        assert!(text.iter().all(|t| !t.contains("39") && !t.contains("monthly")), "{text:?}");
+    }
+
+    #[test]
+    fn content_that_fades_in_a_closed_answer_and_a_fading_slide_are_still_read() {
+        // Every part transparent, as a page that fades its content in is drawn before its script runs; an accordion's closed
+        // answer, transparent beside its question; a fading carousel's next slide, transparent beside the shown one.
+        let page = r#"<body><main><p class="opacity-0">The museum opens at ten.</p><p style="opacity:0">Tickets cost €12.</p>
+            <div><div><h3>Can I bring a dog?</h3></div><div class="max-h-0 opacity-0"><p>Dogs on a lead are welcome.</p></div></div>
+            <div class="slick-track"><div class="slick-slide" style="opacity:1"><p>Jane Doe, keynote.</p></div>
+            <div class="slick-slide" style="opacity:0"><p>John Roe, closing talk.</p></div></div></main></body>"#;
+        let ex = html(page, &base());
+        let text = ex.blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
+        for kept in ["opens at ten", "€12", "Dogs on a lead", "John Roe"] {
+            assert!(text.contains(kept), "{kept}: {text}");
+        }
+    }
+
+    #[test]
+    fn the_page_says_which_options_it_was_read_with() {
+        let page = r#"<body><main><fieldset><legend>Select payment mode:</legend>
+            <input type="radio" id="m" name="billing" value="month"><label for="m">Pay monthly</label>
+            <input type="radio" id="y" name="billing" value="year" checked><label for="y">Pay yearly</label></fieldset>
+            <h3>Plus</h3><p>€9.50 per member / month</p></main>
+            <footer><input type="radio" name="lang" value="en" checked><input type="radio" name="lang" value="de"></footer></body>"#;
+        assert_eq!(html(page, &base()).chosen, ["Select payment mode: Pay yearly (other options: Pay monthly)"]);
     }
 
     #[test]
