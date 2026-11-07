@@ -406,6 +406,11 @@ pub(crate) fn render_precise(ctx: &Ctx<'_>, ex: &Extracted, pick: &Pick, path: O
             doc["context_truncated"] = json!(true);
         }
     }
+    // The options the page was read with chosen ("Pay yearly" of a monthly/yearly toggle): the answer is what the page shows
+    // under them. Left out when the page offers no choice.
+    if !ex.chosen.is_empty() {
+        doc["chosen"] = json!(ex.chosen);
+    }
     if let Some(path) = path {
         doc["path"] = json!(path.iter().map(url::Url::as_str).collect::<Vec<_>>());
     }

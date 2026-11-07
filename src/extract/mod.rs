@@ -9,6 +9,7 @@ use url::Url;
 
 mod block_images;
 mod cards;
+mod chosen;
 pub mod data_next;
 mod html;
 mod join;
@@ -175,6 +176,9 @@ pub struct Extracted {
     /// The endpoint of the site's platform API that holds the listing's things, page 1, when a list read over pages starts on
     /// a page whose site has one (see `platform`): what `--pages` reads after the start page, before any page it links.
     pub platform_next: Option<url::Url>,
+    /// The options the page was read with chosen, one line per choice it offers (see [`chosen`]): "Select payment mode:
+    /// Pay yearly (other options: Pay monthly)". Empty for markdown.
+    pub chosen: Vec<String>,
     /// Scripts plus an empty mount point, `<noscript>` or a heavy shell: with almost no
     /// text, the page is a JS app.
     pub app_shell: bool,
