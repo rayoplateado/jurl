@@ -10,6 +10,7 @@ use super::block_images;
 use super::cards::{self, Member};
 use super::chosen;
 use super::join::join_short;
+use super::variants;
 use super::{
     Alternate, BREAK, Block, Extracted, Image, Kind, Link, add_links, collapse, link_url, push_image, push_link,
 };
@@ -48,6 +49,22 @@ fn extract_doc(doc: &Html, body: &str, page: &Url) -> Extracted {
     let site_links = collect_site_links(doc, page, base);
     let mut blocks = join_short(walk(doc, root, in_body, page, base));
     cards::number_records(&mut blocks);
+    for line in variants::variant_lines(doc, unseen) {
+        let i = blocks.len();
+        blocks.push(Block {
+            i,
+            kind: Kind::Para,
+            level: None,
+            lang: None,
+            text: line,
+            list: None,
+            href: None,
+            record: None,
+            page: None,
+            links: Vec::new(),
+            image: None,
+        });
+    }
     let records = blocks.iter().filter_map(|b| b.record).max().map(|n| n as u64);
     let images = collect_images(doc, root, in_body, page, base);
     block_images::attach(&mut blocks, &images);

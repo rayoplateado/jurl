@@ -108,7 +108,7 @@ fn option_name(labels: &HashMap<&str, String>, el: ElementRef) -> Option<String>
 }
 
 /// The text of each `<label for>`, by the id it names; the first label of an id is its own.
-fn labels_of(doc: &Html) -> HashMap<&str, String> {
+pub(super) fn labels_of(doc: &Html) -> HashMap<&str, String> {
     let mut labels = HashMap::new();
     for label in doc.root_element().descendants().filter_map(ElementRef::wrap).filter(|e| e.value().name() == "label") {
         if let Some(id) = label.value().attr("for") {
