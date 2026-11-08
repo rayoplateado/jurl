@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
+Better sizes from shop pages, and fixes for jurl cloud's answers.
+
+- **A product page's size and weight drop-downs are read.** A shop keeps a product's sizes in a `<select>` of the form that buys it, which jurl skipped, so a page showing "from £8.20" gave no size. jurl now adds a line at the end of the page, `Size: 500g (other options: 1kg, 5 Kg)`.
 - **A pricing toggle no longer reads as one number.** A page that draws both states of a monthly/yearly toggle in one place, one of them transparent, read as `€3931` (€39 monthly, €31 yearly); jurl now reads only the state the page shows.
 - **`chosen` in a `--precise --json` answer**: the options the page was read with selected (`Select payment mode: Pay yearly (other options: Pay monthly)`), so a program can tell a yearly price from a monthly one when the page writes no period beside it.
 - **A `-q --follow` read through jurl cloud links the page that answers**, as a local run does, not the page the search started on.
