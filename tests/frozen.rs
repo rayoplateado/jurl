@@ -35,7 +35,19 @@ impl Site {
         let addr = listener.local_addr().expect("its address");
         let hits = Arc::new(Mutex::new(Vec::new()));
         let stopping = Arc::new(AtomicBool::new(false));
-        let routes: BTreeMap<&str, Route> = routes.into_iter().collect();
+        // `{base}` in a body is the site's own address, which is not known until it is bound.
+        let base = format!("http://{addr}");
+        let routes: BTreeMap<&str, Route> = routes
+            .into_iter()
+            .map(|(path, (status, content_type, body))| {
+                // Only a text body has the placeholder; a binary one is served as it is.
+                let body = match String::from_utf8(body) {
+                    Ok(text) => text.replace("{base}", &base).into_bytes(),
+                    Err(binary) => binary.into_bytes(),
+                };
+                (path, (status, content_type, body))
+            })
+            .collect();
         let (log, stop) = (hits.clone(), stopping.clone());
         let thread = thread::spawn(move || {
             for conn in listener.incoming() {
@@ -46,8 +58,14 @@ impl Site {
                 let (head, _) = read_request(&mut conn);
                 let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
                 log.lock().unwrap().push(path.clone());
-                let (status, content_type, body) =
-                    routes.get(path.as_str()).cloned().unwrap_or((404, "text/plain", b"not found".to_vec()));
+                // A route that ends in `*` answers every path that starts as it does.
+                let found = routes.get(path.as_str()).or_else(|| {
+                    routes
+                        .iter()
+                        .find(|(r, _)| r.strip_suffix('*').is_some_and(|prefix| path.starts_with(prefix)))
+                        .map(|(_, v)| v)
+                });
+                let (status, content_type, body) = found.cloned().unwrap_or((404, "text/plain", b"not found".to_vec()));
                 let head = format!(
                     "HTTP/1.1 {status} X\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
@@ -218,16 +236,26 @@ fn printed(out: &Output) -> Value {
     json
 }
 
-fn entries(dir: &Path) -> BTreeMap<String, Value> {
+/// The entries of the directory of one `kind` (`page` or `small`), by the address they are for.
+fn entries_of(dir: &Path, kind: &str) -> BTreeMap<String, Value> {
     let mut found = BTreeMap::new();
     for entry in std::fs::read_dir(dir).expect("the frozen directory").flatten() {
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "json") {
             let meta: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            found.insert(meta["url"].as_str().unwrap().to_string(), meta);
+            if meta["kind"] == kind {
+                assert!(
+                    found.insert(meta["url"].as_str().unwrap().to_string(), meta).is_none(),
+                    "one entry of a kind per address"
+                );
+            }
         }
     }
     found
+}
+
+fn entries(dir: &Path) -> BTreeMap<String, Value> {
+    entries_of(dir, "page")
 }
 
 fn key(url: &str) -> String {
@@ -434,16 +462,15 @@ fn a_follow_of_two_pages_freezes_the_pages_and_the_files_the_site_does_not_have(
     assert_eq!(path.as_array().unwrap().len(), 2, "the follow read two pages: {path}");
     let asked_live = model.requests();
 
-    let kept = entries(&frozen);
+    let (kept, files) = (entries(&frozen), entries_of(&frozen, "small"));
     let base = site.base();
     for page in ["/", "/about"] {
-        assert_eq!(kept[&format!("{base}{page}")]["kind"], "page", "{page}");
+        assert!(kept.contains_key(&format!("{base}{page}")), "{page}");
     }
-    assert_eq!(kept[&format!("{base}/robots.txt")]["kind"], "small");
-    assert_eq!(kept[&format!("{base}/robots.txt")]["status"], 200);
+    assert_eq!(files[&format!("{base}/robots.txt")]["status"], 200);
     for missing in ["/llms.txt", "/sitemap.xml"] {
         let entry =
-            kept.get(&format!("{base}{missing}")).unwrap_or_else(|| panic!("{missing} is frozen: {:?}", kept.keys()));
+            files.get(&format!("{base}{missing}")).unwrap_or_else(|| panic!("{missing} is frozen: {:?}", files.keys()));
         assert_eq!((entry["absent"].as_bool(), entry["status"].as_u64()), (Some(true), Some(404)), "{missing}");
     }
     let hits_when_recorded = site.hits().len();
@@ -562,4 +589,88 @@ fn a_bare_domain_that_gave_no_answer_is_replayed_as_the_www_page_that_was_read_i
     let out = jurl(&home, &env, &["--json", "--with-pages", "--pages-only", "refused-frozen.example"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr_of(&out));
     assert!(stderr_of(&out).contains("HTTP 403"), "{}", stderr_of(&out));
+}
+
+#[test]
+fn a_page_and_a_file_at_one_address_are_two_entries() {
+    let home = scratch("same-address");
+    let frozen = home.join("frozen");
+    let model = Model::start("555-0100");
+    let llms = "Acme. Phone us on 555-0100 between nine and six, every weekday of the year.";
+    let mut site = Site::start(vec![("/llms.txt", (200, "text/plain", llms.as_bytes().to_vec()))]);
+    // The start page of this run is the site's `llms.txt`, which a `--follow` reads as the site's file too.
+    let url = format!("{}/llms.txt", site.base());
+    let ask = ["--json", "--follow", "2", "-q", "what is the phone number?", &url];
+    let env = |mode| {
+        [
+            ("JURL_JEV_URL", model.url.as_str()),
+            ("JURL_FROZEN_DIR", frozen.to_str().unwrap()),
+            ("JURL_FROZEN_MODE", mode),
+        ]
+    };
+
+    let recorded = jurl(&home, &env("record"), &ask);
+    assert!(entries(&frozen).contains_key(&url) && entries_of(&frozen, "small").contains_key(&url));
+
+    site.stop();
+    let replayed = jurl(&home, &env("replay"), &ask);
+    assert!(!stderr_of(&replayed).contains("not frozen"), "{}", stderr_of(&replayed));
+    assert_eq!(replayed.status.code(), recorded.status.code());
+    assert_eq!(printed(&replayed), printed(&recorded));
+}
+
+#[test]
+fn a_precise_follow_with_the_sites_search_and_a_page_that_fails_is_replayed_the_same() {
+    let home = scratch("precise");
+    let frozen = home.join("frozen");
+    let model = Model::start("555-0100");
+    let start = r#"<html><head><title>Shop</title><link rel="https://api.w.org/" href="{base}/wp-json/"></head><body><h1>Acme Shop</h1><p>Welcome to the Acme shop, where we sell anvils and rockets.</p><a href="/broken">Our broken page about anvils</a><a href="/missing">Another page about rockets</a></body></html>"#;
+    let about = "<html><head><title>Contact</title></head><body><h1>Contact</h1><p>Phone us on 555-0100 between nine and six, every weekday.</p></body></html>";
+    let mut site = Site::start(vec![
+        ("/", html(start)),
+        ("/broken", (500, "text/plain", b"boom".to_vec())),
+        (
+            "/wp-json/wp/v2/search*",
+            (200, "application/json", br#"[{"url":"{base}/about","title":"Contact"}]"#.to_vec()),
+        ),
+        ("/about", html(about)),
+    ]);
+    let url = format!("{}/", site.base());
+    let ask = ["--json", "--precise", "--follow", "6", "-q", "what is the phone number?", &url];
+    let env = |mode| {
+        [
+            ("JURL_JEV_URL", model.url.as_str()),
+            ("JURL_FROZEN_DIR", frozen.to_str().unwrap()),
+            ("JURL_FROZEN_MODE", mode),
+        ]
+    };
+
+    let recorded = jurl(&home, &env("record"), &ask);
+    let kept = entries(&frozen);
+    let base = site.base();
+    assert!(
+        kept[&format!("{base}/broken")]["error"].as_str().is_some_and(|e| e.contains("500")),
+        "a page that fails is frozen with its error: {kept:?}"
+    );
+    let files = entries_of(&frozen, "small");
+    assert!(
+        files.keys().any(|u| u.contains("/wp-json/wp/v2/search")),
+        "the site's search is frozen: {:?}",
+        files.keys()
+    );
+    assert!(
+        kept.contains_key(&format!("{base}/about")),
+        "the page its search gave is read: {:?}\n{}",
+        kept.keys(),
+        stderr_of(&recorded)
+    );
+    let asked_live = model.requests();
+
+    site.stop();
+    model.seen.lock().unwrap().clear();
+    let replayed = jurl(&home, &env("replay"), &ask);
+    assert!(!stderr_of(&replayed).contains("not frozen"), "{}", stderr_of(&replayed));
+    assert_eq!(replayed.status.code(), recorded.status.code(), "{}", stderr_of(&replayed));
+    assert_eq!(printed(&replayed), printed(&recorded));
+    assert_eq!(model.requests(), asked_live);
 }

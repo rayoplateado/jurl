@@ -11,7 +11,8 @@
 //!   address that is not in the directory is [`NotFrozen`], never a live read.
 //!
 //! Without the variable nothing here runs. The directory holds, for each address read, `<sha256(url + Accept-Language)>.json`
-//! (what the entry is) and, beside it, `<same name>.html` (or `.pdf`) with the body.
+//! (what the entry is) and, beside it, `<same name>.html` (or `.pdf`) with the body. A small file's entry is `<same name>.small`
+//! instead, so a page and a file at one address are two entries.
 
 use std::{
     collections::HashSet,
@@ -178,6 +179,13 @@ fn key_of(url: &str) -> String {
     key(url, crate::fetch::accept_language().as_deref())
 }
 
+/// The name of a small file's entry. A page and a small file may be the same address (a site's `llms.txt` is a run's start
+/// page, or a platform's endpoint is probed as a file and then read as a page), and they are read differently, so they are
+/// kept apart: a page is `<key>`, as above, and a file is `<key>.small`.
+fn small_of(url: &str) -> String {
+    format!("{}.small", key_of(url))
+}
+
 /// What a page was when it reached the extractor.
 pub(crate) struct Frozen {
     /// The address of the page as the run goes on with it: where redirects ended, and the HTML twin of a markdown page.
@@ -336,7 +344,7 @@ pub(crate) fn record_small(url: &Url, status: Option<u16>, body: Option<&str>) {
         "status": status,
         "absent": body.is_none(),
     });
-    if let Err(e) = write_entry(s, &key_of(url.as_str()), "html", meta, body.map(str::as_bytes)) {
+    if let Err(e) = write_entry(s, &small_of(url.as_str()), "html", meta, body.map(str::as_bytes)) {
         eprintln!("jurl: could not freeze {url}: {e:#}");
     }
 }
@@ -345,8 +353,7 @@ pub(crate) fn record_small(url: &Url, status: Option<u16>, body: Option<&str>) {
 /// said on stderr and remembered, so the run ends as a miss does (see [`not_frozen`]). `None` outside a replay.
 pub(crate) fn replay_small(url: &Url) -> Option<Option<String>> {
     let s = store().filter(|s| s.mode == Mode::Replay)?;
-    let key = key_of(url.as_str());
-    let found = read_meta(s, &key).filter(|m| m["kind"] == "small");
+    let found = read_meta(s, &small_of(url.as_str())).filter(|m| m["kind"] == "small");
     let Some(meta) = found else {
         eprintln!("jurl: {:#}", not_frozen(url.as_str()));
         return Some(None);
