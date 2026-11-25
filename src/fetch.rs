@@ -32,9 +32,28 @@ pub struct Page {
     pub is_markdown: bool,
     /// The rung of the read ladder the page was read on.
     pub route: Route,
+    /// The status the page was served with, and its Content-Type: what a frozen page keeps of the reply (see `frozen.rs`).
+    pub(crate) status: u16,
+    pub(crate) content_type: String,
+    /// The bytes that came, kept only while a run records its pages, so a PDF is frozen as it came and not as its decoded text.
+    pub(crate) raw: Option<Vec<u8>>,
 }
 
 impl Page {
+    /// The fields a page whose text came without a reply of its own (a render, the sidecar) has: a 200 of UTF-8 HTML. The
+    /// address, the body and the route are the caller's.
+    fn text() -> Self {
+        Page {
+            url: Url::parse("about:blank").expect("a URL"),
+            body: String::new(),
+            is_markdown: false,
+            route: Route::Direct,
+            status: 200,
+            content_type: "text/html; charset=utf-8".to_string(),
+            raw: None,
+        }
+    }
+
     /// Whether the page was read with the browser client: after a retry, or because the host was already on it.
     pub(crate) fn via_browser(&self) -> bool {
         self.route == Route::Browser
@@ -53,6 +72,16 @@ pub(crate) enum Route {
 }
 
 impl Route {
+    /// The route a name says (see [`Route::name`]); the plain client's when it says none.
+    pub(crate) fn from_name(name: &str) -> Self {
+        match name {
+            "browser" => Route::Browser,
+            "proxy" => Route::Proxy,
+            "stealth" => Route::Stealth,
+            _ => Route::Direct,
+        }
+    }
+
     /// The route's name in the usage: `direct`, `browser`, `proxy` or `stealth`.
     pub(crate) fn name(self) -> &'static str {
         match self {
@@ -76,6 +105,39 @@ impl Served {
     pub(crate) fn name(self) -> String {
         if self.rendered { format!("{}+render", self.route.name()) } else { self.route.name().to_string() }
     }
+}
+
+/// The page a run read, as a frozen directory keeps it: the bytes that came, or the text the extractor was given when no bytes
+/// came (a render, the sidecar).
+pub(crate) fn freeze(page: &Page, served: Served) -> crate::frozen::Frozen {
+    let (body, decoded) = match &page.raw {
+        Some(raw) if !served.rendered && page.route != Route::Stealth => (raw.clone(), false),
+        _ => (page.body.clone().into_bytes(), true),
+    };
+    let content_type = if decoded { "text/html; charset=utf-8".to_string() } else { page.content_type.clone() };
+    crate::frozen::Frozen {
+        url: page.url.clone(),
+        status: page.status,
+        content_type,
+        route: page.route.name().to_string(),
+        rendered: served.rendered,
+        body,
+        decoded,
+    }
+}
+
+/// The page a frozen directory gives back, and how it was served.
+pub(crate) fn thaw(frozen: crate::frozen::Frozen) -> (Page, Served) {
+    let route = Route::from_name(&frozen.route);
+    let mut page = if frozen.decoded {
+        Page { url: frozen.url, body: String::from_utf8_lossy(&frozen.body).into_owned(), ..Page::text() }
+    } else {
+        page_of(frozen.url, &frozen.content_type, &frozen.body)
+    };
+    page.route = route;
+    page.status = frozen.status;
+    page.content_type = frozen.content_type;
+    (page, Served { route, rendered: frozen.rendered })
 }
 
 /// The largest page read: a body past this is an error, not read on.
@@ -233,6 +295,16 @@ pub(crate) async fn fetch(url: &str, retry: Retry<'_>) -> Result<Page> {
     fetch_capped(url, PAGE_MAX, retry, Instant::now()).await
 }
 
+/// [`fetch`] for a page the run has read already (the start page, read again for the site's own declarations). A frozen run gives
+/// it as the extractor had it, which is the page the first read froze (a record run) or the frozen page (a replay), so the two
+/// runs ask the same of the site; any other run reads it again.
+pub(crate) async fn fetch_again(url: &Url, retry: Retry<'_>) -> Result<Page> {
+    match crate::frozen::again_page(url) {
+        Some(frozen) => Ok(thaw(frozen?).0),
+        None => fetch(url.as_str(), retry).await,
+    }
+}
+
 /// Runs `read` on a run's start URL, and once more on its `www.` alternate when the start's own host gave no answer at all (see
 /// [`www_alternate`] and [`unreached`]): what a browser does with a bare domain whose apex does not answer. The alternate is said on
 /// stderr under `-t`. The run then continues from the address `read` was given, which is the alternate's. When the alternate fails
@@ -277,20 +349,21 @@ pub(crate) fn www_alternate(url: &Url) -> Option<Url> {
 /// lookup, a refused connection, the TLS handshake) or with no reply before the request's timeout, on either client. A status, a reset,
 /// a body that stalls after its headers and the guard's refusal are not that, and nor is a failure on a host the start redirected to.
 /// `is_request` keeps out the errors of a body, which both clients report as a kind of their own.
-fn unreached(err: &anyhow::Error, start: &Url) -> bool {
-    err.chain().any(|e| {
-        if let Some(e) = e.downcast_ref::<reqwest::Error>() {
-            e.is_request()
-                && (e.is_connect() || e.is_dns() || e.is_timeout())
-                && e.url().is_some_and(|u| u.host_str() == start.host_str())
-        } else if let Some(e) = e.downcast_ref::<wreq::Error>() {
-            e.is_request()
-                && (e.is_connect() || e.is_timeout())
-                && e.uri().is_some_and(|u| u.host() == start.host_str())
-        } else {
-            false
-        }
-    })
+pub(crate) fn unreached(err: &anyhow::Error, start: &Url) -> bool {
+    crate::frozen::recorded_unreached(err)
+        || err.chain().any(|e| {
+            if let Some(e) = e.downcast_ref::<reqwest::Error>() {
+                e.is_request()
+                    && (e.is_connect() || e.is_dns() || e.is_timeout())
+                    && e.url().is_some_and(|u| u.host_str() == start.host_str())
+            } else if let Some(e) = e.downcast_ref::<wreq::Error>() {
+                e.is_request()
+                    && (e.is_connect() || e.is_timeout())
+                    && e.uri().is_some_and(|u| u.host() == start.host_str())
+            } else {
+                false
+            }
+        })
 }
 
 /// Whether a refused page is retried with a browser's fingerprint. A run opts out with `--no-browser-retry`, or with
@@ -428,7 +501,7 @@ async fn sidecar_or_error(
         && let Ok(target) = Url::parse(url)
         && let Some(body) = sidecar.read(&target, retry.reach, max, retry.timing, retry.fallback).await?
     {
-        return Ok(Page { url: target, body, is_markdown: false, route: Route::Stealth });
+        return Ok(Page { url: target, body, is_markdown: false, route: Route::Stealth, ..Page::text() });
     }
     Err(refused.error(url, via))
 }
@@ -461,6 +534,25 @@ pub(crate) async fn fetch_small(
     retry: Retry<'_>,
     now: Instant,
 ) -> Option<String> {
+    // A replay reads the file from the frozen directory and never asks the site; a recording writes what the site answered.
+    if let Some(frozen) = crate::frozen::replay_small(url) {
+        return frozen;
+    }
+    let mut seen = None;
+    let body = small_live(url, max, timeout, retry, now, &mut seen).await;
+    crate::frozen::record_small(url, seen, body.as_deref());
+    body
+}
+
+/// [`fetch_small`]'s read of the site. `seen` is the status of the last reply the site gave.
+async fn small_live(
+    url: &Url,
+    max: usize,
+    timeout: Duration,
+    retry: Retry<'_>,
+    now: Instant,
+    seen: &mut Option<u16>,
+) -> Option<String> {
     if reach::admit(url, retry.reach).is_err() {
         return small_refused(url, retry.timing);
     }
@@ -470,6 +562,7 @@ pub(crate) async fn fetch_small(
             Err(e) if e.downcast_ref::<NotPublic>().is_some() => return small_refused(url, retry.timing),
             Err(_) => return None,
         };
+        *seen = Some(res.status().as_u16());
         return small_from_browser(res, max, retry).await;
     }
     let (mut res, via_proxy) = match send_get(plain_for(retry.reach), url.as_str(), retry, &[], Some(timeout)).await {
@@ -478,6 +571,7 @@ pub(crate) async fn fetch_small(
         Err(_) => return None,
     };
     let status = res.status();
+    *seen = Some(status.as_u16());
     if gave_page(status) {
         let content_type =
             res.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
@@ -495,6 +589,7 @@ pub(crate) async fn fetch_small(
         Err(e) if e.downcast_ref::<NotPublic>().is_some() => return small_refused(url, retry.timing),
         Err(_) => return None,
     };
+    *seen = Some(res.status().as_u16());
     if gave_page(res.status()) {
         retry.learn(url, now);
     }
@@ -697,7 +792,7 @@ async fn get(client: &Client, url: &str, max: usize, retry: Retry<'_>) -> Result
         bail!("{url}: page larger than {}", size_label(max));
     };
     retry.fallback.count(via_proxy, bytes.len());
-    let mut page = to_page(final_url, &ct, &bytes);
+    let mut page = to_page(final_url, status, &ct, &bytes);
     page.route = if via_proxy { Route::Proxy } else { Route::Direct };
     // The body is read as its markdown, but the page a person reads is the HTML page it is the alternate of.
     if page.is_markdown {
@@ -739,7 +834,7 @@ async fn browser_reply(res: wreq::Response, url: &str, max: usize, retry: Retry<
         bail!("{url}: page larger than {}", size_label(max));
     };
     retry.fallback.count(false, bytes.len());
-    Ok(Reply::Page { status, page: to_page(final_url, &ct, &bytes) })
+    Ok(Reply::Page { status, page: to_page(final_url, status, &ct, &bytes) })
 }
 
 /// What both browser clients share: Chrome 149's emulation (its TLS and HTTP/2 fingerprint, headers and user agent), the
@@ -848,6 +943,9 @@ pub(crate) async fn send_get(
     headers: &[(&str, String)],
     timeout: Option<Duration>,
 ) -> Result<(Response, bool)> {
+    if crate::frozen::replaying() {
+        return Err(crate::frozen::no_network(url));
+    }
     let mut target = Url::parse(url).map_err(|e| anyhow!("{url}: {e}"))?;
     let mut via_proxy = false;
     for _ in 0..=reach::MAX_REDIRECTS {
@@ -904,6 +1002,9 @@ async fn send_browser_get(
     timeout: Option<Duration>,
     headers: &[(&str, String)],
 ) -> Result<wreq::Response> {
+    if crate::frozen::replaying() {
+        return Err(crate::frozen::no_network(url.as_str()));
+    }
     let client = browser_for(retry.reach)?;
     let mut target = url.clone();
     for _ in 0..=reach::MAX_REDIRECTS {
@@ -1065,13 +1166,22 @@ pub(crate) async fn render_allowed(url: &Url, reach: &Reach, public_only: bool, 
 
 /// The page a body makes: its text as its Content-Type's charset says, and whether it is markdown. A feed (RSS, Atom) is
 /// read as the page of its entries (see `feeds`).
-fn to_page(url: Url, content_type: &str, bytes: &[u8]) -> Page {
+fn to_page(url: Url, status: StatusCode, content_type: &str, bytes: &[u8]) -> Page {
+    let mut page = page_of(url, content_type, bytes);
+    page.status = status.as_u16();
+    page.content_type = content_type.to_string();
+    page.raw = crate::frozen::recording().then(|| bytes.to_vec());
+    page
+}
+
+/// The page a body makes (see [`to_page`]), with a 200 and no bytes kept: the page a frozen reply makes again.
+fn page_of(url: Url, content_type: &str, bytes: &[u8]) -> Page {
     let body = decode(content_type, bytes);
     if let Some(body) = crate::feeds::as_html(&body) {
-        return Page { url, body, is_markdown: false, route: Route::Direct };
+        return Page { url, body, ..Page::text() };
     }
     let is_markdown = served_markdown(content_type, &body);
-    Page { url, body, is_markdown, route: Route::Direct }
+    Page { url, body, is_markdown, ..Page::text() }
 }
 
 /// The body of `res`, or None once it is larger than `max` bytes. The Content-Length is checked first, but the bytes
@@ -1284,6 +1394,9 @@ async fn serves_html(client: &Client, retry: Retry<'_>, url: &Url) -> Option<Url
 /// counted on the wire when its process has ended. An error of such a render is scrubbed of the proxy, except a [`RenderRefused`],
 /// whose message names no proxy (see `Fallback::scrubbed`).
 pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> {
+    if crate::frozen::replaying() {
+        return Err(crate::frozen::no_network(url.as_str()));
+    }
     let meter = fallback.render_meter(url)?;
     let local: Vec<String> = meter.iter().map(Meter::url).collect();
     let proxied = !local.is_empty();
@@ -1298,7 +1411,13 @@ pub async fn render(bin: &Path, url: &Url, fallback: &Fallback) -> Result<Page> 
     // The render's own requests (its scripts, its images) are not counted in `bytes`: only the DOM it returned is. The wire
     // count (`bytes.proxy_wire`) has them.
     fallback.count(proxied, body.len());
-    Ok(Page { url: url.clone(), body, is_markdown: false, route: if proxied { Route::Proxy } else { Route::Direct } })
+    Ok(Page {
+        url: url.clone(),
+        body,
+        is_markdown: false,
+        route: if proxied { Route::Proxy } else { Route::Direct },
+        ..Page::text()
+    })
 }
 
 /// How long a render's connections may take to end after its process has (see [`render`]).

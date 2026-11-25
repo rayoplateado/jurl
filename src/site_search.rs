@@ -28,7 +28,7 @@ pub async fn candidates(start: &Url, question: &str, precise: bool, retry: Retry
     // The start page is read again here for the site's declarations, and the stealth sidecar is not asked for that second read:
     // `load` has asked it already, and its budget is for the pages a search reads.
     let plain = Retry { stealth: None, ..retry };
-    let Ok(page) = fetch::fetch(start.as_str(), plain).await else { return Vec::new() };
+    let Ok(page) = fetch::fetch_again(start, plain).await else { return Vec::new() };
     let html = Html::parse_document(&page.body);
     let mut found: Vec<(Url, String)> = Vec::new();
     let api = wp_root(&html, start)

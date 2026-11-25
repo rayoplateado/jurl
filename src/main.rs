@@ -15,6 +15,7 @@ mod feeds;
 mod fetch;
 mod follow;
 mod forms;
+mod frozen;
 mod hosts;
 mod judge;
 mod langtag;
@@ -90,10 +91,24 @@ async fn main() -> ExitCode {
             return ExitCode::from(e.exit_code() as u8);
         }
     };
-    match run(args).await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => failed(&e),
+    let done = run(args).await;
+    // A replay that was asked for an address it does not have ends as a miss, even when the run went on without that page.
+    let misses = frozen::misses();
+    if misses.is_empty() {
+        return match done {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => failed(&e),
+        };
     }
+    if let Err(e) = &done
+        && !frozen::is_not_frozen(e)
+    {
+        eprintln!("jurl: {e:#}");
+    }
+    for url in &misses {
+        eprintln!("jurl: {}", frozen::NotFrozen { url: url.clone() });
+    }
+    ExitCode::from(frozen::EXIT_NOT_FROZEN)
 }
 
 /// Says what went wrong, and returns the exit code for it.
@@ -167,6 +182,7 @@ async fn run(mut args: Args) -> Result<()> {
     if args.url == "status" {
         return account::status(&cfg, &client).await;
     }
+    frozen::init()?;
     if args.url == "mcp" {
         return mcp::serve(client).await;
     }
@@ -540,24 +556,30 @@ async fn load_page(
         &args.fallback,
         !args.with_pages,
     );
-    let (page, served) = if args.render {
-        fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;
-        let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
-        let rendered = render_or_refused(&bin, target, retry).await?;
-        t.lap("render");
-        rendered
-    } else {
-        let page = fetch::fetch(target.as_str(), retry).await?;
-        t.lap("fetch");
-        if page.via_browser() {
-            decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        let page = if start { country::reread(args, retry, target, page, t).await } else { page };
-        let served = fetch::Served { route: page.route, rendered: false };
-        (page, served)
+    // A frozen run (see `frozen.rs`) reads the page from its directory and asks the network for nothing; a recording run reads it
+    // as any run does and writes what reached the extractor, or why it did not.
+    let read = match frozen::replay_page(target) {
+        Some(frozen) => frozen.map(|frozen| {
+            let (page, served) = fetch::thaw(frozen);
+            if page.via_browser() {
+                decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            (page, served)
+        }),
+        None => fetch_page(args, cfg, target, start, retry, t).await,
+    };
+    let (page, served) = match read {
+        Ok(read) => read,
+        Err(e) => return Err(froze_error(target, e)),
     };
     decide::USAGE.pages.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let (page, served, mut ex) = read_page(args, cfg, retry, page, served, t).await?;
+    let (page, served, mut ex) = match read_page(args, cfg, retry, page, served, t).await {
+        Ok(read) => read,
+        Err(e) => return Err(froze_error(target, e)),
+    };
+    if frozen::recording() {
+        frozen::record_page(target, &fetch::freeze(&page, served));
+    }
     // --precise may answer with the page's JSON-LD values (see `extract::json_ld`), read from the HTML the page was read as.
     if args.precise && !page.is_markdown {
         extract::json_ld::add_to(&mut ex, &page.body);
@@ -632,6 +654,42 @@ async fn load_page(
         args.pages_log.record(number, &page.url, served, &ex.blocks, data);
     }
     Ok((page.url, ex, served))
+}
+
+/// The page `target`, read on the web: rendered when the run asks for it, else fetched. Also how it was served.
+async fn fetch_page(
+    args: &Args,
+    cfg: &Config,
+    target: &url::Url,
+    start: bool,
+    retry: fetch::Retry<'_>,
+    t: &mut Timer,
+) -> Result<(fetch::Page, fetch::Served)> {
+    if args.render {
+        fetch::render_allowed(target, &args.reach, args.public_only, args.render_sandboxed).await?;
+        let bin = lightpanda::ensure(cfg.get("JURL_LIGHTPANDA")).await?;
+        let rendered = render_or_refused(&bin, target, retry).await?;
+        t.lap("render");
+        Ok(rendered)
+    } else {
+        let page = fetch::fetch(target.as_str(), retry).await?;
+        t.lap("fetch");
+        if page.via_browser() {
+            decide::USAGE.browser_retry.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let page = if start { country::reread(args, retry, target, page, t).await } else { page };
+        let served = fetch::Served { route: page.route, rendered: false };
+        Ok((page, served))
+    }
+}
+
+/// `error`, the failure of the read of `target`, written down when the run records its pages (a page that fails is part of what
+/// the web gave), and handed back.
+fn froze_error(target: &url::Url, error: anyhow::Error) -> anyhow::Error {
+    if frozen::recording() {
+        frozen::record_error(target, &error, fetch::unreached(&error, target));
+    }
+    error
 }
 
 /// The longest a request to a site's platform API is waited for: it is a guess at a better way to read, not the read.
@@ -786,7 +844,7 @@ async fn read_page(
     loop {
         let (ex, placeholders) = extract_page(&page, served.rendered, t);
         let shell = is_shell(&ex);
-        if renders == 2 || !renders_after_fetch(args.render, served, shell, placeholders) {
+        if renders == 2 || frozen::replaying() || !renders_after_fetch(args.render, served, shell, placeholders) {
             return Ok((page, served, ex));
         }
         renders += 1;

@@ -68,9 +68,16 @@ pub(crate) fn is_not_found(e: &anyhow::Error) -> bool {
     not_found_in(e).is_some()
 }
 
-/// 1 when nothing was found, 2 for every failure (fetching, the API, arguments), as grep does.
+/// 1 when nothing was found, 3 for an address a frozen replay does not have (see `frozen.rs`), 2 for every other failure
+/// (fetching, the API, arguments), as grep does.
 pub(crate) fn exit_code(e: &anyhow::Error) -> u8 {
-    if is_not_found(e) { 1 } else { 2 }
+    if crate::frozen::is_not_frozen(e) {
+        crate::frozen::EXIT_NOT_FROZEN
+    } else if is_not_found(e) {
+        1
+    } else {
+        2
+    }
 }
 
 /// The pages a run has loaded, for `--with-pages` (see `Args::pages_log`). Pages load side by side under `--follow`, so each
