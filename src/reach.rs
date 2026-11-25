@@ -222,6 +222,14 @@ pub(crate) async fn decide(start: &Url, required: bool) -> Result<Reach> {
 /// Sets `args`' reach from its start URL, and the public-only flag from `JURL_PUBLIC_ONLY`, once per run, after `prepare` has
 /// given the URL its scheme. A start that is not a URL keeps the private reach, and the run fails where it always has.
 pub(crate) async fn set_reach(args: &mut crate::cli::Args) -> Result<()> {
+    // A frozen replay asks the network for nothing, so it has no address to check: no DNS lookup, no refusal of a start that is not
+    // public (the frozen page of a site that is gone is read all the same).
+    if crate::frozen::replaying() {
+        args.public_only = false;
+        args.render_sandboxed = false;
+        args.reach = Reach::Private;
+        return Ok(());
+    }
     let env = |name: &str| std::env::var(name).ok();
     args.render_sandboxed = sandboxed_by_env(env("JURL_RENDER_SANDBOXED").as_deref());
     set_reach_with(args, required_by_env(env("JURL_PUBLIC_ONLY").as_deref()), proxy_configured(env)).await
