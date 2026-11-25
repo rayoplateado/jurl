@@ -31,12 +31,18 @@ struct Site {
 
 impl Site {
     fn start(routes: Vec<(&'static str, Route)>) -> Site {
+        Site::start_negotiating(routes, Vec::new())
+    }
+
+    /// A site that answers the paths of `markdown` to a request that asks for markdown first, as a site that serves agents does.
+    fn start_negotiating(routes: Vec<(&'static str, Route)>, markdown: Vec<(&'static str, Route)>) -> Site {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let addr = listener.local_addr().expect("its address");
         let hits = Arc::new(Mutex::new(Vec::new()));
         let stopping = Arc::new(AtomicBool::new(false));
         // `{base}` in a body is the site's own address, which is not known until it is bound.
         let base = format!("http://{addr}");
+        let markdown: BTreeMap<&str, Route> = markdown.into_iter().collect();
         let routes: BTreeMap<&str, Route> = routes
             .into_iter()
             .map(|(path, (status, content_type, body))| {
@@ -59,7 +65,9 @@ impl Site {
                 let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
                 log.lock().unwrap().push(path.clone());
                 // A route that ends in `*` answers every path that starts as it does.
-                let found = routes.get(path.as_str()).or_else(|| {
+                let wants_markdown = head.lines().any(|l| l.to_ascii_lowercase().starts_with("accept: text/markdown"));
+                let negotiated = markdown.get(path.as_str()).filter(|_| wants_markdown);
+                let found = negotiated.or(routes.get(path.as_str())).or_else(|| {
                     routes
                         .iter()
                         .find(|(r, _)| r.strip_suffix('*').is_some_and(|prefix| path.starts_with(prefix)))
@@ -244,10 +252,13 @@ fn entries_of(dir: &Path, kind: &str) -> BTreeMap<String, Value> {
         if path.extension().is_some_and(|e| e == "json") {
             let meta: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             if meta["kind"] == kind {
-                assert!(
-                    found.insert(meta["url"].as_str().unwrap().to_string(), meta).is_none(),
-                    "one entry of a kind per address"
-                );
+                let url = meta["url"].as_str().unwrap();
+                // A page is read in more than one way: the plain fetch is by its address, the others by `address#variant`.
+                let at = match meta["variant"].as_str() {
+                    Some(v) if v != "fetch" => format!("{url}#{v}"),
+                    _ => url.to_string(),
+                };
+                assert!(found.insert(at, meta).is_none(), "one entry of a kind and variant per address");
             }
         }
     }
@@ -389,12 +400,14 @@ fn a_rendered_page_is_replayed_as_the_dom_it_was_and_is_not_rendered_again() {
         1,
         "the page is rendered once when it is recorded"
     );
-    let meta = &entries(&frozen)[&url];
-    assert_eq!(meta["rendered"], true);
+    let kept = entries(&frozen);
+    assert_eq!(kept[&url]["rendered"], false, "the page as the site sent it is frozen too");
+    assert_eq!(std::fs::read_to_string(frozen.join(format!("{}.html", key(&url)))).unwrap(), shell);
+    assert_eq!(kept[&format!("{url}#render1")]["rendered"], true);
     assert_eq!(
-        std::fs::read_to_string(frozen.join(format!("{}.html", key(&url)))).unwrap(),
+        std::fs::read_to_string(frozen.join(format!("{}.render1.html", key(&url)))).unwrap(),
         PHONE_PAGE,
-        "what is frozen is the DOM the extractor read, not the shell the site sent"
+        "what is frozen of the render is the DOM the extractor read, not the shell the site sent"
     );
 
     site.stop();
@@ -420,10 +433,10 @@ fn a_pdf_is_frozen_as_the_bytes_that_came_and_replayed_the_same() {
     let recorded = jurl(&home, &env("record"), &ask);
     let pages = stdout_of(&recorded)["pages"].clone();
     assert!(!pages.as_array().unwrap().is_empty(), "the page was read: {}", stderr_of(&recorded));
-    let meta = &entries(&frozen)[&url];
+    let meta = &entries(&frozen)[&format!("{url}#fetch-html")];
     assert_eq!(meta["content_type"], "application/pdf");
     assert_eq!(
-        std::fs::read(frozen.join(format!("{}.pdf", key(&url)))).unwrap(),
+        std::fs::read(frozen.join(format!("{}.pages.pdf", key(&url)))).unwrap(),
         pdf,
         "the bytes are frozen as they came, not as the text a decoder made of them"
     );
@@ -523,18 +536,23 @@ fn an_address_that_is_not_frozen_is_its_own_error_and_never_a_live_read() {
 /// Freezes `url` by hand: its entry, and `body` beside it when there is one.
 fn freeze_by_hand(dir: &Path, url: &str, mut meta: Value, body: Option<&str>) {
     std::fs::create_dir_all(dir).unwrap();
-    let name = key(url);
     meta["kind"] = json!("page");
     meta["url"] = json!(url);
-    if let Some(body) = body {
-        std::fs::write(dir.join(format!("{name}.html")), body).unwrap();
-        meta["body_file"] = json!(format!("{name}.html"));
+    if body.is_some() {
         meta["final_url"] = json!(url);
         meta["status"] = json!(200);
         meta["content_type"] = json!("text/html");
         meta["route"] = json!("direct");
     }
-    std::fs::write(dir.join(format!("{name}.json")), meta.to_string()).unwrap();
+    // The page as asked for markdown first (`<key>`) and as asked for HTML (`<key>.pages`, which `--with-pages` reads).
+    for name in [key(url), format!("{}.pages", key(url))] {
+        let mut meta = meta.clone();
+        if let Some(body) = body {
+            std::fs::write(dir.join(format!("{name}.html")), body).unwrap();
+            meta["body_file"] = json!(format!("{name}.html"));
+        }
+        std::fs::write(dir.join(format!("{name}.json")), meta.to_string()).unwrap();
+    }
 }
 
 #[test]
@@ -673,4 +691,117 @@ fn a_precise_follow_with_the_sites_search_and_a_page_that_fails_is_replayed_the_
     assert_eq!(replayed.status.code(), recorded.status.code(), "{}", stderr_of(&replayed));
     assert_eq!(printed(&replayed), printed(&recorded));
     assert_eq!(model.requests(), asked_live);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_same_address_read_as_markdown_as_html_and_rendered_is_three_entries_and_each_read_gets_its_own() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = scratch("variants");
+    let frozen = home.join("frozen");
+    let model = Model::start("Phone us on");
+    let page = |phone: &str, how: &str| {
+        format!(
+            "<html><head><title>Acme</title></head><body><h1>Acme</h1><p>Phone us on {phone} between nine and six, as the {how} page says.</p></body></html>"
+        )
+    };
+    let mut site = Site::start_negotiating(
+        vec![("/", html(&page("555-0100", "HTML")))],
+        vec![(
+            "/",
+            (
+                200,
+                "text/markdown",
+                b"# Acme\n\nPhone us on 555-0111 between nine and six, as the markdown page says.\n".to_vec(),
+            ),
+        )],
+    );
+    let log = home.join("renders.log");
+    let bin = home.join("lightpanda");
+    let dom = format!(
+        r#"{{"http_status":200,"headers":[],"content":"{}"}}"#,
+        page("555-0199", "rendered").replace('"', "\\\"")
+    );
+    std::fs::write(&bin, format!("#!/bin/sh\necho run >> '{}'\nprintf '%s' '{dom}'\n", log.display())).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let url = format!("{}/", site.base());
+    let env = |dir: &Path, mode: &str| {
+        [
+            ("JURL_JEV_URL", model.url.clone()),
+            ("JURL_LIGHTPANDA", bin.to_str().unwrap().to_string()),
+            ("JURL_FROZEN_DIR", dir.to_str().unwrap().to_string()),
+            ("JURL_FROZEN_MODE", mode.to_string()),
+        ]
+    };
+    let run = |dir: &Path, mode: &str, extra: &[&str]| {
+        let vars = env(dir, mode);
+        let vars: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let mut args = vec!["--json", "-q", "what is the phone number?"];
+        args.extend_from_slice(extra);
+        args.push(&url);
+        jurl(&home, &vars, &args)
+    };
+
+    // The same address, read three ways into one directory: asking for markdown first, for HTML (`--with-pages`), and rendered.
+    let as_markdown = run(&frozen, "record", &[]);
+    let as_html = run(&frozen, "record", &["--with-pages"]);
+    let rendered = run(&frozen, "record", &["--render"]);
+    for (out, phone) in [(&as_markdown, "555-0111"), (&as_html, "555-0100"), (&rendered, "555-0199")] {
+        assert!(out.status.success(), "{}", stderr_of(out));
+        assert!(stdout_of(out).to_string().contains(phone), "{phone}: {}", stdout_of(out));
+    }
+    let kept = entries(&frozen);
+    assert_eq!(
+        kept.keys().cloned().collect::<Vec<_>>(),
+        [url.clone(), format!("{url}#fetch-html"), format!("{url}#render0")]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        "one entry for each way the address was read"
+    );
+    let renders = std::fs::read_to_string(&log).unwrap().lines().count();
+
+    // Replayed from that one directory, each read gets its own page, and nothing is read or rendered.
+    site.stop();
+    for (recorded, extra) in [(&as_markdown, vec![]), (&as_html, vec!["--with-pages"]), (&rendered, vec!["--render"])] {
+        let replayed = run(&frozen, "replay", &extra);
+        assert!(replayed.status.success(), "{extra:?}: {}", stderr_of(&replayed));
+        assert_eq!(printed(&replayed), printed(recorded), "{extra:?}");
+    }
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), renders, "a replay renders nothing");
+
+    // A directory that has one of the ways has no other: the read that needs the missing one is not frozen, and gets no other page.
+    let only = home.join("only-markdown");
+    let site = Site::start_negotiating(
+        vec![("/", html(&page("555-0100", "HTML")))],
+        vec![(
+            "/",
+            (
+                200,
+                "text/markdown",
+                b"# Acme\n\nPhone us on 555-0111 between nine and six, as the markdown page says.\n".to_vec(),
+            ),
+        )],
+    );
+    let url = format!("{}/", site.base());
+    let run = |mode: &str, extra: &[&str]| {
+        let vars = env(&only, mode);
+        let vars: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let mut args = vec!["--json", "-q", "what is the phone number?"];
+        args.extend_from_slice(extra);
+        args.push(&url);
+        jurl(&home, &vars, &args)
+    };
+    assert!(run("record", &[]).status.success());
+    for (extra, said) in [(vec!["--with-pages"], "as HTML"), (vec!["--render"], "rendered")] {
+        let replayed = run("replay", &extra);
+        assert_eq!(replayed.status.code(), Some(3), "{extra:?}: {}", stderr_of(&replayed));
+        assert!(stderr_of(&replayed).contains(&format!("not frozen: {url} ({said}")), "{}", stderr_of(&replayed));
+        assert!(
+            !String::from_utf8_lossy(&replayed.stdout).contains("555-"),
+            "no page, from any other variant: {}",
+            String::from_utf8_lossy(&replayed.stdout)
+        );
+    }
 }

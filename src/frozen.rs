@@ -2,16 +2,19 @@
 //!
 //! `JURL_FROZEN_DIR` names a directory and `JURL_FROZEN_MODE` says what the run does with it:
 //!
-//! - `record`: the run reads the web as it always does, and writes each page as it reaches the extractor (after the proxy, the
-//!   stealth sidecar and the render, so a rendered page is its DOM), and each small file it asks for (robots.txt, llms.txt, a
-//!   sitemap, a site's search description) with the ones the site does not have. A PDF, or any body that is not text, is kept as
-//!   the bytes that came.
-//! - `replay`: the run reads from the directory and never asks the network. It renders nothing (a page that was rendered when it
-//!   was recorded is given as its DOM, as it was), and it skips the checks of a public address (`reach`, the DNS lookup). An
-//!   address that is not in the directory is [`NotFrozen`], never a live read.
+//! - `record`: the run reads the web as it always does, and writes down each way it read an address: the page as the site sent it
+//!   (after the browser retry, the proxy and the stealth sidecar), and what each render of it gave (a DOM), apart, so the same
+//!   address read with and without a render, or asked for as markdown and as HTML (`--with-pages`), is not one entry that the
+//!   last read overwrites. It writes each small file it asks for (robots.txt, llms.txt, a sitemap, a site's search description)
+//!   with the ones the site does not have. A PDF, or any body that is not text, is kept as the bytes that came.
+//! - `replay`: the run reads from the directory and never asks the network. It makes the same choices as the recorded read did
+//!   (it renders when the page is an app shell, or `--render` says so), but a render is the recording's render, never Lightpanda:
+//!   the read gets the variant it asks for, and one the directory does not have is [`NotFrozen`], never another variant. It skips
+//!   the checks of a public address (`reach`, the DNS lookup).
 //!
 //! Without the variable nothing here runs. The directory holds, for each address read, `<sha256(url + Accept-Language)>.json`
-//! (what the entry is) and, beside it, `<same name>.html` (or `.pdf`) with the body. A small file's entry is `<same name>.small`
+//! (what the entry is) and, beside it, `<same name>.html` (or `.pdf`) with the body: the page asked for markdown first. The page
+//! asked for HTML is `<same name>.pages.*`, and a render `<same name>.render<n>.*`. A small file's entry is `<same name>.small`
 //! instead, so a page and a file at one address are two entries.
 
 use std::{
@@ -152,6 +155,15 @@ pub(crate) fn recorded_unreached(err: &anyhow::Error) -> bool {
 /// The error of a read the replay cannot make: the address is said as not frozen, and remembered, so a run that goes on without
 /// the page (a `--follow` skips the page it cannot read) still ends with the exit code of a miss.
 pub(crate) fn not_frozen(url: &str) -> anyhow::Error {
+    not_frozen_as(url, None)
+}
+
+/// [`not_frozen`] for a variant of the page: the address is said with what was asked of it.
+fn not_frozen_as(url: &str, variant: Option<Variant>) -> anyhow::Error {
+    let url = &match variant.and_then(Variant::label) {
+        Some(label) => format!("{url} ({label})"),
+        None => url.to_string(),
+    };
     if let Some(s) = store() {
         let mut missed = lock(&s.missed);
         if !missed.iter().any(|u| u == url) {
@@ -184,6 +196,52 @@ fn key_of(url: &str) -> String {
 /// kept apart: a page is `<key>`, as above, and a file is `<key>.small`.
 fn small_of(url: &str) -> String {
     format!("{}.small", key_of(url))
+}
+
+/// Which read of an address an entry is. The same address is read in more than one way, and each way is its own entry, so a replay
+/// gives the one the read asked for and never another: the page as the site sends it (asked for markdown first, or, under
+/// `--with-pages`, for HTML only), and what the render of it gave, once for each time a read renders (a render that the host
+/// refuses gives the proxy's page, and that may be rendered once more).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Variant {
+    Fetch { markdown: bool },
+    Render { attempt: usize },
+}
+
+impl Variant {
+    /// The entry's name: `<key>` for the page asked for markdown first, `<key>.pages` for the one asked as HTML,
+    /// `<key>.render<n>` for a render.
+    fn stem(self, url: &str) -> String {
+        let key = key_of(url);
+        match self {
+            Variant::Fetch { markdown: true } => key,
+            Variant::Fetch { markdown: false } => format!("{key}.pages"),
+            Variant::Render { attempt } => format!("{key}.render{attempt}"),
+        }
+    }
+
+    fn name(self) -> String {
+        match self {
+            Variant::Fetch { markdown: true } => "fetch".to_string(),
+            Variant::Fetch { markdown: false } => "fetch-html".to_string(),
+            Variant::Render { attempt } => format!("render{attempt}"),
+        }
+    }
+
+    /// What is said beside the address of a variant that is not frozen.
+    fn label(self) -> Option<String> {
+        match self {
+            Variant::Fetch { markdown: true } => None,
+            Variant::Fetch { markdown: false } => Some("as HTML, for --with-pages".to_string()),
+            Variant::Render { .. } => Some("rendered".to_string()),
+        }
+    }
+}
+
+/// What a frozen entry says of a read: the page, or that the run chose not to render (a render step that was declined).
+pub(crate) enum Outcome {
+    Page(Frozen),
+    Declined,
 }
 
 /// What a page was when it reached the extractor.
@@ -261,12 +319,13 @@ fn read_body(s: &Store, meta: &Value) -> Result<Vec<u8>> {
     fs::read(s.dir.join(file)).with_context(|| format!("reading the frozen body {file}"))
 }
 
-/// Records the page a load read, as `url` asked for it: what reached the extractor, with `served`'s route and render. A failure to
-/// write is said on stderr and the run goes on.
-pub(crate) fn record_page(url: &Url, page: &Frozen) {
+/// Records the page that `variant` of `url` gave: what reached the extractor, with the route it was read on and whether it is a
+/// render. A failure to write is said on stderr and the run goes on.
+pub(crate) fn record_page(url: &Url, variant: Variant, page: &Frozen) {
     let Some(s) = store().filter(|s| s.mode == Mode::Record) else { return };
     let meta = json!({
         "kind": "page",
+        "variant": variant.name(),
         "url": url.as_str(),
         "accept_language": crate::fetch::accept_language(),
         "final_url": page.url.as_str(),
@@ -276,53 +335,71 @@ pub(crate) fn record_page(url: &Url, page: &Frozen) {
         "rendered": page.rendered,
         "decoded": page.decoded,
     });
-    if let Err(e) = write_entry(s, &key_of(url.as_str()), extension(&page.content_type), meta, Some(&page.body)) {
+    if let Err(e) = write_entry(s, &variant.stem(url.as_str()), extension(&page.content_type), meta, Some(&page.body)) {
         eprintln!("jurl: could not freeze {url}: {e:#}");
     }
 }
 
-/// Records that the read of `url` failed, with its message, so a replay fails the same way.
-pub(crate) fn record_error(url: &Url, error: &anyhow::Error, unreached: bool) {
+/// Records that `variant` of `url` failed, with its message, so a replay fails the same way. `unreached` is whether the site gave
+/// no answer at all.
+pub(crate) fn record_error(url: &Url, variant: Variant, error: &anyhow::Error, unreached: bool) {
+    let meta = json!({ "error": format!("{error:#}"), "unreached": unreached });
+    record_plain(url, variant, meta);
+}
+
+/// Records that a render of `url` was not made and the read went on with the page as it was.
+pub(crate) fn record_declined(url: &Url, variant: Variant) {
+    record_plain(url, variant, json!({ "declined": true }));
+}
+
+fn record_plain(url: &Url, variant: Variant, mut meta: Value) {
     let Some(s) = store().filter(|s| s.mode == Mode::Record) else { return };
-    let meta = json!({
-        "kind": "page",
-        "url": url.as_str(),
-        "accept_language": crate::fetch::accept_language(),
-        "error": format!("{error:#}"),
-        "unreached": unreached,
-    });
-    if let Err(e) = write_entry(s, &key_of(url.as_str()), "html", meta, None) {
-        eprintln!("jurl: could not freeze the failure of {url}: {e:#}");
+    meta["kind"] = json!("page");
+    meta["variant"] = json!(variant.name());
+    meta["url"] = json!(url.as_str());
+    meta["accept_language"] = json!(crate::fetch::accept_language());
+    if let Err(e) = write_entry(s, &variant.stem(url.as_str()), "html", meta, None) {
+        eprintln!("jurl: could not freeze {url}: {e:#}");
     }
 }
 
-/// The frozen page for `url`, in a replay: the page, the error its read ended with, or [`NotFrozen`] when the directory has no
-/// entry for it. `None` when the run is not a replay.
-pub(crate) fn replay_page(url: &Url) -> Option<Result<Frozen>> {
+/// What a replay gives for `variant` of `url`: the page, that the render was declined, the error the read ended with, or
+/// [`NotFrozen`] when the directory has no entry for that variant (never the entry of another one). `None` when the run is not a
+/// replay.
+pub(crate) fn replay(url: &Url, variant: Variant) -> Option<Result<Outcome>> {
     let s = store().filter(|s| s.mode == Mode::Replay)?;
-    Some(read_page(s, url))
+    Some(read_page(s, url, variant))
 }
 
 /// The page `url` was frozen as in this run, when this run has written it (a record run), and the frozen page when it replays: a
 /// second read of a page in one run is the page the extractor had, not another read of the web.
-pub(crate) fn again_page(url: &Url) -> Option<Result<Frozen>> {
+pub(crate) fn again_page(url: &Url, markdown: bool) -> Option<Result<Frozen>> {
     let s = store()?;
-    if s.mode == Mode::Record && !lock(&s.written).contains(&key_of(url.as_str())) {
+    let variant = Variant::Fetch { markdown };
+    if s.mode == Mode::Record && !lock(&s.written).contains(&variant.stem(url.as_str())) {
         return None;
     }
-    Some(read_page(s, url))
+    Some(read_page(s, url, variant).and_then(|outcome| match outcome {
+        Outcome::Page(page) => Ok(page),
+        Outcome::Declined => Err(not_frozen_as(url.as_str(), Some(variant))),
+    }))
 }
 
-fn read_page(s: &Store, url: &Url) -> Result<Frozen> {
-    let key = key_of(url.as_str());
-    let Some(meta) = read_meta(s, &key).filter(|m| m["kind"] == "page") else { return Err(not_frozen(url.as_str())) };
+fn read_page(s: &Store, url: &Url, variant: Variant) -> Result<Outcome> {
+    let stem = variant.stem(url.as_str());
+    let Some(meta) = read_meta(s, &stem).filter(|m| m["kind"] == "page") else {
+        return Err(not_frozen_as(url.as_str(), Some(variant)));
+    };
     if let Some(message) = meta["error"].as_str() {
         return Err(
             Recorded { message: message.to_string(), unreached: meta["unreached"].as_bool().unwrap_or(false) }.into()
         );
     }
+    if meta["declined"].as_bool().unwrap_or(false) {
+        return Ok(Outcome::Declined);
+    }
     let text = |name: &str| meta[name].as_str().unwrap_or_default().to_string();
-    Ok(Frozen {
+    Ok(Outcome::Page(Frozen {
         url: Url::parse(&text("final_url")).with_context(|| format!("the frozen entry of {url} names no address"))?,
         status: meta["status"].as_u64().and_then(|n| u16::try_from(n).ok()).unwrap_or(200),
         content_type: text("content_type"),
@@ -330,7 +407,7 @@ fn read_page(s: &Store, url: &Url) -> Result<Frozen> {
         rendered: meta["rendered"].as_bool().unwrap_or(false),
         decoded: meta["decoded"].as_bool().unwrap_or(false),
         body: read_body(s, &meta)?,
-    })
+    }))
 }
 
 /// Records a small file (robots.txt, a sitemap, a search description): its text, or that the site has none, with the status the

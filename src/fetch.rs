@@ -299,7 +299,7 @@ pub(crate) async fn fetch(url: &str, retry: Retry<'_>) -> Result<Page> {
 /// it as the extractor had it, which is the page the first read froze (a record run) or the frozen page (a replay), so the two
 /// runs ask the same of the site; any other run reads it again.
 pub(crate) async fn fetch_again(url: &Url, retry: Retry<'_>) -> Result<Page> {
-    match crate::frozen::again_page(url) {
+    match crate::frozen::again_page(url, retry.markdown) {
         Some(frozen) => Ok(thaw(frozen?).0),
         None => fetch(url.as_str(), retry).await,
     }
