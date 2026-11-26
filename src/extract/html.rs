@@ -2480,7 +2480,8 @@ mod tests {
                     <div class="card_session_2__body"><h3 class="card_session_2__title">{title}</h3>
                         <div class="card_session_2__date"><span class="el-desktop"><span>Desde:</span> {from}<br><span>Hasta:</span> {to}</span>
                             <span class="el-mobile"><span>Desde:</span> 24/10/2026<br><span>Hasta:</span> 31/01/2027</span></div>
-                        <div class="card_session_2__venue">{venue}</div></div>{pricing}</a>"#
+                        <div class="card_session_2__venue">{venue}</div>
+                        <div class="valoracion-palmas" role="img" aria-label="Valoración: 4,6 de 5"><div class="palmas"><svg viewBox="0 0 541 101"></svg></div></div></div>{pricing}</a>"#
             )
         };
         let page = format!(

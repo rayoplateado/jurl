@@ -19,6 +19,8 @@ const MIN_MEMBERS: usize = 3;
 const RECORD_MIN_PIECES: usize = 3;
 /// The most nodes two shapes may differ by and still be one list: a badge or a rating that only some cards have.
 const NEAR_NODES: usize = 2;
+/// ...and by at most this share of the smaller shape's nodes: one in this many.
+const NEAR_SHARE: usize = 3;
 /// A line is prose when it has this many words and ends as a sentence does, or when it is this long.
 const PROSE_WORDS: usize = 7;
 const PROSE_CHARS: usize = 90;
@@ -56,8 +58,8 @@ impl Lists {
 /// The blocks of one container, with each card list among its children merged: every member of a list becomes one card
 /// block, or, for a card that holds prose, its blocks all take one record number. A list is merged as a whole or not at all,
 /// so cards and plain text are never mixed in one list: a member that is not card-shaped (see `card_shaped`) keeps the whole
-/// list as it was. A member whose shape is near that of a list's (a card with a badge the others lack) joins it, and a
-/// member alone that has the shape of a list found elsewhere on the page does too.
+/// list as it was. The members of a group of fewer than three join a list, though: one of this container whose shape is
+/// near theirs (a card with a badge the others lack), or one of the same shape found earlier on the page (a grid's last row).
 pub fn merge_cards(blocks: Vec<Block>, members: &[Member], lists: &mut Lists) -> Vec<Block> {
     // Members that differ only in how many paragraphs (or other plain parts) they hold are one list. A member that is a row
     // of cells (it holds a run of containers of one shape, as a grid's row does) is no card: its cells are.
@@ -75,23 +77,28 @@ pub fn merge_cards(blocks: Vec<Block>, members: &[Member], lists: &mut Lists) ->
     let mut made: Vec<(String, Tier)> = Vec::new();
     let mut rest: Vec<&Member> = Vec::new();
     for (shape, list) in groups {
+        let whole = list.len() >= MIN_MEMBERS;
         match list_tier(&blocks, &list) {
-            Some(tier) if list.len() >= MIN_MEMBERS => {
+            Some(tier) if whole => {
                 made.push((shape, tier));
                 taken.extend(list.into_iter().map(|m| (m, tier)));
             }
+            // A list of three or more that is not cards as a whole stays as it was: none of its members joins another list.
+            _ if whole => {}
             _ => rest.extend(list),
         }
     }
-    // What is left joins a list its shape is near, here or on an earlier part of the page.
+    // The members of a group too small to be a list join a list of the same shape found earlier on the page (a grid's last
+    // row), or one of this container whose shape is near theirs (a card with a badge the others lack).
     for m in rest {
-        let tier = made
+        let key = m.shape.replace('+', "");
+        let tier = lists
+            .known
             .iter()
-            .map(|(shape, tier)| (shape.as_str(), *tier))
-            .chain(lists.known.iter().map(|(shape, tier)| (shape.as_str(), *tier)))
-            .find(|(shape, tier)| near(&m.shape, shape) && fits(*tier, &blocks[m.start..m.end]))
-            .map(|(_, tier)| tier);
-        if let Some(tier) = tier {
+            .find(|(shape, _)| *shape == key)
+            .or_else(|| made.iter().find(|(shape, _)| near(&key, shape)))
+            .map(|(_, tier)| *tier);
+        if let Some(tier) = tier.filter(|tier| fits(*tier, &blocks[m.start..m.end])) {
             taken.push((m, tier));
         }
     }
@@ -221,9 +228,11 @@ fn is_row(shape: &str) -> bool {
     Node::parse(shape).kids.iter().any(|k| k.run && !k.kids.is_empty())
 }
 
-/// Whether two shapes (see `html::shape`) differ by at most `NEAR_NODES` nodes: the same card with a part that some cards lack.
+/// Whether two shapes (see `html::shape`) differ by little: by at most `NEAR_NODES` nodes, and by at most a `NEAR_SHARE`rd
+/// of the smaller one. The same card with a part that some cards lack is near; a layout `div` is near no card.
 fn near(a: &str, b: &str) -> bool {
-    a == b || (Node::parse(a).distance(&Node::parse(b)).is_some_and(|d| d <= NEAR_NODES))
+    let (a, b) = (Node::parse(a), Node::parse(b));
+    a.distance(&b).is_some_and(|d| d == 0 || (d <= NEAR_NODES && d * NEAR_SHARE <= a.size().min(b.size())))
 }
 
 /// A shape as a tree: its tag, whether it stands for a run of siblings (`div+`), and its children.
@@ -670,5 +679,38 @@ mod tests {
         let (blocks, members) = lists_of(&[("div(div+)", row()), ("div(div+)", row()), ("div(div+)", row())]);
         assert!(!card_shaped(&blocks[members[0].start..members[0].end]));
         assert!(!record_shaped(&blocks[members[0].start..members[0].end]));
+    }
+
+    #[test]
+    fn a_list_that_is_not_cards_as_a_whole_does_not_leave_some_of_its_members_numbered() {
+        // Five members of one shape and two are not cards (a code block in one, nothing but a sentence in the other): no
+        // member is numbered, and none is absorbed by the shape of another list.
+        let mut odd = card("Odd one");
+        odd.push(piece(Kind::Code, "npm install"));
+        let (blocks, members) = lists_of(&[
+            ("div(div)", card("Carmen Lillo")),
+            ("div(div)", odd),
+            ("div(div)", card("9louro")),
+            ("div(div)", vec![piece(Kind::Para, "A sentence that is all the card has, and no field at all.")]),
+            ("div(div)", card("Baile Europa")),
+        ]);
+        let mut lists = Lists::default();
+        lists.known.push(("div(div)".into(), Tier::Card));
+        assert!(merge_cards(blocks, &members, &mut lists).iter().all(|b| b.record.is_none()));
+    }
+
+    #[test]
+    fn a_layout_part_is_not_near_a_card_and_a_shape_known_is_matched_exactly() {
+        assert!(!near("div", "div(div,div)"));
+        assert!(!near("div(div)", "div(div,div,div)"));
+        assert!(!near("div(div(h3,p),div)", "div(div(h3,p),div,div,div,div)"));
+        let (blocks, members) =
+            lists_of(&[("div(div,div)", card("Cócteles")), ("div(div,div)", card("Vinos del mundo"))]);
+        let mut lists = Lists::default();
+        lists.known.push(("div(div)".into(), Tier::Card));
+        assert!(
+            merge_cards(blocks, &members, &mut lists).iter().all(|b| b.record.is_none()),
+            "near is not the same shape"
+        );
     }
 }
