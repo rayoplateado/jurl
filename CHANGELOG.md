@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A product's availability and condition reach `--with-pages` items.** The JSON-LD of a product page says `"availability": "https://schema.org/InStock"`, which jurl dropped as the vocabulary's word, so a sold-out product read like one in stock. It now gives the term (`offers.availability: InStock`, `OutOfStock`, `PreOrder`, `BackOrder`…, and `offers.itemCondition: NewCondition`), and a thing too long for its block (many photos, a long description, reviews) no longer loses its offer, `sku`, `gtin13` or `mpn` to them.
+
 ## 0.2.2
 
 Better sizes from shop pages, and fixes for jurl cloud's answers.

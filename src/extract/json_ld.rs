@@ -3,6 +3,8 @@
 //! that names its source, so the quote shows the field: "Event VivaTech 2027 (JSON-LD): startDate 2027-06-16, endDate 2027-06-19."
 //! The photos of what a page offers are not text: `product_images` gives them to the image candidates instead.
 
+use std::collections::HashMap;
+
 use scraper::{Html, Selector};
 use serde_json::{Map, Value};
 use url::Url;
@@ -225,24 +227,36 @@ fn thing(map: &Map<String, Value>, in_list: bool, out: &mut Vec<String>) {
     }
 }
 
-/// A thing's text: `head`, then each of its values with its path, as long as the text stays within MAX_ITEM_CHARS. A value said
-/// again under a path of the same last name (an offer's url that is the event's) is said once. None when it says no value.
+/// A thing's text: `head`, then each of its values with its path, in the order they come, as long as the text stays within
+/// MAX_ITEM_CHARS. A value said again under a path of the same last name (an offer's url that is the event's) is said once.
+/// The first value is always said (the name). When the rest do not fit, each path is said once before any is said twice, the
+/// shortest first: a long text or a gallery of links must not push out the short facts after it, a product's availability and
+/// price among them. None when it says no value.
 fn said(head: &str, values: &[(String, String)]) -> Option<String> {
     let mut seen = std::collections::HashSet::new();
-    let mut text = head.to_string();
-    let mut said = 0;
+    let mut times: HashMap<&str, usize> = HashMap::new();
+    let mut parts: Vec<(String, usize)> = Vec::new();
     for (path, value) in values {
-        if !seen.insert((path.rsplit('.').next().unwrap_or(path), value.as_str())) {
-            continue;
+        if seen.insert((path.rsplit('.').next().unwrap_or(path), value.as_str())) {
+            let again = times.entry(path).or_default();
+            parts.push((format!("{path}: {value}"), *again));
+            *again += 1;
         }
-        let part = format!("{}{path}: {value}", if said > 0 { "; " } else { "" });
-        if said > 0 && text.chars().count() + part.chars().count() > MAX_ITEM_CHARS {
-            continue;
-        }
-        text.push_str(&part);
-        said += 1;
     }
-    (said > 0).then_some(text)
+    let mut used = head.chars().count() + parts.first()?.0.chars().count();
+    let mut kept = vec![false; parts.len()];
+    kept[0] = true;
+    let mut by_priority: Vec<usize> = (1..parts.len()).collect();
+    by_priority.sort_by_key(|&n| (parts[n].1, parts[n].0.chars().count()));
+    for n in by_priority {
+        let length = "; ".len() + parts[n].0.chars().count();
+        if used + length <= MAX_ITEM_CHARS {
+            used += length;
+            kept[n] = true;
+        }
+    }
+    let said: Vec<&str> = parts.iter().zip(&kept).filter(|(_, k)| **k).map(|((part, _), _)| part.as_str()).collect();
+    Some(format!("{head}{}", said.join("; ")))
 }
 
 /// The text of one thing of a page's own data, as a JSON-LD thing's (see `items`): "Thing (data): name: …; prices.price: 5.75".
@@ -275,16 +289,28 @@ fn site_path(value: &str) -> bool {
         && (rest.trim_end_matches('/').contains('/') || rest.rsplit('/').next().is_some_and(|last| last.contains('.')))
 }
 
+/// A schema.org term ("https://schema.org/InStock", or the same with `http://`): the vocabulary's word for a value the page
+/// chose from it, a product's availability or condition, an event's status. It is given as the term alone ("InStock"), not the
+/// address, so a page that writes it either way says the same. None for any other text, and for a schema.org address that
+/// is no one term (the vocabulary's root, a path).
+fn schema_term(s: &str) -> Option<&str> {
+    let term = ["https://schema.org/", "http://schema.org/"].iter().find_map(|p| s.strip_prefix(p))?;
+    (!term.is_empty() && !term.contains(['/', '#', '?'])).then_some(term)
+}
+
 /// Every value under `path`, with its path: a text with its spaces collapsed and cut to MAX_VALUE_CHARS (a link kept whole),
 /// a number or a yes/no as written, each value of a list, and an object's values under their own paths. A schema.org term
-/// ("https://schema.org/InStock") is the vocabulary's word, not the page's, and a language-tagged value (`@value`) is its
-/// object's.
+/// is given as the term (see [`schema_term`]), and a language-tagged value (`@value`) is its object's.
 fn flatten(path: &str, value: &Value, out: &mut Vec<(String, String)>) {
     match value {
         Value::String(s) => {
             let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
             let link = s.starts_with("https://") || s.starts_with("http://");
-            if s.is_empty() || ["https://schema.org/", "http://schema.org/"].iter().any(|p| s.starts_with(p)) {
+            if let Some(term) = schema_term(&s) {
+                out.push((path.to_string(), term.to_string()));
+                return;
+            }
+            if s.is_empty() || s.starts_with("https://schema.org/") || s.starts_with("http://schema.org/") {
                 return;
             }
             let s = if link || s.chars().count() <= MAX_VALUE_CHARS {
@@ -559,7 +585,7 @@ mod tests {
             item_texts(html),
             [
                 "ItemList (JSON-LD): numberOfItems: 3",
-                "MusicEvent (JSON-LD): name: Lola Índigo; description: Gira 2027.; endDate: 2027-03-14; location.address.addressLocality: Madrid; location.name: WiZink Center; offers.price: 25; offers.priceCurrency: EUR; startDate: 2027-03-14",
+                "MusicEvent (JSON-LD): name: Lola Índigo; description: Gira 2027.; endDate: 2027-03-14; location.address.addressLocality: Madrid; location.name: WiZink Center; offers.availability: InStock; offers.price: 25; offers.priceCurrency: EUR; startDate: 2027-03-14",
                 "JobPosting (JSON-LD): baseSalary.value.minValue: 1500; title: Cook",
                 "ListItem (JSON-LD): name: Tosca; position: 3; url: https://venue.example.test/tosca"
             ]
@@ -620,5 +646,118 @@ mod tests {
             data_thing(thing.as_object().unwrap(), &base).unwrap(),
             "Thing (data): name: Oil; image: https://shop.test/img/1.jpg; per: /kg; root: /; url: https://shop.test/oils/p/1"
         );
+    }
+
+    // A shop's Product page, as Shopify-style themes write it: the offer's availability and condition are schema.org terms.
+    const IN_STOCK: &str = r#"<script type="application/ld+json">{"@context":"http://schema.org/","@type":"Product","name":"Camiseta Básica","sku":"CB-0042","gtin13":"8431234567890","mpn":"CB42","brand":{"@type":"Brand","name":"Hilo"},
+        "offers":[{"@type":"Offer","price":"19.95","priceCurrency":"EUR","availability":"http://schema.org/InStock","itemCondition":"http://schema.org/NewCondition","url":"https://tienda.example.test/camiseta"}]}</script>"#;
+
+    #[test]
+    fn an_offer_in_stock_keeps_its_availability_and_condition_without_the_vocabularys_address() {
+        assert_eq!(
+            item_texts(IN_STOCK),
+            [
+                "Product (JSON-LD): name: Camiseta Básica; brand.name: Hilo; gtin13: 8431234567890; mpn: CB42; offers.availability: InStock; offers.itemCondition: NewCondition; offers.price: 19.95; offers.priceCurrency: EUR; offers.url: https://tienda.example.test/camiseta; sku: CB-0042"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_page_that_writes_the_term_with_https_says_the_same_as_one_that_writes_it_with_http() {
+        let https = IN_STOCK.replace("http://schema.org/", "https://schema.org/");
+        assert_eq!(item_texts(&https), item_texts(IN_STOCK));
+    }
+
+    #[test]
+    fn an_offer_out_of_stock_says_so() {
+        // The book's page at Casa del Libro, trimmed: a Book whose workExample is the Product that is offered (its offer writes `Price`).
+        let html = r#"<script type="application/ld+json">{"@context":"http://schema.org/","@type":"Book","name":"FESTIVAL DE LOS PEQUEÑOS ARTISTAS (ADHESIVOS)",
+            "workExample":[{"@type":["Product","Book"],"isbn":"9788498251425","bookFormat":"https://schema.org/Paperback","numberOfPages":16,
+            "offers":[{"@type":"Offer","Price":"1.42","priceValidUntil":"2027-11-26","priceCurrency":"EUR","eligibleRegion":{"@type":"Country","name":"ES"},
+            "availability":"http://schema.org/OutOfStock","itemCondition":"http://schema.org/NewCondition","category":"purchase"}]}]}</script>"#;
+        let text = &item_texts(html)[0];
+        for said in ["workExample.offers.availability: OutOfStock", "workExample.offers.itemCondition: NewCondition"] {
+            assert!(text.contains(said), "{said} is not in {text}");
+        }
+    }
+
+    #[test]
+    fn an_aggregate_offer_keeps_its_range_and_the_availability_of_each_offer_it_lists() {
+        let html = r#"<script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"Botas de montaña","sku":"BM-7","mpn":"M7","gtin8":"12345670",
+            "offers":{"@type":"AggregateOffer","lowPrice":"89.00","highPrice":"119.00","priceCurrency":"EUR","offerCount":3,
+              "offers":[{"@type":"Offer","price":"89.00","priceCurrency":"EUR","availability":"https://schema.org/InStock"},
+                        {"@type":"Offer","price":"119.00","priceCurrency":"EUR","availability":"https://schema.org/PreOrder"},
+                        {"@type":"Offer","price":"99.00","priceCurrency":"EUR","availability":"https://schema.org/BackOrder"}]}}</script>"#;
+        assert_eq!(
+            item_texts(html),
+            [
+                "Product (JSON-LD): name: Botas de montaña; gtin8: 12345670; mpn: M7; offers.highPrice: 119.00; offers.lowPrice: 89.00; offers.offerCount: 3; offers.offers.availability: InStock; offers.offers.price: 89.00; offers.offers.priceCurrency: EUR; offers.offers.availability: PreOrder; offers.offers.price: 119.00; offers.offers.availability: BackOrder; offers.offers.price: 99.00; sku: BM-7"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_offer_with_shipping_keeps_the_rate_and_its_currency() {
+        // Google's merchant-listing markup: shippingDetails with a shippingRate and a destination.
+        let html = r#"<script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"Lámpara","gtin14":"00012345600012",
+            "offers":{"@type":"Offer","price":"34.50","priceCurrency":"EUR","availability":"https://schema.org/LimitedAvailability","itemCondition":"https://schema.org/RefurbishedCondition",
+              "shippingDetails":{"@type":"OfferShippingDetails","shippingRate":{"@type":"MonetaryAmount","value":4.95,"currency":"EUR"},
+                "shippingDestination":{"@type":"DefinedRegion","addressCountry":"ES"}}}}</script>"#;
+        let text = &item_texts(html)[0];
+        for said in [
+            "offers.availability: LimitedAvailability",
+            "offers.itemCondition: RefurbishedCondition",
+            "offers.shippingDetails.shippingRate.value: 4.95",
+            "offers.shippingDetails.shippingRate.currency: EUR",
+            "gtin14: 00012345600012",
+        ] {
+            assert!(text.contains(said), "{said} is not in {text}");
+        }
+    }
+
+    #[test]
+    fn a_long_description_and_a_gallery_do_not_push_the_offer_out_of_the_product() {
+        // A shop's product with twelve photos, a long description and eight reviews: the price, availability and ids still come.
+        let photos: Vec<String> = (0..12)
+            .map(|n| format!("https://cdn.shop.example.test/products/zapatillas-trail-negras-{n}.jpg?v=1700000000"))
+            .collect();
+        let reviews: Vec<String> = (0..8)
+            .map(|n| {
+                format!(
+                    r#"{{"@type":"Review","author":{{"@type":"Person","name":"Cliente {n}"}},"reviewBody":"{}"}}"#,
+                    "Muy bien. ".repeat(40)
+                )
+            })
+            .collect();
+        let html = format!(
+            r#"<script type="application/ld+json">{{"@context":"https://schema.org/","@type":"Product","name":"Zapatillas","description":"{}","image":{},"sku":"ZAP-001","mpn":"Z1","review":[{}],
+            "offers":{{"@type":"Offer","price":"59.90","priceCurrency":"EUR","availability":"https://schema.org/OutOfStock"}}}}</script>"#,
+            "d ".repeat(150),
+            serde_json::to_string(&photos).unwrap(),
+            reviews.join(",")
+        );
+        let product = &item_texts(&html)[0];
+        assert!(product.chars().count() <= MAX_ITEM_CHARS);
+        for said in [
+            "offers.availability: OutOfStock",
+            "offers.price: 59.90",
+            "offers.priceCurrency: EUR",
+            "sku: ZAP-001",
+            "mpn: Z1",
+            "description: d d",
+        ] {
+            assert!(product.contains(said), "{said} is not in {product}");
+        }
+        // The gallery gives way, not every photo at once: the first photos stay.
+        assert!(
+            product.contains("zapatillas-trail-negras-0.jpg") && !product.contains("zapatillas-trail-negras-11.jpg")
+        );
+    }
+
+    #[test]
+    fn a_schema_address_that_is_no_term_and_a_page_without_json_ld_give_nothing_new() {
+        let root = r#"<script type="application/ld+json">{"@type":"Product","name":"X","sameAs":"https://schema.org/","additionalType":"https://schema.org/a/b"}</script>"#;
+        assert_eq!(item_texts(root), ["Product (JSON-LD): name: X"]);
+        assert!(items("<html><body><h1>Sin datos</h1></body></html>", 0).is_empty());
     }
 }
