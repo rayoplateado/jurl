@@ -60,6 +60,7 @@ fn extract_doc(doc: &Html, body: &str, page: &Url) -> Extracted {
             list: None,
             href: None,
             record: None,
+            card: false,
             page: None,
             links: Vec::new(),
             image: None,
@@ -185,6 +186,7 @@ fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool, page: &Url, base
         segments,
         list: None,
         lists: 0,
+        cards: cards::Lists::default(),
         depth: 0,
         page: page.clone(),
         base: base.clone(),
@@ -439,6 +441,8 @@ struct Walker<'a> {
     /// The list being walked, and how many lists came before it.
     list: Option<usize>,
     lists: usize,
+    /// What the card rule has seen of the page so far (see `cards`).
+    cards: cards::Lists,
     /// How many containers the walk is inside of, capped at `MAX_WALK_DEPTH`.
     depth: usize,
     /// The page's own address: a link to it is no link of a block's.
@@ -475,6 +479,7 @@ impl<'a> Walker<'a> {
             list,
             href,
             record: None,
+            card: false,
             page: None,
             links,
             image: None,
@@ -521,7 +526,8 @@ impl<'a> Walker<'a> {
         }
         self.depth += 1;
         let mut members = Vec::new();
-        for child in el.children() {
+        let field_links = field_links(el, self.skip_header);
+        for (n, child) in el.children().enumerate() {
             match child.value() {
                 Node::Text(t) => self.buf.push_str(t),
                 Node::Element(_) => {
@@ -538,7 +544,12 @@ impl<'a> Walker<'a> {
                     if permalink(child) {
                         continue;
                     }
-                    if INLINE.contains(&child.value().name()) && !has_block_desc(child) {
+                    if let Some(shape) = field_links.get(&n) {
+                        self.flush();
+                        let start = self.blocks.len();
+                        self.field_link(child);
+                        members.push(Member { shape: shape.clone(), start, end: self.blocks.len() });
+                    } else if INLINE.contains(&child.value().name()) && !has_block_desc(child) {
                         self.buf.push_str(&inline_text(child));
                         let links = self.links_of(child);
                         add_links(&mut self.buf_links, links);
@@ -556,7 +567,35 @@ impl<'a> Walker<'a> {
         }
         self.depth -= 1;
         if !members.is_empty() {
-            self.blocks = cards::merge_cards(std::mem::take(&mut self.blocks), &members);
+            self.blocks = cards::merge_cards(std::mem::take(&mut self.blocks), &members, &mut self.cards);
+        }
+    }
+
+    /// A link that is a card made of inline fields (`<a><span>12 Oct</span><span>Jazz night</span><span>18€</span></a>`): each
+    /// field is a piece of its own, as a card of blocks has them, and the link's address is the first piece's.
+    fn field_link(&mut self, a: ElementRef<'a>) {
+        let start = self.blocks.len();
+        for child in a.children() {
+            match child.value() {
+                Node::Text(t) => self.buf.push_str(t),
+                Node::Element(_) => {
+                    let child = ElementRef::wrap(child).unwrap();
+                    if skipped(child, self.skip_header, true) || permalink(child) {
+                        continue;
+                    }
+                    self.flush();
+                    let links = self.links_of(child);
+                    self.push(Kind::Para, None, None, collapse(&inline_text(child)), links);
+                }
+                _ => {}
+            }
+        }
+        self.flush();
+        if self.blocks.len() > start {
+            let links = self.links_of(a);
+            let first = &mut self.blocks[start].links;
+            let rest = std::mem::take(first);
+            add_links(first, links.into_iter().take(1).chain(rest));
         }
     }
 
@@ -840,17 +879,56 @@ fn shape(el: ElementRef, depth: usize) -> String {
     if depth == 0 {
         return out;
     }
-    let kids: Vec<String> = el
+    // A run of siblings of one shape (a card's paragraphs, whatever their number) is one part of the card, marked `+`.
+    let mut kids: Vec<(String, bool)> = Vec::new();
+    for c in el
         .children()
         .filter_map(ElementRef::wrap)
         .filter(|c| !skipped_tag(*c) && !(INLINE.contains(&c.value().name()) && !has_block_desc(*c)))
         .take(SHAPE_CHILDREN)
-        .map(|c| shape(c, depth - 1))
-        .collect();
+    {
+        let kid = shape(c, depth - 1);
+        match kids.last_mut() {
+            Some((last, run)) if *last == kid => *run = true,
+            _ => kids.push((kid, false)),
+        }
+    }
     if !kids.is_empty() {
+        let kids: Vec<String> = kids.into_iter().map(|(k, run)| if run { k + "+" } else { k }).collect();
         out += &format!("({})", kids.join(","));
     }
     out
+}
+
+/// The fewest links of one shape that are cards of inline fields: two of anything are a pair.
+const MIN_FIELD_LINKS: usize = 3;
+
+/// The children of `el` that are links made of inline fields, by their place among its children, each with its shape: a link
+/// with no block in it whose text is held by at least two elements of its own (`<a><span>12 Oct</span><span>Jazz night</span>
+/// <span>18€</span></a>`), when at least `MIN_FIELD_LINKS` of them have the same tags. Read as inline text they would run
+/// into one paragraph, each card into the next; as a card list, each field is a piece.
+fn field_links(el: ElementRef, skip_header: bool) -> HashMap<usize, String> {
+    let mut shapes: HashMap<String, Vec<usize>> = HashMap::new();
+    for (n, child) in el.children().enumerate() {
+        let Some(a) = ElementRef::wrap(child).filter(|a| a.value().name() == "a") else { continue };
+        if has_block_desc(a) || skipped(a, skip_header, true) {
+            continue;
+        }
+        let fields: Vec<&str> = a
+            .children()
+            .filter_map(ElementRef::wrap)
+            .filter(|c| !skipped(*c, skip_header, true) && !permalink(*c) && !collapse(&inline_text(*c)).is_empty())
+            .map(|c| c.value().name())
+            .collect();
+        if fields.len() >= 2 {
+            shapes.entry(format!("a({})", fields.join(","))).or_default().push(n);
+        }
+    }
+    shapes
+        .into_iter()
+        .filter(|(_, links)| links.len() >= MIN_FIELD_LINKS)
+        .flat_map(|(shape, links)| links.into_iter().map(move |n| (n, shape.clone())))
+        .collect()
 }
 
 /// Whether the walk reads a child as a container (a `div`, an `article`, a link around a card) rather than as a block of its
@@ -2329,5 +2407,282 @@ mod tests {
         let ex = html(r#"<body><main><h2><a href="www.site.test">Site news</a></h2></main></body>"#, &base());
         assert_eq!(ex.blocks[0].href.as_deref(), Some("https://www.site.test/"));
         assert_eq!(ex.blocks[0].links, ["https://www.site.test/"]);
+    }
+
+    /// The records of a page in order: the text of each (its blocks one to a line) and the addresses it links to.
+    fn records_of(page: &str) -> Vec<(String, Vec<String>)> {
+        let ex = html(page, &base());
+        let mut records: Vec<(usize, String, Vec<String>)> = Vec::new();
+        for b in ex.blocks.iter().filter(|b| b.record.is_some()) {
+            let n = b.record.unwrap();
+            match records.last_mut() {
+                Some((last, text, links)) if *last == n => {
+                    *text = format!("{text}\n{}", b.text);
+                    add_links(links, b.links.clone());
+                }
+                _ => records.push((n, b.text.clone(), b.links.clone())),
+            }
+        }
+        let numbers: Vec<usize> = records.iter().map(|r| r.0).collect();
+        assert_eq!(numbers, (1..=records.len()).collect::<Vec<_>>(), "records are numbered from 1, one run each");
+        records.into_iter().map(|(_, text, links)| (text, links)).collect()
+    }
+
+    #[test]
+    fn a_slider_of_links_with_the_price_before_the_title_is_numbered_card_by_card() {
+        // Cut from teatromadrid.com: each card is a link around a poster, a discount and price, the title and the venue. Two
+        // of the venues and titles are over 25 characters, which the card rule used to take for prose.
+        let card = |slug: &str, discount: &str, price: &str, title: &str, venue: &str| {
+            format!(
+                r#"<a target="_blank" class="swiper-slide" href="https://teatromadrid.com/espectaculo/{slug}"
+                    onclick="triggerEventSelectShow(this)" data-item_name="{title}" data-price="29">
+                    <div class="im"><img width="390" height="560" src="https://teatromadrid.com/{slug}.jpg" alt="{title}" /></div>
+                    <div class="p"><div class="o">{discount}</div>
+                        <div class="d"><span class="regular"><span class="from">Desde </span><br><span class="price">{price}</span></span></div></div>
+                    <h3 class="h">{title}</h3>
+                    <div class="v">{venue}</div></a>"#
+            )
+        };
+        let page = format!(
+            r#"<body><main><h2>Promociones</h2><div class="posters"><div class="swiper-wrapper">{}{}{}{}</div></div></main></body>"#,
+            card("el-rey-leon", "-20€", "64,58€", "El Rey León", "Teatro Lope de Vega"),
+            card("los-miserables-el-musical", "-10%", "36,94 €", "Los miserables, el musical", "Teatro Apolo Madrid"),
+            card("dracula", "-25%", "28 €", "Drácula, una comedia terrorífica", "Teatro Calderón. Rooftop Lírico"),
+            card("circlassica", "-25%", "28 €", "Circlassica 2026-2027: Extraordinarios", "IFEMA - Feria de Madrid"),
+        );
+        let records = records_of(&page);
+        assert_eq!(records.len(), 4, "{records:?}");
+        let want = [
+            ("El Rey León", "64,58€", "Teatro Lope de Vega", "el-rey-leon"),
+            ("Los miserables, el musical", "36,94 €", "Teatro Apolo Madrid", "los-miserables-el-musical"),
+            ("Drácula, una comedia terrorífica", "28 €", "Teatro Calderón. Rooftop Lírico", "dracula"),
+            ("Circlassica 2026-2027: Extraordinarios", "28 €", "IFEMA - Feria de Madrid", "circlassica"),
+        ];
+        for ((text, links), (title, price, venue, slug)) in records.iter().zip(want) {
+            let (t, p, v) = (text.find(title), text.find(price), text.find(venue));
+            assert!(t.is_some() && p.is_some() && v.is_some() && p < t && t < v, "{text:?}");
+            assert_eq!(links, &[format!("https://teatromadrid.com/espectaculo/{slug}")], "{text:?}");
+            assert!(want.iter().filter(|w| text.contains(w.0)).count() == 1, "one card's text only: {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_card_list_with_long_dates_a_venue_and_a_price_is_one_card_each_even_when_one_has_no_price() {
+        // Cut from teatromadrid.com/cartelera: the date is written out twice (desktop and mobile), the venue is long, and a
+        // show whose sale has not begun has no price block, so its shape is the others' without one part.
+        let card = |slug: &str, title: &str, from: &str, to: &str, venue: &str, price: Option<&str>| {
+            let pricing = price
+                .map(|p| format!(r#"<div class="card_session_2__pricing"><div class="card_session_2__promo"><span class="card_session_2__promo__sale">{p}</span></div></div>"#))
+                .unwrap_or_default();
+            format!(
+                r#"<a class="card_session_2" href="https://teatromadrid.com/espectaculo/{slug}" target="_blank" data-item_id="1">
+                    <div class="card_session_2__poster"><img src="https://teatromadrid.com/{slug}.jpg" alt="{title}"></div>
+                    <div class="card_session_2__body"><h3 class="card_session_2__title">{title}</h3>
+                        <div class="card_session_2__date"><span class="el-desktop"><span>Desde:</span> {from}<br><span>Hasta:</span> {to}</span>
+                            <span class="el-mobile"><span>Desde:</span> 24/10/2026<br><span>Hasta:</span> 31/01/2027</span></div>
+                        <div class="card_session_2__venue">{venue}</div></div>{pricing}</a>"#
+            )
+        };
+        let page = format!(
+            r#"<body><main><div class="list">{}{}{}{}</div></main></body>"#,
+            card(
+                "dracula",
+                "Drácula, una comedia terrorífica",
+                "24 de octubre de 2026",
+                "31 de enero de 2027",
+                "Teatro Calderón. Rooftop Lírico",
+                Some("21 €")
+            ),
+            card(
+                "las-barbaras",
+                "Las Bárbaras",
+                "28 de enero de 2027",
+                "14 de marzo de 2027",
+                "Teatro Infanta Isabel",
+                Some("17,25€")
+            ),
+            card(
+                "juan-sanguino",
+                "Juan Sanguino - Delirios de España",
+                "2 de abril de 2027",
+                "3 de abril de 2027",
+                "Teatro Alcázar",
+                None
+            ),
+            card(
+                "mi-reno",
+                "Mi reno de peluche",
+                "28 de enero de 2027",
+                "14 de marzo de 2027",
+                "Teatro Infanta Isabel",
+                Some("12 €")
+            ),
+        );
+        let records = records_of(&page);
+        assert_eq!(records.len(), 4, "{records:?}");
+        assert!(records[0].0.contains("21 €") && records[0].0.contains("Rooftop Lírico"));
+        assert!(records[1].0.contains("17,25€") && !records[1].0.contains("21 €"));
+        assert!(records[2].0.contains("Juan Sanguino") && !records[2].0.contains('€'), "{:?}", records[2]);
+        assert!(records[3].0.contains("12 €") && records[3].1 == ["https://teatromadrid.com/espectaculo/mi-reno"]);
+    }
+
+    #[test]
+    fn a_listing_whose_cards_hold_descriptions_numbers_all_the_blocks_of_a_card() {
+        // Cut from grupomarquina.es: a date, the title, one to three paragraphs of description (their number varies from
+        // show to show), a link and a button. A card is too long to be one block, so its blocks are kept and share a number.
+        let card = |slug: &str, date: &str, title: &str, paragraphs: &[&str]| {
+            let text: String = paragraphs.iter().map(|p| format!("<p>{p}</p>")).collect();
+            format!(
+                r#"<div class="row movie-tabs"><div class="col-md-2"><a href="/espectaculos/{slug}"><img src="/{slug}.jpg"></a></div>
+                <div class="col-md-10"><span style="float:right"><i class="material-icons">date_range</i> {date}<br/><strong>Teatro Marquina</strong></span>
+                <span class="title">Musical </span><h3>{title}</h3><br/>{text}
+                <p><a href="/espectaculos/{slug}" class="arrow-button">+ información</a></p>
+                <div class="row"><div class="col-md-9"><i class="material-icons">access_time</i> 110 minutos</div>
+                <div class="col-md-3"><a href="https://entradas.test/{slug}" class="btn"><i class="material-icons">credit_card</i><span><b>Comprar entradas</b></span></a></div></div></div></div>"#
+            )
+        };
+        let page = format!(
+            r#"<body><main><div id="todos">{}{}{}</div></main></body>"#,
+            card(
+                "la-cena",
+                "04/11/2026 - 10/01/2027",
+                "LA CENA DE LOS IDIOTAS - EL MUSICAL",
+                &[
+                    "Cada semana, un grupo de amigos organiza una cena privada con una regla infame.",
+                    "Ritmo imparable, humor afilado y un musical que convierte la crueldad en carcajada.",
+                ]
+            ),
+            card(
+                "turismo-rural",
+                "09/10/2026 - 27/12/2026",
+                "TURISMO RURAL",
+                &["Un matrimonio llega en plena noche a una casa de turismo rural."]
+            ),
+            card(
+                "yunez",
+                "26/09/2026 - 13/12/2026",
+                "YUNEZ CHAIB EN DIRECTO",
+                &[
+                    "Prepárate para reír sin parar. Durante una hora, Yunez Chaib transforma lo cotidiano.",
+                    "No es un monólogo cualquiera: es una experiencia cercana, dinámica y diferente.",
+                    "Un plan perfecto en Madrid: buen humor, complicidad y la garantía de salir con una sonrisa.",
+                ]
+            ),
+        );
+        let records = records_of(&page);
+        assert_eq!(records.len(), 3, "{records:?}");
+        for ((text, links), (date, title, slug)) in records.iter().zip([
+            ("04/11/2026", "LA CENA DE LOS IDIOTAS", "la-cena"),
+            ("09/10/2026", "TURISMO RURAL", "turismo-rural"),
+            ("26/09/2026", "YUNEZ CHAIB", "yunez"),
+        ]) {
+            assert!(text.find(date) < text.find(title), "the card's date comes before its title: {text:?}");
+            assert!(text.contains("Comprar entradas") && text.contains("110 minutos"), "{text:?}");
+            assert!(links.iter().any(|l| l.ends_with(slug)), "{links:?}");
+            assert_eq!(
+                ["04/11/2026", "09/10/2026", "26/09/2026"].iter().filter(|d| text.contains(*d)).count(),
+                1,
+                "{text:?}"
+            );
+        }
+        // The pieces are blocks of their own, judged as any block is: the card's button is no candidate by being short.
+        let ex = html(&page, &base());
+        let button = ex.blocks.iter().find(|b| b.text.contains("Comprar entradas")).unwrap();
+        assert!(!button.card);
+    }
+
+    #[test]
+    fn links_made_of_inline_fields_are_one_card_each() {
+        // Each card is a link around three spans: read as inline text they ran into one paragraph, "12 OctNoche de jazz18€".
+        let page = r#"<body><main><h2>Agenda</h2><div class="list">
+            <a class="ev" href="/e/1"><span class="date">12 Oct</span><span class="title">Noche de jazz</span><span class="price">18€</span></a>
+            <a class="ev" href="/e/2"><span class="date">13 Oct</span><span class="title">Orquesta de cámara</span><span class="price">25€</span></a>
+            <a class="ev" href="/e/3"><span class="date">14 Oct</span><span class="title">Rock en familia</span><span class="price">12€</span></a>
+            </div></main></body>"#;
+        let records = records_of(page);
+        let texts: Vec<_> = records.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["12 Oct\nNoche de jazz\n18€", "13 Oct\nOrquesta de cámara\n25€", "14 Oct\nRock en familia\n12€"]
+        );
+        assert_eq!(records[1].1, ["https://example.com/e/2"]);
+    }
+
+    #[test]
+    fn one_inline_link_with_fields_in_a_paragraph_stays_in_it() {
+        let page = r#"<body><main><div>See the <a href="/x"><span>full</span><span>list</span></a> for dates, or the
+            <a href="/y"><span>terms</span><span>page</span></a> for the rules of the draw.</div></main></body>"#;
+        let ex = html(page, &base());
+        assert_eq!(ex.blocks.len(), 1, "{:?}", ex.blocks);
+        assert!(ex.blocks[0].record.is_none());
+    }
+
+    fn course(name: &str, n: usize) -> String {
+        format!(
+            r#"<div class="col-md-4"><div class="card"><div class="card-body"><h5>{name}</h5><p>Desde {n} Oct</p><p>{n}0€</p><a href="/c/{n}">Reservar</a></div></div></div>"#
+        )
+    }
+
+    #[test]
+    fn the_last_row_of_a_grid_with_one_or_two_cards_is_read_as_cards_too() {
+        let row = |names: &[&str], first: usize| {
+            let cells: String = names.iter().enumerate().map(|(i, n)| course(n, first + i)).collect();
+            format!(r#"<div class="row">{cells}</div>"#)
+        };
+        let page = format!(
+            r#"<body><main><div class="container">{}{}{}</div></main></body>"#,
+            row(&["Cocina italiana", "Cocina japonesa", "Pastelería básica"], 12),
+            row(&["Panadería", "Cocina vegana", "Tapas y pinchos"], 18),
+            row(&["Cócteles", "Vinos del mundo"], 24),
+        );
+        let records = records_of(&page);
+        assert_eq!(records.len(), 8, "{records:?}");
+        assert_eq!(records[6].0, "Cócteles\nDesde 24 Oct\n240€\nReservar");
+        assert_eq!(records[7].1, ["https://example.com/c/25"]);
+    }
+
+    #[test]
+    fn a_row_of_cards_is_not_one_more_card() {
+        // Three rows of three short cards: nine records, not three rows holding three each.
+        let cell = |n: usize| format!(r#"<div class="cell"><h3>Plan {n}</h3><p>${n}0</p></div>"#);
+        let row =
+            |first: usize| format!(r#"<div class="row">{}{}{}</div>"#, cell(first), cell(first + 1), cell(first + 2));
+        let page = format!(r#"<body><main><div class="grid">{}{}{}</div></main></body>"#, row(1), row(4), row(7));
+        let records = records_of(&page);
+        assert_eq!(records.len(), 9, "{records:?}");
+        assert_eq!(records[4].0, "Plan 5\n$50");
+    }
+
+    #[test]
+    fn rows_of_two_cards_are_not_read_as_one_card_per_row() {
+        let cell = |n: usize| format!(r#"<div class="cell"><h3>Plan {n}</h3><p>${n}0</p></div>"#);
+        let row = |first: usize| format!(r#"<div class="row">{}{}</div>"#, cell(first), cell(first + 1));
+        let page = format!(r#"<body><main><div class="grid">{}{}{}</div></main></body>"#, row(1), row(3), row(5));
+        let ex = html(&page, &base());
+        assert!(ex.blocks.iter().all(|b| !b.text.contains("Plan 1\n$10\nPlan 2")), "{:?}", ex.blocks);
+        assert!(ex.blocks.iter().all(|b| b.record.is_none() || b.text.matches("Plan").count() == 1), "{:?}", ex.blocks);
+    }
+
+    #[test]
+    fn a_featured_card_with_a_block_the_others_lack_is_in_the_list() {
+        // The promoted and featured cards carry a badge in a block of its own: they are cards of the same list, not a list of two.
+        let card = |name: &str, venue: &str, badge: &str| {
+            let badge = if badge.is_empty() { String::new() } else { format!(r#"<div class="badge">{badge}</div>"#) };
+            format!(
+                r#"<div class="item"><div class="im"><img src="/x.jpg"></div>{badge}<h3>{name}</h3><p>{venue}</p><p>20€</p></div>"#
+            )
+        };
+        let page = format!(
+            r#"<body><main><div class="list">{}{}{}{}{}</div></main></body>"#,
+            card("La función", "Teatro Amaya", ""),
+            card("El Rey León", "Teatro Lope", "-20%"),
+            card("Wicked", "Teatro Alcalá", ""),
+            card("Los miserables", "Teatro Apolo", "Destacado"),
+            card("Cabaret", "Teatro Ibercaja", ""),
+        );
+        let records = records_of(&page);
+        assert_eq!(records.len(), 5, "{records:?}");
+        assert!(records[1].0.contains("-20%") && records[1].0.contains("El Rey León"));
+        assert!(records[3].0.contains("Destacado") && records[3].0.contains("Los miserables"));
     }
 }
