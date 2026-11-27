@@ -2807,4 +2807,69 @@ mod tests {
         assert_eq!(blocks[1].2, "28 NOV\nLuces de Navidad\nConcierto\nDesde 15 €");
         assert!(blocks.iter().all(|b| b.1 && b.0.is_some()));
     }
+
+    #[test]
+    fn the_cards_of_a_listing_s_tabs_are_numbered_like_the_cards_of_its_first_tab() {
+        // Cut from grupomarquina.es: the first tab holds every show (a list of cards with descriptions), and each of the others
+        // (Teatro, Musical, Comedia) holds the one or two of its kind, so none of them is a list of three on its own.
+        let card = |slug: &str, date: &str, title: &str, paragraphs: &[&str]| {
+            let text: String = paragraphs.iter().map(|p| format!("<p>{p}</p>")).collect();
+            format!(
+                r#"<div class="row movie-tabs"><div class="col-md-2"><a href="/espectaculos/{slug}"><img src="/{slug}.jpg"></a></div>
+                <div class="col-md-10"><span style="float:right"><i class="material-icons">date_range</i> {date}<br/><strong>Teatro Marquina</strong></span>
+                <h3>{title}</h3><br/>{text}
+                <p><a href="/espectaculos/{slug}" class="arrow-button">+ info</a></p>
+                <div class="row"><div class="col-md-9"><i class="material-icons">access_time</i> 110 minutos</div>
+                <div class="col-md-3"><a href="https://entradas.test/{slug}" class="btn"><i class="material-icons">credit_card</i><span><b>Comprar entradas</b></span></a></div></div></div></div>"#
+            )
+        };
+        let a = card(
+            "la-cena",
+            "04/11/2026 - 10/01/2027",
+            "LA CENA DE LOS IDIOTAS",
+            &[
+                "Cada semana, un grupo de amigos organiza una cena privada con una regla infame.",
+                "Ritmo imparable, humor afilado y un musical que convierte la crueldad en carcajada.",
+            ],
+        );
+        let b = card(
+            "turismo-rural",
+            "09/10/2026 - 27/12/2026",
+            "TURISMO RURAL",
+            &["Un matrimonio llega en plena noche a una casa de turismo rural."],
+        );
+        let c = card(
+            "la-hora",
+            "01/09/2025 - 31/12/2026",
+            "LA HORA Y MEDIA",
+            &["¡Una risa, otra risa, y más risas y más risas y más risas!"],
+        );
+        let d = card(
+            "wiz",
+            "26/09/2026 - 13/12/2026",
+            "EL MULTIVERSO DE WIZ PROBLEMA",
+            &[
+                "¿Te adentras en el multiverso de Wiz Problema?",
+                "Una comedia perpetrada por el archiconocido Tik Toker con un millón de seguidores.",
+            ],
+        );
+        let page = format!(
+            r#"<body><main><div class="tabs"><div id="todos">{a}{b}{c}{d}</div>
+            <div id="musical">{a}</div><div id="comedia">{b}{c}</div><div id="monologo">{d}</div></div></main></body>"#
+        );
+        let records = records_of(&page);
+        assert_eq!(records.len(), 8, "{records:?}");
+        let titles = ["LA CENA", "TURISMO", "LA HORA", "WIZ", "LA CENA", "TURISMO", "LA HORA", "WIZ"];
+        for ((text, links), title) in records.iter().zip(titles) {
+            assert!(text.contains(title) && text.contains("Comprar entradas"), "{text:?}");
+            assert!(links.len() >= 2, "{links:?}");
+        }
+    }
+
+    #[test]
+    fn a_lone_card_of_a_shape_that_is_no_list_is_not_numbered() {
+        let page = r#"<body><main><div><div class="row"><div class="col"><h3>LA CENA</h3><p>Un matrimonio llega en plena noche a una casa de turismo rural.</p>
+            <p><a href="/x">+ info</a></p></div></div></div></main></body>"#;
+        assert!(html(page, &base()).blocks.iter().all(|b| b.record.is_none()));
+    }
 }

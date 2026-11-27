@@ -98,15 +98,16 @@ pub fn merge_cards(
         }
     }
     // The members of a group too small to be a list join a list of this container whose shape is near theirs (a card with a
-    // badge the others lack), or one of the same shape found earlier on the page (a grid's last row).
+    // badge the others lack), or one of the same shape found earlier on the page (a grid's last row, a tab's card).
     for m in rest {
+        // A card of blocks of its own is a record wherever it is on the page once a list of them has been found (a listing's
+        // tabs each hold one or two of the cards of the first); a card read as one block needs the grid of its list as well.
         let known = lists
             .known
             .iter()
-            .find(|(of, held, shape, tier)| {
-                *of == grid
-                    && *held == container
-                    && *shape == if *tier == Tier::Card { m.shape.clone() } else { loose(&m.shape) }
+            .find(|(of, held, shape, tier)| match tier {
+                Tier::Record => *shape == loose(&m.shape),
+                Tier::Card => *of == grid && *held == container && *shape == m.shape,
             })
             .map(|(_, _, _, tier)| *tier);
         let tier = known.or_else(|| made.iter().find(|(shape, _)| near(&m.shape, shape)).map(|(_, tier)| *tier));
@@ -115,7 +116,9 @@ pub fn merge_cards(
         }
     }
     for (shape, tier) in made {
-        if !lists.known.iter().any(|(of, held, known, _)| *of == grid && *held == container && *known == shape) {
+        if !lists.known.iter().any(|(of, held, known, t)| {
+            *known == shape && *t == tier && (tier == Tier::Record || (*of == grid && *held == container))
+        }) {
             lists.known.push((grid, container.clone(), shape, tier));
         }
     }
