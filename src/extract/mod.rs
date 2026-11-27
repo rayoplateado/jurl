@@ -54,10 +54,15 @@ pub struct Block {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
     /// A record of a repeated list (see `cards`): one card of it, its pieces (a title, a date, a price…) joined by lines in page
-    /// order. It is the record's boundary in the output: numbered from 1 over the whole run, in page order, and printed under a
-    /// `[record N]` line in the text. A record is always a candidate for Jev, however short its text is.
+    /// order, or, for a card too long to be one block (a description under its title), each of its pieces, with the same number.
+    /// It is the record's boundary in the output: numbered from 1 over the whole run, in page order, and printed under a
+    /// `[record N]` line in the text. A card that is one block (`card`) is always a candidate for Jev, however short its text is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub record: Option<usize>,
+    /// A block that is a whole record (a card read as one block), not a piece of one: a record's pieces share its number but are
+    /// judged as any block is, and a card is always a candidate for Jev.
+    #[serde(skip)]
+    pub card: bool,
     /// Which page of a list the block is from, counted from 1, when `--pages` read more than one (see `paging`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<usize>,
@@ -86,6 +91,7 @@ impl Block {
             list: None,
             href: None,
             record: None,
+            card: false,
             page: None,
             links: Vec::new(),
             image: None,

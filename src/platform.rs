@@ -543,6 +543,7 @@ pub fn blocks(things: &Data) -> Vec<Block> {
                 links: url.clone().into_iter().collect(),
                 href: url,
                 record: Some(i + 1),
+                card: true,
                 image: thing.get("image").and_then(Value::as_str).map(str::to_string),
                 ..Block::new(i, Kind::Para, lines.join("\n"))
             }

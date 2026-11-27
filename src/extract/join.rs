@@ -49,11 +49,10 @@ fn bare_price(text: &str) -> bool {
 pub(super) fn join_short(blocks: Vec<Block>) -> Vec<Block> {
     // A heading that is a price ("### $12") is a figure set big on its card, not a section title.
     let value = |b: &Block| b.kind == Kind::Heading && is_price(&b.text);
-    // A card is a block already, one that the walk made whole: it is never joined into a run of its neighbours.
+    // A card is a block already, one that the walk made whole: it is never joined into a run of its neighbours. The pieces
+    // of a record that stayed blocks are joined only with the pieces of their own record.
     let short = |b: &Block| {
-        b.record.is_none()
-            && (matches!(b.kind, Kind::Para | Kind::Item) || value(b))
-            && b.text.chars().count() < SHORT_BLOCK_CHARS
+        !b.card && (matches!(b.kind, Kind::Para | Kind::Item) || value(b)) && b.text.chars().count() < SHORT_BLOCK_CHARS
     };
     let mut out: Vec<Block> = Vec::with_capacity(blocks.len());
     let mut run: Vec<Block> = Vec::new();
@@ -64,14 +63,18 @@ pub(super) fn join_short(blocks: Vec<Block>) -> Vec<Block> {
             let text = run.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n");
             // Items of one list joined are still part of that list ("1 egg" and "Salt" next to each other).
             let list = run[0].list.filter(|l| run.iter().all(|b| b.kind == Kind::Item && b.list == Some(*l)));
+            let record = run[0].record;
             let mut links = Vec::new();
             add_links(&mut links, run.drain(..).flat_map(|b| b.links));
-            out.push(Block { list, links, ..Block::new(0, Kind::Para, text) });
+            out.push(Block { list, record, links, ..Block::new(0, Kind::Para, text) });
         }
     };
     for b in blocks {
         let joined: usize = run.iter().map(|r| r.text.chars().count() + 1).sum();
-        if short(&b) && joined + b.text.chars().count() <= JOINED_MAX_CHARS {
+        if short(&b)
+            && run.first().is_none_or(|r| r.record == b.record)
+            && joined + b.text.chars().count() <= JOINED_MAX_CHARS
+        {
             run.push(b);
         } else {
             flush(&mut run, &mut out);
@@ -116,6 +119,24 @@ mod tests {
 
     fn base() -> Url {
         Url::parse("https://example.com/post/").unwrap()
+    }
+
+    #[test]
+    fn short_pieces_are_joined_only_within_their_own_record() {
+        let piece = |record: Option<usize>, text: &str| Block { record, ..Block::new(0, Kind::Para, text.to_string()) };
+        let blocks = vec![
+            piece(Some(1), "Comprar entradas"),
+            piece(Some(2), "04/11/2026"),
+            piece(Some(2), "Teatro Marquina"),
+            piece(None, "Todos"),
+            piece(None, "Teatro"),
+        ];
+        let out = join_short(blocks);
+        let got: Vec<_> = out.iter().map(|b| (b.record, b.text.as_str())).collect();
+        assert_eq!(
+            got,
+            [(Some(1), "Comprar entradas"), (Some(2), "04/11/2026\nTeatro Marquina"), (None, "Todos\nTeatro")]
+        );
     }
 
     #[test]

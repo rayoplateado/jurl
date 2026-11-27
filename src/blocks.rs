@@ -94,7 +94,7 @@ async fn structured_or(ctx: &Ctx<'_>, ex: &Extracted, t: &mut Timer, otherwise: 
 /// its date or price is its content), a code block, and a heading only when it is a headline (`Block::href`). A section
 /// title is shown with the block after it, and never answers.
 fn is_candidate(code: bool, b: &Block) -> bool {
-    if b.record.is_some() {
+    if b.card {
         return !code;
     }
     match b.kind {
@@ -240,11 +240,13 @@ pub(crate) fn render_blocks(
 }
 
 /// The blocks as the text prints them, in page order, one block to a paragraph. A record (a card of a repeated list, see
-/// `cards`) is marked by a `[record N]` line above it, the number the JSON gives it. A page of a list that is not the first is
+/// `cards`) is marked by a `[record N]` line above it, the number the JSON gives it; a record whose pieces are blocks of their
+/// own is marked above the first of them. A page of a list that is not the first is
 /// marked by its address, where its blocks begin.
 fn blocks_text(selected: &[&Block], pages: &[url::Url]) -> String {
     let mut text = String::new();
     let mut on_page = 1;
+    let mut in_record = None;
     for b in selected {
         if let Some(n) = b.page
             && n != on_page
@@ -253,9 +255,12 @@ fn blocks_text(selected: &[&Block], pages: &[url::Url]) -> String {
             on_page = n;
             text += &format!("<{url}>\n\n");
         }
-        if let Some(n) = b.record {
+        if let Some(n) = b.record
+            && in_record != Some(n)
+        {
             text += &format!("[record {n}]\n");
         }
+        in_record = b.record;
         text += &format!("{}\n\n", b.markdown());
     }
     text
@@ -372,5 +377,34 @@ mod tests {
             "[record 1]\nThursday\n15\nCarmen Lillo\n\n<https://x.test/agenda?page=2>\n\n[record 2]\nFriday\n16\n9louro\n\n\
              A paragraph of the page that is long enough to be judged.\n\n"
         );
+    }
+
+    #[test]
+    fn a_record_of_several_blocks_is_marked_once_above_its_first() {
+        // A card with a description stays blocks that share a number; the mark is where the card begins, and a card that
+        // follows is marked again.
+        let piece =
+            |i: usize, n: Option<usize>, text: &str| Block { record: n, ..Block::new(i, Kind::Para, text.to_string()) };
+        let blocks = [
+            piece(0, Some(1), "04/11/2026"),
+            piece(1, Some(1), "LA CENA DE LOS IDIOTAS"),
+            piece(2, Some(1), "Comprar entradas"),
+            piece(3, Some(2), "09/10/2026"),
+            piece(4, Some(2), "TURISMO RURAL"),
+            piece(5, None, "A paragraph of the page that is long enough to be judged."),
+        ];
+        let selected: Vec<&Block> = blocks.iter().collect();
+        assert_eq!(
+            blocks_text(&selected, &[]),
+            "[record 1]\n04/11/2026\n\nLA CENA DE LOS IDIOTAS\n\nComprar entradas\n\n[record 2]\n09/10/2026\n\nTURISMO RURAL\n\n\
+             A paragraph of the page that is long enough to be judged.\n\n"
+        );
+    }
+
+    #[test]
+    fn only_a_whole_card_is_a_candidate_however_short() {
+        let piece = Block { record: Some(1), ..Block::new(0, Kind::Para, "18€".into()) };
+        assert!(!is_candidate(false, &piece), "a piece of a record is judged as any short block is");
+        assert!(is_candidate(false, &Block { card: true, ..piece }));
     }
 }
