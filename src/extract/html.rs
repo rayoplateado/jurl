@@ -187,6 +187,8 @@ fn walk<'a>(doc: &'a Html, root: ElementRef<'a>, in_body: bool, page: &Url, base
         list: None,
         lists: 0,
         cards: cards::Lists::default(),
+        open: Vec::new(),
+        containers: 0,
         depth: 0,
         page: page.clone(),
         base: base.clone(),
@@ -443,6 +445,10 @@ struct Walker<'a> {
     lists: usize,
     /// What the card rule has seen of the page so far (see `cards`).
     cards: cards::Lists,
+    /// The containers the walk is inside of, each by the number it was given on the way in.
+    open: Vec<usize>,
+    /// How many containers the walk has been in.
+    containers: usize,
     /// How many containers the walk is inside of, capped at `MAX_WALK_DEPTH`.
     depth: usize,
     /// The page's own address: a link to it is no link of a block's.
@@ -525,6 +531,8 @@ impl<'a> Walker<'a> {
             return;
         }
         self.depth += 1;
+        self.containers += 1;
+        self.open.push(self.containers);
         let mut members = Vec::new();
         let field_links = field_links(el, self.skip_header);
         for (n, child) in el.children().enumerate() {
@@ -566,8 +574,17 @@ impl<'a> Walker<'a> {
             }
         }
         self.depth -= 1;
+        // The container this one is in: the rows of a grid are cards of one list wherever the grid's last row has fewer.
+        let grid = self.open.len().checked_sub(2).map_or(0, |i| self.open[i]);
+        self.open.pop();
         if !members.is_empty() {
-            self.blocks = cards::merge_cards(std::mem::take(&mut self.blocks), &members, &mut self.cards);
+            self.blocks = cards::merge_cards(
+                std::mem::take(&mut self.blocks),
+                &members,
+                grid,
+                &shape(el, SHAPE_DEPTH),
+                &mut self.cards,
+            );
         }
     }
 
@@ -879,8 +896,9 @@ fn shape(el: ElementRef, depth: usize) -> String {
     if depth == 0 {
         return out;
     }
-    // A run of siblings of one shape (a card's paragraphs, whatever their number) is one part of the card, marked `+`.
-    let mut kids: Vec<(String, bool)> = Vec::new();
+    // A run of siblings of one shape (a card's paragraphs) is written `p*3`: lists of cards are told apart by it, and
+    // loosely, without it, where a card may hold more or fewer paragraphs (see `cards`).
+    let mut kids: Vec<(String, usize)> = Vec::new();
     for c in el
         .children()
         .filter_map(ElementRef::wrap)
@@ -889,12 +907,12 @@ fn shape(el: ElementRef, depth: usize) -> String {
     {
         let kid = shape(c, depth - 1);
         match kids.last_mut() {
-            Some((last, run)) if *last == kid => *run = true,
-            _ => kids.push((kid, false)),
+            Some((last, n)) if *last == kid => *n += 1,
+            _ => kids.push((kid, 1)),
         }
     }
     if !kids.is_empty() {
-        let kids: Vec<String> = kids.into_iter().map(|(k, run)| if run { k + "+" } else { k }).collect();
+        let kids: Vec<String> = kids.into_iter().map(|(k, n)| if n > 1 { format!("{k}*{n}") } else { k }).collect();
         out += &format!("({})", kids.join(","));
     }
     out
@@ -2643,28 +2661,6 @@ mod tests {
     }
 
     #[test]
-    fn a_row_of_cards_is_not_one_more_card() {
-        // Three rows of three short cards: nine records, not three rows holding three each.
-        let cell = |n: usize| format!(r#"<div class="cell"><h3>Plan {n}</h3><p>${n}0</p></div>"#);
-        let row =
-            |first: usize| format!(r#"<div class="row">{}{}{}</div>"#, cell(first), cell(first + 1), cell(first + 2));
-        let page = format!(r#"<body><main><div class="grid">{}{}{}</div></main></body>"#, row(1), row(4), row(7));
-        let records = records_of(&page);
-        assert_eq!(records.len(), 9, "{records:?}");
-        assert_eq!(records[4].0, "Plan 5\n$50");
-    }
-
-    #[test]
-    fn rows_of_two_cards_are_not_read_as_one_card_per_row() {
-        let cell = |n: usize| format!(r#"<div class="cell"><h3>Plan {n}</h3><p>${n}0</p></div>"#);
-        let row = |first: usize| format!(r#"<div class="row">{}{}</div>"#, cell(first), cell(first + 1));
-        let page = format!(r#"<body><main><div class="grid">{}{}{}</div></main></body>"#, row(1), row(3), row(5));
-        let ex = html(&page, &base());
-        assert!(ex.blocks.iter().all(|b| !b.text.contains("Plan 1\n$10\nPlan 2")), "{:?}", ex.blocks);
-        assert!(ex.blocks.iter().all(|b| b.record.is_none() || b.text.matches("Plan").count() == 1), "{:?}", ex.blocks);
-    }
-
-    #[test]
     fn a_featured_card_with_a_block_the_others_lack_is_in_the_list() {
         // The promoted and featured cards carry a badge in a block of its own: they are cards of the same list, not a list of two.
         let card = |name: &str, venue: &str, badge: &str| {
@@ -2685,5 +2681,130 @@ mod tests {
         assert_eq!(records.len(), 5, "{records:?}");
         assert!(records[1].0.contains("-20%") && records[1].0.contains("El Rey León"));
         assert!(records[3].0.contains("Destacado") && records[3].0.contains("Los miserables"));
+    }
+
+    /// The blocks of `page` as (record, is a whole card, text), in order.
+    fn blocks_of(page: &str) -> Vec<(Option<usize>, bool, String)> {
+        html(page, &base()).blocks.into_iter().map(|b| (b.record, b.card, b.text)).collect()
+    }
+
+    #[test]
+    fn cards_with_a_description_stay_the_blocks_a_page_without_numbers_gave_and_are_only_numbered() {
+        // Cut from escuelabellart.com/oferta-formativa: each course is a title, a description (no full stop) and a button, the
+        // description over 25 characters. Joined into one block each, a reader that asks for a few blocks an item found
+        // none of the 17 courses of the chunk; the blocks stay what they were, and each course is a record.
+        let cta = |title: &str, description: &str| {
+            format!(
+                r#"<div class="elementor-widget-wrap"><div class="elementor-cta"><div class="elementor-cta__bg-wrapper"><div class="elementor-cta__bg" role="img"></div></div>
+                <div class="elementor-cta__content"><h3 class="elementor-cta__title">{title}</h3>
+                <div class="elementor-cta__description">{description}</div>
+                <div class="elementor-cta__button-wrapper"><a class="elementor-cta__button" href="https://escuelabellart.com/programa/{}/">Descubre el programa</a></div></div></div></div>"#,
+                title.to_lowercase().replace(' ', "-")
+            )
+        };
+        let page = format!(
+            r#"<body><main><h2>Programas Formativos</h2><p>Formación para futuros chefs, a la vanguardia de la cocina profesional</p>
+            <div class="elementor-container">{}{}{}</div></main></body>"#,
+            cta("Gran Chef de Alta Cocina", "Formación en alta cocina para chefs de máximo nivel"),
+            cta("Gran Chef de Alta Pastelería", "Formación en alta pastelería profesional y postres de autor"),
+            cta(
+                "Healthy Chef de Alta Cocina",
+                "Alta cocina saludable y sostenible orientada al bienestar y la nutrición"
+            ),
+        );
+        let blocks = blocks_of(&page);
+        let courses: Vec<_> = blocks.iter().filter(|b| b.0.is_some()).collect();
+        assert_eq!(courses.len(), 9, "{blocks:?}");
+        assert!(courses.iter().all(|b| !b.1), "no course is one block: {courses:?}");
+        let numbers: Vec<_> = courses.iter().map(|b| b.0.unwrap()).collect();
+        assert_eq!(numbers, [1, 1, 1, 2, 2, 2, 3, 3, 3]);
+        assert_eq!(courses[3].2, "Gran Chef de Alta Pastelería");
+        assert_eq!(courses[5].2, "Descubre el programa");
+    }
+
+    #[test]
+    fn a_plan_whose_rows_are_cards_stays_one_card_with_all_its_rows() {
+        // Cut from coworkingspain.es: each plan holds a run of label and value rows. The rows are lists of cards and the plan
+        // is a card of cards, as it always was: one block that says the desk type, the stay, the access and the price together.
+        let row = |label: &str, value: &str| {
+            format!(r#"<div class="row"><div class="k">{label}</div><div class="v">{value}</div></div>"#)
+        };
+        let plan = |name: &str, desk: &str, price: &str| {
+            format!(
+                r#"<div class="plan"><div class="head"><h4>{name}</h4></div><div class="rows">{}{}{}</div></div>"#,
+                row("Desk type", desk),
+                row("Minimum stay", "1 month"),
+                row("Price", price)
+            )
+        };
+        let page = format!(
+            r#"<body><main><div class="plans">{}{}{}</div></main></body>"#,
+            plan("Mesa Fija", "Dedicated desk", "240,00 € / month"),
+            plan("Mesa Flexible", "Flexible desk", "190,00 € / month"),
+            plan("Medio Día", "Flexible desk", "140,00 € / month"),
+        );
+        let blocks = blocks_of(&page);
+        assert_eq!(blocks.len(), 3, "{blocks:?}");
+        assert!(
+            blocks[0].2.contains("Mesa Fija")
+                && blocks[0].2.contains("Dedicated desk")
+                && blocks[0].2.contains("240,00 €")
+        );
+        assert!(blocks[2].2.contains("Medio Día") && blocks[2].2.contains("140,00 €") && !blocks[2].2.contains("240"));
+    }
+
+    #[test]
+    fn a_shape_that_is_a_list_somewhere_does_not_make_a_lone_wrapper_elsewhere_a_card() {
+        // Cut from escuelabellart.com: four figures in one row are cards, and each testimonial sits alone in a wrapper of the
+        // same shape of its own. A lone card in another place is read as it was.
+        let figure = |n: &str, label: &str| {
+            format!(
+                r#"<div class="w"><div class="x"><div class="c"><div class="n">{n}</div><div class="l">{label}</div></div></div></div>"#
+            )
+        };
+        let alone = |name: &str, text: &str| {
+            format!(
+                r#"<section><div class="w"><div class="x"><div class="c"><div class="n">{name}</div><div class="l">{text}</div></div></div></div></section>"#
+            )
+        };
+        let page = format!(
+            r#"<body><main><div class="figures">{}{}{}{}</div>{}{}</main></body>"#,
+            figure("15", "años de trayectoria"),
+            figure("30", "estudiantes"),
+            figure("90%", "inserción laboral"),
+            figure("40", "restaurantes"),
+            alone(
+                "Marinella Rodríguez",
+                "Exalumna de Bellart y actual Executive Chef en MAE, se ha consolidado en la alta cocina."
+            ),
+            alone("Jon García", "Fundador de Jon Cake, especializado en pastelería de alta calidad y creatividad."),
+        );
+        let blocks = blocks_of(&page);
+        assert_eq!(blocks.iter().filter(|b| b.1).count(), 4, "{blocks:?}");
+        assert!(
+            blocks.iter().filter(|b| b.2.contains("Marinella") || b.2.contains("Jon")).all(|b| b.0.is_none()),
+            "{blocks:?}"
+        );
+    }
+
+    #[test]
+    fn links_made_of_spans_that_ran_into_one_paragraph_are_cards() {
+        // Cut from gruposmedia.com: each show of the month is a link of spans; read as inline text, three shows were one
+        // paragraph ("25 NOV — 29 NOV Un Dios Salvaje … › 28 NOV Luces de Navidad …").
+        let show = |dates: &str, title: &str, kind: &str, price: &str| {
+            format!(
+                r#"<a class="show" href="/cartelera/x"><span class="d">{dates}</span><span class="t">{title}</span><span class="k">{kind}</span><span class="p">Desde {price}</span></a>"#
+            )
+        };
+        let page = format!(
+            r#"<body><main><div class="month">{}{}{}</div></main></body>"#,
+            show("25 NOV — 29 NOV", "Un Dios Salvaje", "Comedia", "14,40 €"),
+            show("28 NOV", "Luces de Navidad", "Concierto", "15 €"),
+            show("29 NOV", "El hilo invisible", "Infantil y Familiar", "15 €"),
+        );
+        let blocks = blocks_of(&page);
+        assert_eq!(blocks.len(), 3, "{blocks:?}");
+        assert_eq!(blocks[1].2, "28 NOV\nLuces de Navidad\nConcierto\nDesde 15 €");
+        assert!(blocks.iter().all(|b| b.1 && b.0.is_some()));
     }
 }

@@ -45,7 +45,8 @@ enum Tier {
 #[derive(Default)]
 pub struct Lists {
     next_id: usize,
-    known: Vec<(String, Tier)>,
+    /// The container that held the container of the members (a grid, for its rows), their shape, and what they made.
+    known: Vec<(usize, String, String, Tier)>,
 }
 
 impl Lists {
@@ -59,52 +60,63 @@ impl Lists {
 /// block, or, for a card that holds prose, its blocks all take one record number. A list is merged as a whole or not at all,
 /// so cards and plain text are never mixed in one list: a member that is not card-shaped (see `card_shaped`) keeps the whole
 /// list as it was. The members of a group of fewer than three join a list, though: one of this container whose shape is
-/// near theirs (a card with a badge the others lack), or one of the same shape found earlier on the page (a grid's last row).
-pub fn merge_cards(blocks: Vec<Block>, members: &[Member], lists: &mut Lists) -> Vec<Block> {
-    // Members that differ only in how many paragraphs (or other plain parts) they hold are one list. A member that is a row
-    // of cells (it holds a run of containers of one shape, as a grid's row does) is no card: its cells are.
-    let mut groups: Vec<(String, Vec<&Member>)> = Vec::new();
-    let mut at: HashMap<String, usize> = HashMap::new();
-    for m in members.iter().filter(|m| m.end > m.start && !is_row(&m.shape)) {
-        let key = m.shape.replace('+', "");
-        let i = *at.entry(key.clone()).or_insert_with(|| {
-            groups.push((key, Vec::new()));
-            groups.len() - 1
-        });
-        groups[i].1.push(m);
-    }
+/// near theirs (a card with a badge the others lack), or one of the same shape in a container of the same shape and parent (a grid's
+/// last row, `grid` being the container of its rows and `container` the shape of the one that holds these members).
+pub fn merge_cards(
+    blocks: Vec<Block>,
+    members: &[Member],
+    grid: usize,
+    container: &str,
+    lists: &mut Lists,
+) -> Vec<Block> {
+    let container = loose(container);
+    let members: Vec<&Member> = members.iter().filter(|m| m.end > m.start).collect();
     let mut taken: Vec<(&Member, Tier)> = Vec::new();
     let mut made: Vec<(String, Tier)> = Vec::new();
     let mut rest: Vec<&Member> = Vec::new();
-    for (shape, list) in groups {
-        let whole = list.len() >= MIN_MEMBERS;
-        match list_tier(&blocks, &list) {
-            Some(tier) if whole => {
-                made.push((shape, tier));
-                taken.extend(list.into_iter().map(|m| (m, tier)));
-            }
-            // A list of three or more that is not cards as a whole stays as it was: none of its members joins another list.
-            _ if whole => {}
-            _ => rest.extend(list),
+
+    // Cards: three or more members of one shape, with the same number of parts in each, that are all card-shaped.
+    let mut left: Vec<&Member> = Vec::new();
+    for (shape, list) in grouped(members, |m| m.shape.clone()) {
+        if list.len() >= MIN_MEMBERS && list.iter().all(|m| card_shaped(&blocks[m.start..m.end])) {
+            made.push((shape, Tier::Card));
+            taken.extend(list.into_iter().map(|m| (m, Tier::Card)));
+        } else {
+            left.extend(list);
         }
     }
-    // The members of a group too small to be a list join a list of the same shape found earlier on the page (a grid's last
-    // row), or one of this container whose shape is near theirs (a card with a badge the others lack).
+    // Records: members that differ only in how many paragraphs (or other plain parts) they hold, whose pieces stay blocks. A
+    // group of three or more that is not records as a whole stays as it was: none of its members joins another list.
+    // A member that is a row of cells (it holds a run of containers of one shape, as a grid's row does) is no record: its cells are.
+    left.retain(|m| !is_row(&m.shape));
+    for (shape, list) in grouped(left, |m| loose(&m.shape)) {
+        if list.len() < MIN_MEMBERS {
+            rest.extend(list);
+        } else if list.iter().all(|m| record_shaped(&blocks[m.start..m.end])) {
+            made.push((shape, Tier::Record));
+            taken.extend(list.into_iter().map(|m| (m, Tier::Record)));
+        }
+    }
+    // The members of a group too small to be a list join a list of this container whose shape is near theirs (a card with a
+    // badge the others lack), or one of the same shape found earlier on the page (a grid's last row).
     for m in rest {
-        let key = m.shape.replace('+', "");
-        let tier = lists
+        let known = lists
             .known
             .iter()
-            .find(|(shape, _)| *shape == key)
-            .or_else(|| made.iter().find(|(shape, _)| near(&key, shape)))
-            .map(|(_, tier)| *tier);
+            .find(|(of, held, shape, tier)| {
+                *of == grid
+                    && *held == container
+                    && *shape == if *tier == Tier::Card { m.shape.clone() } else { loose(&m.shape) }
+            })
+            .map(|(_, _, _, tier)| *tier);
+        let tier = known.or_else(|| made.iter().find(|(shape, _)| near(&m.shape, shape)).map(|(_, tier)| *tier));
         if let Some(tier) = tier.filter(|tier| fits(*tier, &blocks[m.start..m.end])) {
             taken.push((m, tier));
         }
     }
     for (shape, tier) in made {
-        if !lists.known.iter().any(|(known, _)| *known == shape) {
-            lists.known.push((shape, tier));
+        if !lists.known.iter().any(|(of, held, known, _)| *of == grid && *held == container && *known == shape) {
+            lists.known.push((grid, container.clone(), shape, tier));
         }
     }
     if taken.is_empty() {
@@ -134,10 +146,33 @@ pub fn merge_cards(blocks: Vec<Block>, members: &[Member], lists: &mut Lists) ->
     out
 }
 
-/// What a whole list is read as: a list of cards if every member is card-shaped, else a list of records if every member is
-/// record-shaped, else none.
-fn list_tier(blocks: &[Block], list: &[&Member]) -> Option<Tier> {
-    [Tier::Card, Tier::Record].into_iter().find(|tier| list.iter().all(|m| fits(*tier, &blocks[m.start..m.end])))
+/// The members grouped by `key`, in the order their keys first appear.
+fn grouped(members: Vec<&Member>, key: impl Fn(&Member) -> String) -> Vec<(String, Vec<&Member>)> {
+    let mut groups: Vec<(String, Vec<&Member>)> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    for m in members {
+        let key = key(m);
+        let i = *at.entry(key.clone()).or_insert_with(|| {
+            groups.push((key, Vec::new()));
+            groups.len() - 1
+        });
+        groups[i].1.push(m);
+    }
+    groups
+}
+
+/// A shape without how many parts of one shape a run holds: `div(h3,p*3)` is `div(h3,p)`.
+fn loose(shape: &str) -> String {
+    let mut out = String::with_capacity(shape.len());
+    let mut chars = shape.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '*' {
+            while chars.next_if(char::is_ascii_digit).is_some() {}
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn fits(tier: Tier, pieces: &[Block]) -> bool {
@@ -173,26 +208,26 @@ pub fn number_records(blocks: &mut [Block]) {
     }
 }
 
-/// Whether a member's blocks can be a card: at least two pieces of text a reader sees, no more than `CARD_MAX_CHARS`, and
-/// either at most one piece with a line too long to be a field (a card holds one title, which may be long, and short fields: a
-/// date, a price, a venue), or no prose and a field at least (a title and a venue that are both long). A teaser (a headline
-/// and a summary) and a section of a document (a heading and paragraphs) hold prose, and are read as they were. A card of cards
-/// is no card.
+/// Whether a member's blocks can be a card: at least two pieces of text a reader sees, no more than `CARD_MAX_CHARS`, and at
+/// most one piece with a line too long to be a field. A card holds one title, which may be long, and short fields: a date, a
+/// price, a venue. A card with more than that (a title and a venue that are both long, a description) is read as blocks of its
+/// own, numbered (see `record_shaped`): joined, it was fewer items for a reader that asks for a few blocks an item. A teaser (a
+/// headline and a summary) and a section of a document hold more prose than a card does, and are read as they were. The
+/// cards of a plan or a row are pieces of it: a card of cards is a card.
 fn card_shaped(pieces: &[Block]) -> bool {
-    let non_fields = pieces.iter().filter(|b| !is_field(b)).count();
     pieces.len() >= 2
-        && pieces.iter().all(|b| matches!(b.kind, Kind::Heading | Kind::Para | Kind::Item) && b.record.is_none())
+        && pieces.iter().all(|b| matches!(b.kind, Kind::Heading | Kind::Para | Kind::Item))
         && pieces.iter().map(|b| b.text.chars().count() + 1).sum::<usize>() <= CARD_MAX_CHARS
-        && (non_fields <= 1 || (non_fields < pieces.len() && !pieces.iter().any(is_prose)))
+        && pieces.iter().filter(|b| !is_field(b)).count() <= 1
 }
 
-/// Whether a member's blocks can be a record whose pieces stay blocks: a card with a description, as a listing of shows has
-/// (a title, a few paragraphs, a date, a button), and no list: a section that holds one is a section. It has at least `RECORD_MIN_PIECES` pieces of text, a field among them, and a
+/// Whether a member's blocks can be a record whose pieces stay blocks: a card with more than a title and short fields, as a
+/// listing of shows has (a title, a venue, a description, a date, a button), and no list: a section that holds one is a section. It has at least `RECORD_MIN_PIECES` pieces of text, a field among them, and a
 /// link that is not in a paragraph of prose (its title's, its button's): a section of a document has no such link. A piece that
 /// is a record already (a card in it) makes the member no record.
 fn record_shaped(pieces: &[Block]) -> bool {
     pieces.len() >= RECORD_MIN_PIECES
-        && pieces.iter().all(|b| matches!(b.kind, Kind::Heading | Kind::Para) && b.record.is_none())
+        && pieces.iter().all(|b| matches!(b.kind, Kind::Heading | Kind::Para) && !b.card)
         && pieces.iter().map(|b| b.text.chars().count() + 1).sum::<usize>() <= RECORD_MAX_CHARS
         && pieces.iter().any(is_field)
         && pieces.iter().any(|b| !b.links.is_empty() && !is_prose(b))
@@ -222,8 +257,8 @@ fn is_prose(b: &Block) -> bool {
 const SENTENCE_ENDS: [char; 7] = ['.', '!', '?', '…', '。', '！', '？'];
 const CLOSERS: [char; 7] = ['"', '\'', '”', '’', '»', ')', '」'];
 
-/// Whether a shape is that of a row of cells: it holds a run of containers of one shape (`div(div(h3,p)+)`), not just of plain parts
-/// (`div(h3,p+)`).
+/// Whether a shape is that of a row of cells: it holds a run of containers of one shape (`div(div(h3,p)*3)`), not just of plain parts
+/// (`div(h3,p*3)`).
 fn is_row(shape: &str) -> bool {
     Node::parse(shape).kids.iter().any(|k| k.run && !k.kids.is_empty())
 }
@@ -235,7 +270,7 @@ fn near(a: &str, b: &str) -> bool {
     a.distance(&b).is_some_and(|d| d == 0 || (d <= NEAR_NODES && d * NEAR_SHARE <= a.size().min(b.size())))
 }
 
-/// A shape as a tree: its tag, whether it stands for a run of siblings (`div+`), and its children.
+/// A shape as a tree: its tag, whether it stands for a run of siblings (`div*3`), and its children.
 struct Node {
     tag: String,
     run: bool,
@@ -246,7 +281,7 @@ impl Node {
     fn parse(s: &str) -> Node {
         fn parse_at(s: &[u8], at: &mut usize) -> Node {
             let from = *at;
-            while *at < s.len() && !matches!(s[*at], b'(' | b')' | b',' | b'+') {
+            while *at < s.len() && !matches!(s[*at], b'(' | b')' | b',' | b'*') {
                 *at += 1;
             }
             let tag = String::from_utf8_lossy(&s[from..*at]).into_owned();
@@ -265,9 +300,14 @@ impl Node {
                     }
                 }
             }
-            let run = s.get(*at) == Some(&b'+');
-            if run {
+            let mut run = false;
+            if s.get(*at) == Some(&b'*') {
                 *at += 1;
+                let from = *at;
+                while s.get(*at).is_some_and(u8::is_ascii_digit) {
+                    *at += 1;
+                }
+                run = String::from_utf8_lossy(&s[from..*at]).parse::<usize>().is_ok_and(|n| n > 1);
             }
             Node { tag, run, kids }
         }
@@ -331,7 +371,7 @@ mod tests {
             ("div(div)", card("9louro")),
             ("div(div)", card("Baile Europa")),
         ]);
-        let merged = merge_cards(blocks, &members, &mut Lists::default());
+        let merged = merge_cards(blocks, &members, 0, "div", &mut Lists::default());
         let texts: Vec<_> = merged.iter().map(|b| (b.record.is_some(), b.text.as_str())).collect();
         assert_eq!(texts, [(true, "16 Oct\nCarmen Lillo"), (true, "16 Oct\n9louro"), (true, "16 Oct\nBaile Europa")]);
     }
@@ -345,7 +385,7 @@ mod tests {
             ("article(div)", vec![piece(Kind::Para, "Sun"), piece(Kind::Heading, "Second story, a headline")]),
             ("article(div)", vec![piece(Kind::Para, "Mon"), piece(Kind::Heading, "Third story, a headline")]),
         ]);
-        let merged = merge_cards(blocks, &members, &mut Lists::default());
+        let merged = merge_cards(blocks, &members, 0, "div", &mut Lists::default());
         assert_eq!(merged[0].href.as_deref(), Some("https://example.com/world/riyadh"));
         assert_eq!(merged[1].href, None);
     }
@@ -354,7 +394,7 @@ mod tests {
     fn fewer_than_three_members_or_a_list_without_short_text_is_left_as_it_was() {
         let (blocks, members) = lists_of(&[("div(div)", card("Carmen Lillo")), ("div(div)", card("9louro"))]);
         assert_eq!(
-            merge_cards(blocks.clone(), &members, &mut Lists::default()).len(),
+            merge_cards(blocks.clone(), &members, 0, "div", &mut Lists::default()).len(),
             blocks.len(),
             "two members are a pair"
         );
@@ -368,7 +408,7 @@ mod tests {
             ("article(div)", long("Third story headline, long enough")),
         ]);
         assert!(
-            merge_cards(blocks.clone(), &members, &mut Lists::default()).iter().all(|b| b.record.is_none()),
+            merge_cards(blocks.clone(), &members, 0, "div", &mut Lists::default()).iter().all(|b| b.record.is_none()),
             "teasers with no short field are not cards"
         );
     }
@@ -388,7 +428,7 @@ mod tests {
             ("article(div,div,div)", card("MC LUANNA rap carioca")),
             ("article(div,div,div)", card("MEMOCRACIA + Hollow Empty Minds + Los Valientes punk")),
         ]);
-        let merged = merge_cards(blocks, &members, &mut Lists::default());
+        let merged = merge_cards(blocks, &members, 0, "div", &mut Lists::default());
         assert_eq!(merged.iter().filter(|b| b.record.is_some()).count(), 3, "{merged:?}");
     }
 
@@ -408,7 +448,10 @@ mod tests {
             ("div(div)", card("Amazon", "Mixed")),
         ]);
         assert_eq!(
-            merge_cards(blocks, &members, &mut Lists::default()).iter().filter(|b| b.record.is_some()).count(),
+            merge_cards(blocks, &members, 0, "div", &mut Lists::default())
+                .iter()
+                .filter(|b| b.record.is_some())
+                .count(),
             3
         );
         assert!(!is_field(&piece(Kind::Para, "A sentence that runs well past a field | and on")));
@@ -438,7 +481,9 @@ mod tests {
             ("section(div(h2),p,p,div(h3))", section("8. Errors")),
             ("section(div(h2),p,p,div(h3))", section("9. Classes")),
         ]);
-        assert!(merge_cards(blocks.clone(), &members, &mut Lists::default()).iter().all(|b| b.record.is_none()));
+        assert!(
+            merge_cards(blocks.clone(), &members, 0, "div", &mut Lists::default()).iter().all(|b| b.record.is_none())
+        );
     }
 
     #[test]
@@ -452,7 +497,7 @@ mod tests {
             ("div(div)", card("9louro")),
             ("div(div)", card("Baile Europa")),
         ]);
-        let merged = merge_cards(blocks.clone(), &members, &mut Lists::default());
+        let merged = merge_cards(blocks.clone(), &members, 0, "div", &mut Lists::default());
         assert_eq!(merged.len(), blocks.len());
         assert!(merged.iter().all(|b| b.record.is_none()));
     }
@@ -467,7 +512,7 @@ mod tests {
             ("div(div)", card("Baile Europa")),
         ]);
         members[1].end = members[1].start;
-        let merged = merge_cards(blocks, &members, &mut Lists::default());
+        let merged = merge_cards(blocks, &members, 0, "div", &mut Lists::default());
         assert_eq!(merged.iter().filter(|b| b.record.is_some()).count(), 3);
     }
 
@@ -481,7 +526,7 @@ mod tests {
             ("span(b)", card("B1")),
             ("span(b)", card("B2")),
         ]);
-        let merged = merge_cards(blocks, &members, &mut Lists::default());
+        let merged = merge_cards(blocks, &members, 0, "div", &mut Lists::default());
         // The paragraph is one block of the page, and the three `div`s are a list; the two `span`s are too few.
         let kinds: Vec<_> = merged.iter().map(|b| b.record.is_some()).collect();
         assert_eq!(kinds, [true, false, true, true, false, false, false, false]);
@@ -519,21 +564,29 @@ mod tests {
     }
 
     #[test]
-    fn a_long_title_and_a_long_venue_are_one_card_with_its_price() {
-        // The title and the venue are both over 25 characters, and neither is a sentence.
+    fn a_long_title_and_a_long_venue_keep_their_blocks_and_share_a_number() {
+        // The title and the venue are both over 25 characters, and neither is a sentence: the card is numbered, and its pieces
+        // stay the blocks they were, as a reader that asks for a few blocks an item reads them.
         let card = |title: &str, venue: &str| {
-            vec![piece(Kind::Para, "-25%\nDesde\n28 €21 €"), piece(Kind::Heading, title), piece(Kind::Para, venue)]
+            vec![
+                piece(Kind::Para, "-25%\nDesde\n28 €21 €"),
+                piece(Kind::Heading, title),
+                Block { links: vec!["https://example.com/show".into()], ..piece(Kind::Para, venue) },
+            ]
         };
         let (blocks, members) = lists_of(&[
             ("a(div,h3,div)", card("Los miserables, el musical", "Teatro Apolo Madrid")),
             ("a(div,h3,div)", card("Drácula, una comedia terrorífica", "Teatro Calderón. Rooftop Lírico")),
             ("a(div,h3,div)", card("Mi reno de peluche", "Teatro Infanta Isabel")),
         ]);
-        let merged = merge_cards(blocks, &members, &mut Lists::default());
-        assert_eq!(merged.len(), 3, "{merged:?}");
-        assert!(merged.iter().all(|b| b.card && b.record.is_some()));
+        assert!(!card_shaped(&blocks[3..6]));
+        let merged = merge_cards(blocks.clone(), &members, 0, "div", &mut Lists::default());
+        assert_eq!(merged.len(), blocks.len());
+        assert!(merged.iter().all(|b| !b.card && b.record.is_some()));
+        let records = records_in(&merged);
+        assert_eq!(records.len(), 3);
         assert_eq!(
-            merged[1].text,
+            records[1].1,
             "-25%\nDesde\n28 €21 €\nDrácula, una comedia terrorífica\nTeatro Calderón. Rooftop Lírico"
         );
     }
@@ -566,11 +619,11 @@ mod tests {
             pieces
         };
         let (blocks, members) = lists_of(&[
-            ("div(div,div(h3,p+,p))", card("LA CENA DE LOS IDIOTAS", 2)),
+            ("div(div,div(h3,p*2,p))", card("LA CENA DE LOS IDIOTAS", 2)),
             ("div(div,div(h3,p,p))", card("TURISMO RURAL", 1)),
-            ("div(div,div(h3,p+,p))", card("YUNEZ CHAIB EN DIRECTO", 3)),
+            ("div(div,div(h3,p*2,p))", card("YUNEZ CHAIB EN DIRECTO", 3)),
         ]);
-        let merged = merge_cards(blocks.clone(), &members, &mut Lists::default());
+        let merged = merge_cards(blocks.clone(), &members, 0, "div", &mut Lists::default());
         assert_eq!(merged.len(), blocks.len(), "no piece is joined or dropped");
         assert!(merged.iter().all(|b| b.record.is_some() && !b.card), "{merged:?}");
         let records = records_in(&merged);
@@ -607,7 +660,7 @@ mod tests {
             ("section(h2,p,p)", section("8. Errors")),
             ("section(h2,p,p)", section("9. Classes")),
         ]);
-        assert!(merge_cards(blocks, &members, &mut Lists::default()).iter().all(|b| b.record.is_none()));
+        assert!(merge_cards(blocks, &members, 0, "div", &mut Lists::default()).iter().all(|b| b.record.is_none()));
     }
 
     #[test]
@@ -626,7 +679,7 @@ mod tests {
             ),
             ("div(div,h3,p)", vec![piece(Kind::Heading, "Cabaret"), piece(Kind::Para, "28€")]),
         ]);
-        let merged = merge_cards(blocks, &members, &mut Lists::default());
+        let merged = merge_cards(blocks, &members, 0, "div", &mut Lists::default());
         assert_eq!(merged.iter().filter(|b| b.card).count(), 5, "{merged:?}");
     }
 
@@ -637,15 +690,15 @@ mod tests {
         assert!(near("a(div,div(h3,div,div,div(div),div(div)))", "a(div,div(h3,div,div,div(div)))"));
         assert!(!near("div(h3,p)", "article(h3,p)"));
         assert!(!near("div(div(h3,p,p),div(a))", "div(ul(li),ul(li),ul(li))"));
-        assert!(near("div(h3,p+)", "div(h3,p)"));
+        assert!(near("div(h3,p*3)", "div(h3,p)"));
     }
 
     #[test]
     fn a_row_of_cells_is_no_card_and_its_cells_are() {
-        assert!(is_row("div(div(h3,p)+)"));
-        assert!(is_row("div(div(div(h5,p))+,p)"));
-        assert!(!is_row("div(h3,p+)"), "a run of paragraphs is a card's text");
-        assert!(!is_row("div(div,div(h3,p+,div))"));
+        assert!(is_row("div(div(h3,p)*3)"));
+        assert!(is_row("div(div(div(h5,p))*2,p)"));
+        assert!(!is_row("div(h3,p*3)"), "a run of paragraphs is a card's text");
+        assert!(!is_row("div(div,div(h3,p*2,div))"));
     }
 
     #[test]
@@ -659,25 +712,25 @@ mod tests {
             ("div(div(h5,p))", card("Cocina japonesa")),
             ("div(div(h5,p))", card("Panadería")),
         ]);
-        assert_eq!(merge_cards(blocks, &members, &mut lists).iter().filter(|b| b.card).count(), 3);
+        assert_eq!(merge_cards(blocks, &members, 0, "div", &mut lists).iter().filter(|b| b.card).count(), 3);
         let (blocks, members) =
             lists_of(&[("div(div(h5,p))", card("Cócteles")), ("div(div(h5,p))", card("Vinos del mundo"))]);
-        let merged = merge_cards(blocks, &members, &mut lists);
+        let merged = merge_cards(blocks, &members, 0, "div", &mut lists);
         assert_eq!(merged.iter().filter(|b| b.card).count(), 2, "{merged:?}");
         // Without the earlier list, a pair is a pair.
         let (blocks, members) =
             lists_of(&[("div(div(h5,p))", card("Cócteles")), ("div(div(h5,p))", card("Vinos del mundo"))]);
-        assert!(merge_cards(blocks, &members, &mut Lists::default()).iter().all(|b| b.record.is_none()));
+        assert!(merge_cards(blocks, &members, 0, "div", &mut Lists::default()).iter().all(|b| b.record.is_none()));
     }
 
     #[test]
-    fn a_card_that_holds_a_record_is_no_card() {
-        // Rows of cards that were read as cards themselves: the row is not one more card.
+    fn a_card_that_holds_cards_is_still_a_card_but_no_record() {
+        // A plan of rows read as cards is one card, as it always was; a record's pieces never hold a whole card.
         let row = || -> Vec<Block> {
             (1..=3).map(|n| Block { record: Some(n), card: true, ..piece(Kind::Para, "Basic\n$10") }).collect()
         };
-        let (blocks, members) = lists_of(&[("div(div+)", row()), ("div(div+)", row()), ("div(div+)", row())]);
-        assert!(!card_shaped(&blocks[members[0].start..members[0].end]));
+        let (blocks, members) = lists_of(&[("div(div*3)", row()), ("div(div*3)", row()), ("div(div*3)", row())]);
+        assert!(card_shaped(&blocks[members[0].start..members[0].end]));
         assert!(!record_shaped(&blocks[members[0].start..members[0].end]));
     }
 
@@ -695,8 +748,8 @@ mod tests {
             ("div(div)", card("Baile Europa")),
         ]);
         let mut lists = Lists::default();
-        lists.known.push(("div(div)".into(), Tier::Card));
-        assert!(merge_cards(blocks, &members, &mut lists).iter().all(|b| b.record.is_none()));
+        lists.known.push((0, "div".into(), "div(div)".into(), Tier::Card));
+        assert!(merge_cards(blocks, &members, 0, "div", &mut lists).iter().all(|b| b.record.is_none()));
     }
 
     #[test]
@@ -707,9 +760,9 @@ mod tests {
         let (blocks, members) =
             lists_of(&[("div(div,div)", card("Cócteles")), ("div(div,div)", card("Vinos del mundo"))]);
         let mut lists = Lists::default();
-        lists.known.push(("div(div)".into(), Tier::Card));
+        lists.known.push((0, "div".into(), "div(div)".into(), Tier::Card));
         assert!(
-            merge_cards(blocks, &members, &mut lists).iter().all(|b| b.record.is_none()),
+            merge_cards(blocks, &members, 0, "div", &mut lists).iter().all(|b| b.record.is_none()),
             "near is not the same shape"
         );
     }
