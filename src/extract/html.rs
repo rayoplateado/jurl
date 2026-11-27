@@ -2872,4 +2872,36 @@ mod tests {
             <p><a href="/x">+ info</a></p></div></div></div></main></body>"#;
         assert!(html(page, &base()).blocks.iter().all(|b| b.record.is_none()));
     }
+
+    #[test]
+    fn a_section_of_numbered_courses_is_not_one_more_record_over_them() {
+        // Cut from escuelabellart.com/oferta-formativa: four program sections, each a heading, a line and three courses (title,
+        // description, button), once in tabs and once as a list. Numbering the sections over the courses made records of 11,
+        // 14 and 45 blocks that a reader could not split, and it found no course in them: the courses are the records.
+        let course = |title: &str| {
+            format!(
+                r#"<div class="elementor-cta"><div class="elementor-cta__content"><h3 class="elementor-cta__title">{title}</h3>
+                <div class="elementor-cta__description">Formación profesional con enfoque en dirección gastronómica y sostenibilidad</div>
+                <div class="elementor-cta__button-wrapper"><a class="elementor-cta__button" href="https://escuelabellart.com/programa/{}/">Descubre el programa</a></div></div></div>"#,
+                title.to_lowercase().replace(' ', "-")
+            )
+        };
+        let section = |name: &str| {
+            format!(
+                r#"<div class="elementor-column"><div class="elementor-widget-wrap"><h2>PROGRAMA {name}</h2><p>Formación para futuros chefs del futuro</p>
+                <div class="courses">{}{}{}</div></div></div>"#,
+                course(&format!("{name} de Alta Cocina y Pastelería")),
+                course(&format!("{name} de Alta Cocina")),
+                course(&format!("{name} de Alta Pastelería"))
+            )
+        };
+        let sections: String =
+            ["GRAN CHEF", "EXECUTIVE CHEF", "HEALTHY CHEF", "GLOBAL CHEF"].iter().map(|n| section(n)).collect();
+        let page = format!(
+            r#"<body><main><div class="tabs">{sections}</div><div class="list">{sections}</div></main></body>"#
+        );
+        let records = records_of(&page);
+        assert_eq!(records.len(), 24, "every course is a record, no section is: {records:?}");
+        assert!(records.iter().all(|(text, links)| text.lines().count() == 3 && links.len() == 1), "{records:?}");
+    }
 }

@@ -17,6 +17,8 @@ const RECORD_MAX_CHARS: usize = 6_000;
 const MIN_MEMBERS: usize = 3;
 /// The fewest pieces a card with prose has: a headline and its summary are a teaser.
 const RECORD_MIN_PIECES: usize = 3;
+/// ...and the most: a card with a description has a few paragraphs, not a section's worth of blocks.
+const RECORD_MAX_PIECES: usize = 24;
 /// The most nodes two shapes may differ by and still be one list: a badge or a rating that only some cards have.
 const NEAR_NODES: usize = 2;
 /// ...and by at most this share of the smaller shape's nodes: one in this many.
@@ -227,10 +229,11 @@ fn card_shaped(pieces: &[Block]) -> bool {
 /// Whether a member's blocks can be a record whose pieces stay blocks: a card with more than a title and short fields, as a
 /// listing of shows has (a title, a venue, a description, a date, a button), and no list: a section that holds one is a section. It has at least `RECORD_MIN_PIECES` pieces of text, a field among them, and a
 /// link that is not in a paragraph of prose (its title's, its button's): a section of a document has no such link. A piece that
-/// is a record already (a card in it) makes the member no record.
+/// is a record already (a card in it, a card of a list inside it) makes the member no record: a record never holds another,
+/// so a section of three courses is not one more record over the courses', and a record holds at most `RECORD_MAX_PIECES`.
 fn record_shaped(pieces: &[Block]) -> bool {
-    pieces.len() >= RECORD_MIN_PIECES
-        && pieces.iter().all(|b| matches!(b.kind, Kind::Heading | Kind::Para) && !b.card)
+    (RECORD_MIN_PIECES..=RECORD_MAX_PIECES).contains(&pieces.len())
+        && pieces.iter().all(|b| matches!(b.kind, Kind::Heading | Kind::Para) && b.record.is_none())
         && pieces.iter().map(|b| b.text.chars().count() + 1).sum::<usize>() <= RECORD_MAX_CHARS
         && pieces.iter().any(is_field)
         && pieces.iter().any(|b| !b.links.is_empty() && !is_prose(b))
